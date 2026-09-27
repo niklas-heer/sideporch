@@ -1,0 +1,31 @@
+name: Container image
+
+# Publishes ghcr.io/niklas-heer/sideporch:main for every change on main.
+# Release tags publish version tags from release.yml.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-main
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish main image (amd64 + arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          version: "0.21.9"
+          verb: call
+          args: publish --tag main --username ${{ github.actor }} --password env://REGISTRY_TOKEN

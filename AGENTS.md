@@ -15,7 +15,9 @@ Sideporch is a self-hosted team chat shipped as a single Rust binary. See [READM
 
 ## Commands
 
-Use mise: `mise run check` runs formatting, Clippy with the strict lints in `Cargo.toml`, and all tests. `mise run dev` starts a local server.
+Use mise: `mise run check` runs formatting, Clippy with the strict lints in `Cargo.toml`, and all tests. `mise run dev` starts a local server. `mise run ci` runs the same checks in containers through Dagger (`.dagger/main.dang`), which also builds the static binaries and the `FROM scratch` image. Keep Rust, zig and cargo-zigbuild versions aligned across `mise.toml`, `rust-toolchain.toml` and the Dagger module.
+
+Releases: bump `version` in `Cargo.toml`, then push a matching `vX.Y.Z` tag. Linux release binaries must stay fully static; `scripts/package.sh` refuses dynamic ones.
 
 ## Conventions
 

@@ -1,0 +1,128 @@
+"""
+Reproducible CI, static Linux binaries and the container image for Sideporch.
+Tool versions come from mise.toml, so containers match local development.
+"""
+type SideporchCi {
+  pub source: Directory! @defaultPath("/") @ignorePatterns([
+    "*",
+    "!Cargo.toml",
+    "!Cargo.lock",
+    "!rust-toolchain.toml",
+    "!clippy.toml",
+    "!mise.toml",
+    "!build.rs",
+    "!encre-css.toml",
+    "!src",
+    "!assets",
+    "!tests",
+    "!scripts",
+    "!README.md",
+    "!LICENSE",
+  ])
+
+  """
+  The pinned mise image (built on the official Rust image), with the
+  project's tools installed and the source mounted.
+  """
+  let toolchain: Container! {
+    container
+      .from("ghcr.io/jdx/mise:2026.9.5@sha256:d549958171c177f113e62ddba5afdfb9e245d699ac457148e4b7b0da7af3b0b7")
+      .withoutFile("/mise/config.toml")
+      .withWorkdir("/src")
+      .withEnvVariable("MISE_TRUSTED_CONFIG_PATHS", "/src")
+      .withFile("mise.toml", source.file("mise.toml"))
+      .withFile("rust-toolchain.toml", source.file("rust-toolchain.toml"))
+      .withExec(["mise", "install", "rust", "zig", "github:rust-cross/cargo-zigbuild"])
+      .withEnvVariable("MISE_AUTO_INSTALL", "false")
+      .withMountedCache("/usr/local/cargo/registry", cacheVolume("sideporch-cargo-registry"))
+      .withMountedCache("/usr/local/cargo/git", cacheVolume("sideporch-cargo-git"))
+      .withDirectory("/src", source)
+      .withMountedCache("/src/target", cacheVolume("sideporch-rust-1.97.1-target"), sharing: CacheSharingMode.LOCKED)
+  }
+
+  """
+  Run formatting, strict Clippy, unit and end-to-end tests on Linux.
+  """
+  pub ci: String! {
+    toolchain.withExec(["mise", "run", "check"]).stdout
+  }
+
+  """
+  Build a fully static Linux executable with zig and musl. It needs no libc
+  or anything else from the system it runs on.
+  """
+  pub binary(target: String! = "x86_64-unknown-linux-musl"): File! {
+    toolchain
+      .withExec(["mise", "exec", "--", "cargo", "zigbuild", "--release", "--locked", "--target", target])
+      .withExec(["sh", "-c", "file target/" + target + "/release/sideporch | grep -q 'statically linked'"])
+      .withExec(["cp", "target/" + target + "/release/sideporch", "/sideporch"])
+      .file("/sideporch")
+  }
+
+  """
+  Release archives and their checksum files for both Linux architectures.
+  """
+  pub linuxArchives(version: String!): Directory! {
+    toolchain
+      .withFile("/bin/x86_64/sideporch", binary("x86_64-unknown-linux-musl"))
+      .withFile("/bin/aarch64/sideporch", binary("aarch64-unknown-linux-musl"))
+      .withExec(["sh", "scripts/package.sh", version, "x86_64-unknown-linux-musl", "/bin/x86_64/sideporch", "/dist"])
+      .withExec(["sh", "scripts/package.sh", version, "aarch64-unknown-linux-musl", "/bin/aarch64/sideporch", "/dist"])
+      .directory("/dist")
+  }
+
+  """
+  The container image: an empty filesystem with only the static binary. It
+  listens on port 8080 and keeps its data in the /data volume.
+  """
+  pub image(
+    """
+    amd64 or arm64
+    """
+    arch: String! = "amd64",
+    """
+    A prebuilt static binary to use instead of building one
+    """
+    executable: File,
+  ): Container! {
+    let target = if (arch == "arm64") { "aarch64-unknown-linux-musl" } else { "x86_64-unknown-linux-musl" }
+    let file = executable ?? binary(target)
+    let base = if (arch == "arm64") { container(platform: "linux/arm64") } else { container(platform: "linux/amd64") }
+    base
+      .withFile("/sideporch", file, permissions: 493)
+      .withDirectory("/data", directory, owner: "10001:10001")
+      .withUser("10001:10001")
+      .withEnvVariable("SIDEPORCH_LISTEN", "0.0.0.0:8080")
+      .withEnvVariable("SIDEPORCH_DATA", "/data")
+      .withExposedPort(8080)
+      .withEntrypoint(["/sideporch"])
+      .withLabel("org.opencontainers.image.title", "Sideporch")
+      .withLabel("org.opencontainers.image.description", "A small, self-hosted team chat that ships as one binary")
+      .withLabel("org.opencontainers.image.source", "https://github.com/niklas-heer/sideporch")
+      .withLabel("org.opencontainers.image.licenses", "MIT")
+  }
+
+  """
+  Check that the image starts: run the binary in its empty filesystem.
+  """
+  pub imageSmoke(arch: String! = "amd64", executable: File): String! {
+    image(arch: arch, executable: executable).withExec(["/sideporch", "--version"], useEntrypoint: false).stdout
+  }
+
+  """
+  Publish the image for amd64 and arm64 under one tag.
+  """
+  pub publish(
+    """
+    Tag to publish, such as main, 0.1.0 or latest
+    """
+    tag: String!,
+    username: String!,
+    password: Secret!,
+    repository: String! = "ghcr.io/niklas-heer/sideporch",
+  ): String! {
+    container
+      .withRegistryAuth("ghcr.io", username, password)
+      .publish(repository + ":" + tag, platformVariants: [image(arch: "amd64"), image(arch: "arm64")])
+  }
+}
