@@ -1,0 +1,32 @@
+package slack
+
+import (
+	"os"
+	"testing"
+
+	"github.com/TwiN/gatus/v5/alerting/alert"
+	"github.com/TwiN/gatus/v5/config/endpoint"
+)
+
+func TestCaptureFixtures(t *testing.T) {
+	desc := "Homepage is unreachable"
+	a := alert.Alert{Description: &desc, SuccessThreshold: 2, FailureThreshold: 3}
+	p := AlertProvider{DefaultConfig: Config{WebhookURL: "http://sideporch.test/hooks/x"}}
+	ep := &endpoint.Endpoint{Name: "website", Group: "core"}
+	failed := &endpoint.Result{ConditionResults: []*endpoint.ConditionResult{
+		{Condition: "[STATUS] == 200", Success: false},
+		{Condition: "[RESPONSE_TIME] < 500", Success: true},
+	}}
+	passed := &endpoint.Result{ConditionResults: []*endpoint.ConditionResult{
+		{Condition: "[STATUS] == 200", Success: true},
+		{Condition: "[RESPONSE_TIME] < 500", Success: true},
+	}}
+	write := func(name string, body []byte) {
+		if err := os.WriteFile("/tmp/gatus-fixtures/"+name, append(body, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("slack-triggered.json", p.buildRequestBody(&p.DefaultConfig, ep, &a, failed, false))
+	write("slack-resolved.json", p.buildRequestBody(&p.DefaultConfig, ep, &a, passed, true))
+	write("slack-no-conditions.json", p.buildRequestBody(&Config{Title: "Uptime"}, ep, &alert.Alert{FailureThreshold: 1}, &endpoint.Result{}, false))
+}

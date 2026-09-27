@@ -1,0 +1,27 @@
+# Utility classes are generated at build time by encre-css (a Rust
+# implementation of Tailwind). build.rs scans src/ and assets/*.js.
+
+[theme.colors]
+# Painted porch floorboards: the sidebar and primary buttons.
+floor = "#24403C"
+floor-2 = "#2E524D"
+floor-3 = "#3B6660"
+# Porch-ceiling "haint blue": highlights and focus rings.
+haint = "#B9E0DA"
+haint-2 = "#DCEFEC"
+# The porch light: unread and mention markers only.
+lamp = "#F5C04A"
+# Text and surfaces.
+ink = "#1B2826"
+muted = "#5A6D69"
+line = "#DCE4E2"
+screen = "#F5F8F7"
+night = "#101A19"
+night-2 = "#172422"
+night-line = "#2A3B38"
+
+[shortcuts]
+btn = "inline-flex items-center justify-center gap-2 rounded-lg bg-floor px-4 py-2 font-semibold text-white hover:bg-floor-2 disabled:opacity-60 dark:bg-haint dark:text-night dark:hover:bg-haint-2"
+btn-quiet = "inline-flex items-center justify-center gap-2 rounded-lg border border-line px-3 py-1.5 font-medium text-ink hover:bg-screen dark:border-night-line dark:text-haint-2 dark:hover:bg-night-2"
+field = "block w-full rounded-lg border border-line bg-white px-3 py-2 text-ink placeholder:text-muted focus:border-floor-3 dark:border-night-line dark:bg-night dark:text-haint-2"
+field-label = "mb-1 block text-sm font-semibold text-ink dark:text-haint-2"

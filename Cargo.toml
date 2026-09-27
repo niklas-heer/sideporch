@@ -1,0 +1,61 @@
+[package]
+name = "sideporch"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A small, self-hosted team chat that ships as one binary"
+license = "MIT"
+repository = "https://github.com/niklas-heer/sideporch"
+readme = "README.md"
+keywords = ["chat", "self-hosted", "slack", "webhooks"]
+categories = ["web-programming::http-server"]
+
+[dependencies]
+argon2 = "0.6.0"
+axum = { version = "0.8.9", features = ["ws"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+futures-util = "0.3.34"
+getrandom = "0.4.3"
+jiff = "0.2.37"
+maud = { version = "0.27.0", features = ["axum"] }
+phosphor-svgs = "0.5.0"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[build-dependencies]
+encre-css = "0.21.1"
+
+[dev-dependencies]
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "cookies", "form"] }
+tempfile = "3.27.0"
+tokio-tungstenite = "0.29"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+todo = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+as_conversions = "deny"
+unchecked_time_subtraction = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

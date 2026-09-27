@@ -1,0 +1,1 @@
+{"text":"","attachments":[{"title":":helmet_with_white_cross: Gatus","text":"An alert for *core/website* has been triggered due to having failed 3 time(s) in a row:\n\u003e Homepage is unreachable","short":false,"color":"#DD0000","fields":[{"title":"Condition results","value":":x: - `[STATUS] == 200`\n:white_check_mark: - `[RESPONSE_TIME] \u003c 500`\n","short":false}]}]}

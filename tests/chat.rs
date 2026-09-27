@@ -1,0 +1,370 @@
+// Tests fail by panicking, so their helpers may unwrap, index and slice.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::string_slice,
+    clippy::arithmetic_side_effects
+)]
+
+mod common;
+
+use std::time::Duration;
+
+use common::{Browser, admin, between, home_channel, invite, location, setup_path, start};
+use reqwest::StatusCode;
+
+#[tokio::test]
+async fn the_first_account_needs_the_setup_link() {
+    let server = start().await;
+    let visitor = Browser::anonymous(&server);
+
+    let response = visitor.get("/").await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        response
+            .text()
+            .await
+            .unwrap()
+            .contains("setup link printed in the server log")
+    );
+    assert_eq!(
+        visitor.get("/setup/not-the-token").await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let page = admin.page(&format!("/c/{general}")).await;
+    assert!(page.contains("This is the start of #general."));
+
+    // The link works once; afterwards new people need an invite.
+    assert_eq!(
+        visitor.get(&setup_path(&server)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(location(&visitor.get("/").await), "/login");
+}
+
+#[tokio::test]
+async fn signing_in_and_out() {
+    let server = start().await;
+    admin(&server).await;
+    let mut browser = Browser::anonymous(&server);
+
+    let wrong = browser
+        .submit("/login", &[("username", "ada"), ("password", "nope")])
+        .await;
+    assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+    assert!(wrong.text().await.unwrap().contains("don't match"));
+    assert_eq!(location(&browser.get("/home").await), "/login");
+
+    let right = browser
+        .submit(
+            "/login",
+            &[("username", "ADA"), ("password", "correct horse")],
+        )
+        .await;
+    assert_eq!(right.status(), StatusCode::SEE_OTHER);
+    assert!(browser.page("/home").await.contains("general"));
+
+    browser.submit("/logout", &[]).await;
+    assert_eq!(location(&browser.get("/home").await), "/login");
+}
+
+#[tokio::test]
+async fn invited_people_join_and_talk_in_channels() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let bea = invite(&server, &admin, "Bea", "bea").await;
+    let general = home_channel(&bea).await;
+
+    let response = bea
+        .post(
+            &format!("/c/{general}/messages"),
+            &[("body", "Hi *everyone* <script>alert(1)</script>")],
+        )
+        .await;
+    assert_eq!(location(&response), format!("/c/{general}"));
+
+    let page = admin.page(&format!("/c/{general}")).await;
+    assert!(page.contains("Hi <strong>everyone</strong> &lt;script&gt;alert(1)&lt;/script&gt;"));
+    assert!(!page.contains("<script>alert(1)"));
+
+    // Only admins manage invites.
+    assert_eq!(
+        bea.post("/invites", &[]).await.status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // Usernames are unique, ignoring case.
+    let mut newcomer = Browser::anonymous(&server);
+    admin.post("/invites", &[]).await;
+    let people = admin.page("/people").await;
+    let token = between(&people, "/join/", "<");
+    let duplicate = newcomer
+        .submit(
+            &format!("/join/{token}"),
+            &[
+                ("display_name", "Other Bea"),
+                ("username", "BEA"),
+                ("password", "a long password"),
+            ],
+        )
+        .await;
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        duplicate
+            .text()
+            .await
+            .unwrap()
+            .contains("That username is taken")
+    );
+}
+
+#[tokio::test]
+async fn revoked_invites_stop_working() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    admin.post("/invites", &[]).await;
+    let token = between(&admin.page("/people").await, "/join/", "<").to_owned();
+
+    admin.post(&format!("/invites/{token}/revoke"), &[]).await;
+
+    let visitor = Browser::anonymous(&server);
+    let response = visitor.get(&format!("/join/{token}")).await;
+    assert_eq!(response.status(), StatusCode::GONE);
+    assert!(
+        response
+            .text()
+            .await
+            .unwrap()
+            .contains("expired or was revoked")
+    );
+}
+
+#[tokio::test]
+async fn channels_can_be_created_and_named_safely() {
+    let server = start().await;
+    let admin = admin(&server).await;
+
+    let created = admin.post("/channels", &[("name", "#Garden Club")]).await;
+    assert_eq!(created.status(), StatusCode::SEE_OTHER);
+    let page = admin.page(&location(&created)).await;
+    assert!(page.contains("This is the start of #garden-club."));
+
+    let duplicate = admin.post("/channels", &[("name", "garden-club")]).await;
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    let invalid = admin.post("/channels", &[("name", "no/slashes")]).await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn threads_collect_replies_under_one_root() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+
+    assert_eq!(
+        admin.send(general, "Who's bringing snacks?", None).await,
+        StatusCode::NO_CONTENT
+    );
+    let page = admin.page(&format!("/c/{general}")).await;
+    let root: i64 = between(&page, r#"data-message-id=""#, "\"")
+        .parse()
+        .unwrap();
+
+    assert_eq!(
+        admin.send(general, "I will", Some(root)).await,
+        StatusCode::NO_CONTENT
+    );
+    let thread = admin.page(&format!("/c/{general}/t/{root}")).await;
+    let reply: i64 = between(
+        between(&thread, r#"id="replies""#, "</ol>"),
+        r#"data-message-id=""#,
+        "\"",
+    )
+    .parse()
+    .unwrap();
+    // Replying to a reply stays in the same thread.
+    assert_eq!(
+        admin.send(general, "Me too", Some(reply)).await,
+        StatusCode::NO_CONTENT
+    );
+
+    let thread = admin.page(&format!("/c/{general}/t/{root}")).await;
+    let replies = between(&thread, r#"id="replies""#, "</ol>");
+    assert!(replies.contains("I will") && replies.contains("Me too"));
+    assert!(thread.contains("2 replies"));
+
+    let channel = admin.page(&format!("/c/{general}")).await;
+    let messages = between(&channel, r#"id="messages""#, "</ol>");
+    assert!(messages.contains("2 replies"));
+    assert!(
+        !messages.contains("Me too"),
+        "replies stay out of the channel"
+    );
+
+    // Without JavaScript, replying returns to the thread.
+    let response = admin
+        .post(
+            &format!("/c/{general}/messages"),
+            &[("body", "no js"), ("parent_id", &root.to_string())],
+        )
+        .await;
+    assert_eq!(location(&response), format!("/c/{general}/t/{root}"));
+}
+
+#[tokio::test]
+async fn direct_messages_are_private_to_their_members() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let bea = invite(&server, &admin, "Bea", "bea").await;
+    let cat = invite(&server, &admin, "Cat", "cat").await;
+    let bea_id = bea.user_id().await;
+
+    let opened = admin.get(&format!("/dm/{bea_id}")).await;
+    let dm = location(&opened);
+    let dm_id: i64 = dm.trim_start_matches("/c/").parse().unwrap();
+    assert_eq!(
+        admin.send(dm_id, "Just between us", None).await,
+        StatusCode::NO_CONTENT
+    );
+
+    // Opening the conversation again reuses it, from either side.
+    assert_eq!(location(&admin.get(&format!("/dm/{bea_id}")).await), dm);
+    let admin_id = admin.user_id().await;
+    assert_eq!(location(&bea.get(&format!("/dm/{admin_id}")).await), dm);
+
+    // The recipient sees the conversation, marked unread, in the sidebar.
+    let sidebar = bea.page("/home").await;
+    let link = between(&sidebar, &format!(r#"data-channel-link="{dm_id}""#), ">");
+    assert!(link.contains("data-unread"));
+
+    assert!(bea.page(&dm).await.contains("Just between us"));
+    let sidebar = bea.page("/home").await;
+    let link = between(&sidebar, &format!(r#"data-channel-link="{dm_id}""#), ">");
+    assert!(!link.contains("data-unread"), "reading clears the marker");
+
+    assert_eq!(cat.get(&dm).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        cat.send(dm_id, "let me in", None).await,
+        StatusCode::NOT_FOUND
+    );
+    assert!(!cat.page("/home").await.contains("Ada Admin"));
+}
+
+#[tokio::test]
+async fn live_updates_reach_the_right_people() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let bea = invite(&server, &admin, "Bea", "bea").await;
+    let cat = invite(&server, &admin, "Cat", "cat").await;
+    let general = home_channel(&admin).await;
+    let mut bea_live = bea.live().await;
+    let mut cat_live = cat.live().await;
+
+    assert_eq!(
+        admin.send(general, "Porch party at 6", None).await,
+        StatusCode::NO_CONTENT
+    );
+    for live in [&mut bea_live, &mut cat_live] {
+        let event = live
+            .next_event(Duration::from_secs(5))
+            .await
+            .expect("event");
+        assert_eq!(event["type"], "message");
+        assert_eq!(event["channel_id"], general);
+        assert!(event["html"].as_str().unwrap().contains("Porch party at 6"));
+    }
+
+    let bea_id = bea.user_id().await;
+    let dm: i64 = location(&admin.get(&format!("/dm/{bea_id}")).await)
+        .trim_start_matches("/c/")
+        .parse()
+        .unwrap();
+    assert_eq!(admin.send(dm, "psst", None).await, StatusCode::NO_CONTENT);
+    let event = bea_live
+        .next_event(Duration::from_secs(5))
+        .await
+        .expect("dm event");
+    assert!(event["html"].as_str().unwrap().contains("psst"));
+    assert!(
+        cat_live
+            .next_event(Duration::from_millis(300))
+            .await
+            .is_none()
+    );
+
+    // Thread replies carry the parent's new reply count.
+    let root = event["id"].as_i64().unwrap();
+    assert_eq!(
+        bea.send(dm, "tell me more", Some(root)).await,
+        StatusCode::NO_CONTENT
+    );
+    let reply = bea_live
+        .next_event(Duration::from_secs(5))
+        .await
+        .expect("reply event");
+    assert_eq!(reply["parent_id"], root);
+    assert_eq!(reply["reply_count"], 1);
+}
+
+#[tokio::test]
+async fn cross_site_form_posts_are_rejected() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+
+    let forged = admin
+        .client
+        .post(admin.url(&format!("/c/{general}/messages")))
+        .header("cookie", &admin.cookie)
+        .header("origin", "https://evil.example")
+        .form(&[("body", "forged")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forged.status(), StatusCode::FORBIDDEN);
+
+    let same_site = admin
+        .client
+        .post(admin.url(&format!("/c/{general}/messages")))
+        .header("cookie", &admin.cookie)
+        .header("origin", &admin.base)
+        .form(&[("body", "legit")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(same_site.status(), StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn pages_ship_their_assets_and_security_headers() {
+    let server = start().await;
+    let visitor = Browser::anonymous(&server);
+
+    let login = visitor.get("/login").await;
+    let csp = login.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(csp.contains("script-src 'self'"));
+    let html = login.text().await.unwrap();
+    let css_path = format!("/assets/app.css{}", between(&html, "/assets/app.css", "\""));
+
+    let css = visitor.get(&css_path).await;
+    assert_eq!(css.headers()["content-type"], "text/css; charset=utf-8");
+    let css = css.text().await.unwrap();
+    assert!(css.contains("Atkinson Hyperlegible Next"));
+    assert!(css.contains(".bg-floor"));
+    for path in [
+        "/assets/app.js",
+        "/assets/logo.svg",
+        "/assets/fonts/normal-latin.woff2",
+        "/manifest.webmanifest",
+    ] {
+        assert_eq!(visitor.get(path).await.status(), StatusCode::OK, "{path}");
+    }
+}

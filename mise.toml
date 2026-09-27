@@ -1,0 +1,29 @@
+[tools]
+rust = { version = "1.97.1", components = "clippy,rustfmt" }
+
+[tasks.dev]
+description = "Run Sideporch locally with its data in ./data"
+run = "cargo run -- --data data"
+
+[tasks.fmt]
+description = "Format the code"
+run = "cargo fmt --all"
+
+[tasks.lint]
+description = "Check formatting and run Clippy"
+run = [
+  "cargo fmt --all -- --check",
+  "cargo clippy --all-targets --locked -- -D warnings",
+]
+
+[tasks.test]
+description = "Run unit and end-to-end tests"
+run = "cargo test --all-targets --locked"
+
+[tasks.check]
+description = "Run every check CI would run"
+depends = ["lint", "test"]
+
+[tasks.build]
+description = "Build the release binary into target/release/sideporch"
+run = "cargo build --release --locked"

@@ -2,3 +2,5 @@
 .DS_Store
 *.db
 *.db-*
+/data
+/sideporch-data
