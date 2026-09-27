@@ -48,6 +48,18 @@ type SideporchCi {
   }
 
   """
+  Empty Sideporch's locked Rust build cache in the Dagger engine. Other
+  projects' caches and images are left alone. Pass a new nonce each time so
+  Dagger does not reuse an earlier run.
+  """
+  pub clean(nonce: String!): String! {
+    toolchain
+      .withEnvVariable("SIDEPORCH_CLEAN_RUN", nonce)
+      .withExec(["sh", "-c", "du -sh /src/target; find /src/target -mindepth 1 -delete; echo emptied /src/target"])
+      .stdout
+  }
+
+  """
   Build a fully static Linux executable with zig and musl. It needs no libc
   or anything else from the system it runs on.
   """

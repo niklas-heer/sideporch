@@ -31,6 +31,18 @@ run = "cargo test --all-targets --locked"
 description = "Run every check CI would run, on this machine"
 depends = ["lint", "test"]
 
+[tasks.clean]
+description = "Remove all local build output (target/ and dist/)"
+run = ["cargo clean", "rm -rf dist"]
+
+[tasks."clean-debug"]
+description = "Remove debug builds and test binaries; keep release builds"
+run = "cargo clean --profile dev"
+
+[tasks."clean-ci"]
+description = "Empty only Sideporch's Rust build cache in the local Dagger engine"
+run = 'dagger call clean --nonce "$(date +%s)"'
+
 [tasks.ci]
 description = "Run the Linux CI pipeline in containers through Dagger (needs a container engine)"
 run = "dagger call ci"
