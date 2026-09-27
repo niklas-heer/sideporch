@@ -64,10 +64,10 @@ type SideporchCi {
   """
   pub linuxArchives(version: String!): Directory! {
     toolchain
-      .withFile("/bin/x86_64/sideporch", binary("x86_64-unknown-linux-musl"))
-      .withFile("/bin/aarch64/sideporch", binary("aarch64-unknown-linux-musl"))
-      .withExec(["sh", "scripts/package.sh", version, "x86_64-unknown-linux-musl", "/bin/x86_64/sideporch", "/dist"])
-      .withExec(["sh", "scripts/package.sh", version, "aarch64-unknown-linux-musl", "/bin/aarch64/sideporch", "/dist"])
+      .withFile("/staging/x86_64/sideporch", binary("x86_64-unknown-linux-musl"))
+      .withFile("/staging/aarch64/sideporch", binary("aarch64-unknown-linux-musl"))
+      .withExec(["sh", "scripts/package.sh", version, "x86_64-unknown-linux-musl", "/staging/x86_64/sideporch", "/dist"])
+      .withExec(["sh", "scripts/package.sh", version, "aarch64-unknown-linux-musl", "/staging/aarch64/sideporch", "/dist"])
       .directory("/dist")
   }
 
