@@ -368,3 +368,51 @@ async fn pages_ship_their_assets_and_security_headers() {
         assert_eq!(visitor.get(path).await.status(), StatusCode::OK, "{path}");
     }
 }
+
+#[tokio::test]
+async fn the_setup_link_is_kept_private_and_removed_after_use() {
+    let data = tempfile::tempdir().unwrap();
+    let app = sideporch::Sideporch::open(sideporch::Config {
+        data_dir: data.path().to_owned(),
+        public_url: None,
+        allow_insecure_push: true,
+    })
+    .await
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let file = app
+        .save_setup_link(&base)
+        .unwrap()
+        .expect("a fresh server has a setup link");
+    let link = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(link.trim(), format!("{base}{}", app.setup_path().unwrap()));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    let router = app.router();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let response = client
+        .post(link.trim())
+        .form(&[
+            ("display_name", "Ada"),
+            ("username", "ada"),
+            ("password", "correct horse"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(!file.exists(), "a used link is deleted");
+    assert!(app.save_setup_link(&base).unwrap().is_none());
+}

@@ -1,6 +1,6 @@
-use std::{net::SocketAddr, path::PathBuf, process::ExitCode};
+use std::{io::IsTerminal as _, net::SocketAddr, path::PathBuf, process::ExitCode};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use sideporch::{Config, Sideporch};
 use tracing_subscriber::EnvFilter;
 
@@ -8,16 +8,32 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser)]
 #[command(version, about)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
     /// Address and port to listen on.
     #[arg(long, env = "SIDEPORCH_LISTEN", default_value = "127.0.0.1:8080")]
     listen: SocketAddr,
     /// Directory for the database. Back up this directory to back up everything.
-    #[arg(long, env = "SIDEPORCH_DATA", default_value = "sideporch-data")]
+    #[arg(
+        long,
+        env = "SIDEPORCH_DATA",
+        default_value = "sideporch-data",
+        global = true
+    )]
     data: PathBuf,
     /// Public URL people use to reach this server, such as `https://chat.example.com`.
     /// Used in invite and webhook links; secure cookies are enabled for https.
     #[arg(long, env = "SIDEPORCH_PUBLIC_URL")]
     public_url: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Print the one-time link for creating the first account.
+    ///
+    /// The running server keeps it in a file in the data directory that only
+    /// its user can read. With Docker: `docker exec <container> /sideporch setup-link`.
+    SetupLink,
 }
 
 #[tokio::main]
@@ -27,7 +43,11 @@ async fn main() -> ExitCode {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
-    match run(Args::parse()).await {
+    let args = Args::parse();
+    if matches!(args.command, Some(Command::SetupLink)) {
+        return print_setup_link(&args.data);
+    }
+    match run(args).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!("{error}");
@@ -49,13 +69,44 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         None => format!("http://{}", listener.local_addr()?),
     };
     tracing::info!(data = %args.data.display(), "Sideporch is listening on {base}");
-    if let Some(path) = app.setup_path() {
-        tracing::info!("Create the first account at {base}{path}");
+    if let Some(file) = app.save_setup_link(&base)? {
+        // The link grants the first admin account. Show it on an interactive
+        // terminal; keep it out of service and container logs.
+        if std::io::stdout().is_terminal()
+            && let Some(path) = app.setup_path()
+        {
+            tracing::info!("Create the first account at {base}{path}");
+        } else {
+            tracing::info!(
+                file = %file.display(),
+                "No account exists yet. Run `sideporch setup-link` to get the one-time setup link"
+            );
+        }
     }
     axum::serve(listener, app.router())
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())
+}
+
+fn print_setup_link(data: &std::path::Path) -> ExitCode {
+    match std::fs::read_to_string(sideporch::setup_link_file(data)) {
+        Ok(link) => {
+            print!("{link}");
+            ExitCode::SUCCESS
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "No setup link in {}: the first account already exists, or the server hasn't started yet.",
+                data.display()
+            );
+            ExitCode::FAILURE
+        }
+        Err(error) => {
+            eprintln!("Could not read the setup link: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 async fn shutdown() {

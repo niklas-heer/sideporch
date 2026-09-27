@@ -53,7 +53,14 @@ On NixOS, the flake provides a module: import `sideporch.nixosModules.default` a
 sideporch --data /var/lib/sideporch --public-url https://chat.example.com
 ```
 
-On first start, Sideporch prints a setup link. Open it to create the first account, which is an admin. Then open **People** to create invite links for everyone else. With Docker, run `docker logs` to find the link.
+On first start, Sideporch creates a one-time setup link for the first account, which is an admin. When you run it in a terminal it prints the link. As a service or in a container, the link stays out of the logs, because anyone who has it can claim the instance; get it with:
+
+```sh
+sideporch setup-link --data /var/lib/sideporch
+docker exec <container> /sideporch setup-link
+```
+
+The link lives in a file only the server's user can read and is deleted once used. Then open **People** to create invite links for everyone else.
 
 | Option | Environment variable | Default | Meaning |
 | --- | --- | --- | --- |

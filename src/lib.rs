@@ -55,6 +55,8 @@ pub(crate) struct AppState {
     secure_cookies: bool,
     /// One-time token for creating the first account, while none exists.
     setup_token: Arc<Mutex<Option<String>>>,
+    /// Where the setup link is kept for `sideporch setup-link`.
+    setup_file: PathBuf,
 }
 
 impl AppState {
@@ -73,6 +75,11 @@ impl AppState {
     fn finish_setup(&self) {
         if let Ok(mut token) = self.setup_token.lock() {
             *token = None;
+        }
+        if let Err(error) = std::fs::remove_file(&self.setup_file)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%error, "could not remove the used setup link");
         }
     }
 }
@@ -127,6 +134,7 @@ impl Sideporch {
                 .is_some_and(|url| url.starts_with("https://")),
             public_url,
             setup_token: Arc::new(Mutex::new(setup_token)),
+            setup_file: setup_link_file(&config.data_dir),
         };
         state.automations.serve(state.clone());
         state.automations.reload(&state).await?;
@@ -144,6 +152,22 @@ impl Sideporch {
             .map(|token| format!("/setup/{token}"))
     }
 
+    /// Saves the setup link, built on `base_url`, to a file only the
+    /// server's user can read, and returns the file. The link grants the
+    /// first admin account, so it stays out of shared logs. Returns `None`
+    /// once an account exists.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the file cannot be written.
+    pub fn save_setup_link(&self, base_url: &str) -> std::io::Result<Option<PathBuf>> {
+        let Some(path) = self.setup_path() else {
+            return Ok(None);
+        };
+        write_private(&self.state.setup_file, &format!("{base_url}{path}"))?;
+        Ok(Some(self.state.setup_file.clone()))
+    }
+
     /// The configured public URL, if any.
     #[must_use]
     pub fn public_url(&self) -> Option<&str> {
@@ -154,6 +178,27 @@ impl Sideporch {
     pub fn router(&self) -> Router {
         routes::router(self.state.clone())
     }
+}
+
+/// The file that holds the first-account setup link while one is pending.
+#[must_use]
+pub fn setup_link_file(data_dir: &std::path::Path) -> PathBuf {
+    data_dir.join("setup-link")
+}
+
+/// Writes `contents` to a file that only the current user can read.
+fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path)?;
+    // An existing file keeps its mode on open; tighten it either way.
+    #[cfg(unix)]
+    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    file.write_all(contents.as_bytes())?;
+    file.write_all(b"\n")
 }
 
 pub(crate) fn now_ms() -> i64 {
