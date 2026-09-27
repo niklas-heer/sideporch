@@ -7,10 +7,41 @@ use maud::{DOCTYPE, Markup, PreEscaped, html};
 use crate::{
     auth::CurrentUser,
     icons::{self, icon},
-    markup,
-    store::{Author, Channel, ChannelKind, Invite, Message, Sidebar, SidebarItem, User, Webhook},
+    markup::{self, Context},
+    store::{
+        Author, Channel, ChannelKind, FileRef, Invite, Message, Sidebar, SidebarItem, User, Webhook,
+    },
     webhook::Attachment,
 };
+
+pub mod automations;
+pub mod emoji;
+pub mod search;
+
+/// How to render messages: this Sideporch's custom emoji and usernames, and
+/// who is looking. Live updates are rendered once for everyone, so they
+/// have no viewer; the browser marks the viewer's own reactions.
+pub struct Render<'a> {
+    pub ctx: &'a Context,
+    pub viewer: Option<i64>,
+}
+
+impl<'a> Render<'a> {
+    pub const fn shared(ctx: &'a Context) -> Self {
+        Self { ctx, viewer: None }
+    }
+
+    pub const fn for_user(ctx: &'a Context, viewer: i64) -> Self {
+        Self {
+            ctx,
+            viewer: Some(viewer),
+        }
+    }
+
+    fn markup(&self, text: &str) -> PreEscaped<String> {
+        PreEscaped(markup::render(text, self.ctx))
+    }
+}
 
 pub const ASSET_VERSION: &str = env!("SIDEPORCH_ASSET_VERSION");
 
@@ -54,7 +85,7 @@ fn auth_page(title: &str, content: &Markup) -> Markup {
     document(title, "bg-floor text-ink antialiased", &page)
 }
 
-fn form_error(error: Option<&str>) -> Markup {
+pub fn form_error(error: Option<&str>) -> Markup {
     html! {
         @if let Some(error) = error {
             p role="alert" class="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200" {
@@ -195,9 +226,16 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
     };
     html! {
         nav aria-label="Channels" class={ "h-full shrink-0 flex-col bg-floor text-haint-2 " (width) } {
-            a href="/" class="flex items-center gap-2.5 px-5 pb-4 pt-5" {
+            a href="/" class="flex items-center gap-2.5 px-5 pb-3 pt-5" {
                 img src="/assets/logo.svg" alt="" class="h-8 w-8";
                 span class="text-lg font-bold tracking-tight text-white" { "Sideporch" }
+            }
+            form method="get" action="/search" role="search" class="px-3 pb-2" {
+                label class="flex items-center gap-2 rounded-lg bg-floor-2 px-3 py-1.5 text-haint focus-within:bg-floor-3" {
+                    (icon(icons::MAGNIFYING_GLASS, "h-4 w-4 shrink-0"))
+                    input type="search" name="q" placeholder="Search messages" aria-label="Search messages"
+                        class="min-w-0 flex-1 bg-transparent text-sm text-white outline-hidden placeholder:text-haint";
+                }
             }
             div class="flex-1 overflow-y-auto px-3 pb-4" {
                 div class="mb-1 mt-2 flex items-center justify-between px-3 text-sm text-haint" {
@@ -226,6 +264,18 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                 a href="/people" class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-floor-2" {
                     (icon(icons::USERS, "h-5 w-5 shrink-0"))
                     span class="truncate" { "People" }
+                }
+                a href="/emoji" class="rounded-lg p-2 hover:bg-floor-2 hover:text-white" aria-label="Custom emoji" title="Custom emoji" {
+                    (icon(icons::SMILEY, "h-5 w-5"))
+                }
+                @if shell.user.is_admin {
+                    a href="/automations" class="rounded-lg p-2 hover:bg-floor-2 hover:text-white" aria-label="Automations" title="Automations" {
+                        (icon(icons::LIGHTNING, "h-5 w-5"))
+                    }
+                }
+                button type="button" data-push-toggle hidden aria-pressed="false"
+                    class="rounded-lg p-2 hover:bg-floor-2 hover:text-white aria-pressed:text-lamp" aria-label="Notifications" title="Turn notifications on or off" {
+                    (icon(icons::BELL, "h-5 w-5"))
                 }
                 form method="post" action="/logout" {
                     button type="submit" class="rounded-lg p-2 hover:bg-floor-2 hover:text-white" aria-label="Sign out" title={ "Sign out " (shell.user.display_name) } {
@@ -298,6 +348,7 @@ pub struct ChannelView<'a> {
     pub messages: &'a [Message],
     pub older: Option<i64>,
     pub thread: Option<(&'a Message, &'a [Message])>,
+    pub render: &'a Render<'a>,
 }
 
 pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
@@ -343,7 +394,7 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
                     (empty_channel(channel))
                 }
                 ol id="messages" class="py-3" {
-                    (message_list(view.messages))
+                    (message_list(view.messages, view.render))
                 }
             }
             (composer(&format!("/c/{}/messages", channel.id), None, &composer_label))
@@ -351,12 +402,16 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
     };
     let thread = view
         .thread
-        .map(|(root, replies)| thread_panel(channel, root, replies));
+        .map(|(root, replies)| thread_panel(channel, root, replies, view.render));
     app_page(
         &channel.name,
         shell,
         &data,
-        &html! { (main) @if let Some(thread) = thread { (thread) } },
+        &html! {
+            (main)
+            @if let Some(thread) = thread { (thread) }
+            (emoji_picker(view.render.ctx))
+        },
     )
 }
 
@@ -380,7 +435,12 @@ fn empty_channel(channel: &Channel) -> Markup {
     }
 }
 
-fn thread_panel(channel: &Channel, root: &Message, replies: &[Message]) -> Markup {
+fn thread_panel(
+    channel: &Channel,
+    root: &Message,
+    replies: &[Message],
+    render: &Render<'_>,
+) -> Markup {
     html! {
         aside aria-label="Thread" class="flex min-w-0 flex-1 flex-col border-line lg:border-l lg:w-96 lg:flex-none xl:w-[28rem] dark:border-night-line" {
             header class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-5 dark:border-night-line" {
@@ -393,12 +453,12 @@ fn thread_panel(channel: &Channel, root: &Message, replies: &[Message]) -> Marku
                 }
             }
             div id="thread-scroller" class="flex-1 overflow-y-auto py-3" {
-                ol { (message_item(root, false, false)) }
+                ol { (message_item(root, false, false, render)) }
                 div class="my-2 flex items-center gap-3 px-5 text-sm text-muted dark:text-haint" {
                     span id="thread-count" { (reply_label(root.reply_count)) }
                     span class="h-px flex-1 bg-line dark:bg-night-line" {}
                 }
-                ol id="replies" { (message_list(replies)) }
+                ol id="replies" { (message_list(replies, render)) }
             }
             (composer(&format!("/c/{}/messages", channel.id), Some(root.id), "Reply"))
         }
@@ -415,13 +475,18 @@ fn reply_label(count: i64) -> String {
 
 fn composer(action: &str, parent: Option<i64>, label: &str) -> Markup {
     html! {
-        form data-composer method="post" action=(action) class="shrink-0 px-4 pb-4 pt-2" {
+        form data-composer method="post" action=(action) enctype="multipart/form-data" class="shrink-0 px-4 pb-4 pt-2" {
             @if let Some(parent) = parent {
                 input type="hidden" name="parent_id" value=(parent);
             }
-            div class="flex items-end gap-2 rounded-xl border border-line bg-white py-1.5 pl-3 pr-1.5 focus-within:border-floor-3 dark:border-night-line dark:bg-night-2" {
-                textarea name="body" rows="1" required maxlength="10000" aria-label=(label) placeholder=(label)
-                    class="max-h-48 min-h-6 flex-1 resize-none bg-transparent py-1.5 leading-6 outline-hidden placeholder:text-muted" {}
+            ul data-file-list class="mb-1.5 hidden flex-wrap gap-1.5 px-1 text-sm" {}
+            div class="flex items-end gap-1 rounded-xl border border-line bg-white py-1.5 pl-1.5 pr-1.5 focus-within:border-floor-3 dark:border-night-line dark:bg-night-2" {
+                label class="cursor-pointer rounded-lg p-2 text-muted hover:bg-screen hover:text-ink focus-within:bg-screen dark:text-haint dark:hover:bg-night" title="Attach files" {
+                    input type="file" name="files" multiple class="sr-only" aria-label="Attach files";
+                    (icon(icons::PAPERCLIP, "h-5 w-5"))
+                }
+                textarea name="body" rows="1" maxlength="10000" aria-label=(label) placeholder=(label)
+                    class="max-h-48 min-h-6 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-hidden placeholder:text-muted" {}
                 button type="submit" class="btn px-3" aria-label="Send" title="Send (Enter)" {
                     (icon(icons::PAPER_PLANE_RIGHT, "h-5 w-5"))
                 }
@@ -431,7 +496,7 @@ fn composer(action: &str, parent: Option<i64>, label: &str) -> Markup {
     }
 }
 
-fn message_list(messages: &[Message]) -> Markup {
+fn message_list(messages: &[Message], render: &Render<'_>) -> Markup {
     let grouped = std::iter::once(false).chain(messages.windows(2).map(|pair| match pair {
         [previous, message] => {
             author_key(&previous.author) == author_key(&message.author)
@@ -441,7 +506,7 @@ fn message_list(messages: &[Message]) -> Markup {
     }));
     html! {
         @for (message, compact) in messages.iter().zip(grouped) {
-            (message_item(message, compact, message.parent_id.is_none()))
+            (message_item(message, compact, message.parent_id.is_none(), render))
         }
     }
 }
@@ -456,7 +521,12 @@ pub fn author_key(author: &Author) -> String {
 }
 
 /// One message. Live updates send exactly this markup to browsers.
-pub fn message_item(message: &Message, compact: bool, thread_link: bool) -> Markup {
+pub fn message_item(
+    message: &Message,
+    compact: bool,
+    thread_link: bool,
+    render: &Render<'_>,
+) -> Markup {
     let (name, is_bot) = match &message.author {
         Author::User { display_name, .. } => (display_name.as_str(), false),
         Author::Bot { name, .. } => (name.as_str(), true),
@@ -468,7 +538,7 @@ pub fn message_item(message: &Message, compact: bool, thread_link: bool) -> Mark
             data-created=(message.created_at) data-compact[compact]
             class="group relative flex gap-3 px-5 py-1 hover:bg-screen data-[compact]:py-0.5 dark:hover:bg-night-2" {
             div class="w-9 shrink-0 pt-0.5" {
-                div class="group-data-[compact]:hidden" { (avatar(&message.author)) }
+                div class="group-data-[compact]:hidden" { (avatar(&message.author, render.ctx)) }
             }
             div class="min-w-0 flex-1" {
                 div class="flex items-baseline gap-2 group-data-[compact]:hidden" {
@@ -479,11 +549,17 @@ pub fn message_item(message: &Message, compact: bool, thread_link: bool) -> Mark
                     (timestamp(message.created_at))
                 }
                 @if !message.body.is_empty() {
-                    div class="rich" { (PreEscaped(markup::render(&message.body))) }
+                    div class="rich" { (render.markup(&message.body)) }
                 }
                 @for attachment in &message.attachments {
-                    (attachment_card(attachment))
+                    (attachment_card(attachment, render))
                 }
+                @if !message.files.is_empty() {
+                    div class="mt-1.5 flex flex-wrap items-start gap-2" {
+                        @for file in &message.files { (file_card(file)) }
+                    }
+                }
+                (reactions_bar(message, render))
                 @if thread_link {
                     a href=(thread_href) data-reply-count=(message.id)
                         class={ "mt-1 items-center gap-1.5 text-sm font-semibold text-floor-3 hover:underline dark:text-haint "
@@ -493,17 +569,22 @@ pub fn message_item(message: &Message, compact: bool, thread_link: bool) -> Mark
                     }
                 }
             }
-            @if thread_link {
-                a href=(thread_href) aria-label="Reply in thread" title="Reply in thread"
-                    class="absolute -top-3 right-5 hidden rounded-lg border border-line bg-white p-1.5 text-muted shadow-sm hover:text-ink group-hover:block focus:block dark:border-night-line dark:bg-night-2 dark:text-haint" {
-                    (icon(icons::ARROW_BEND_UP_LEFT, "h-4 w-4"))
+            div class="absolute -top-3 right-5 hidden overflow-hidden rounded-lg border border-line bg-white text-muted shadow-sm group-hover:flex group-focus-within:flex dark:border-night-line dark:bg-night-2 dark:text-haint" {
+                a href={ "/c/" (message.channel_id) "/m/" (message.id) "/react" } data-react=(message.id)
+                    aria-label="Add reaction" title="Add reaction" class="p-1.5 hover:bg-screen hover:text-ink dark:hover:bg-night" {
+                    (icon(icons::SMILEY, "h-4 w-4"))
+                }
+                @if thread_link {
+                    a href=(thread_href) aria-label="Reply in thread" title="Reply in thread" class="p-1.5 hover:bg-screen hover:text-ink dark:hover:bg-night" {
+                        (icon(icons::ARROW_BEND_UP_LEFT, "h-4 w-4"))
+                    }
                 }
             }
         }
     }
 }
 
-fn timestamp(created_at: i64) -> Markup {
+pub fn timestamp(created_at: i64) -> Markup {
     let when = jiff::Timestamp::from_millisecond(created_at).unwrap_or_default();
     html! {
         time datetime=(when.to_string()) class="text-xs text-muted dark:text-haint" {
@@ -521,7 +602,7 @@ const AVATAR_TONES: [&str; 6] = [
     "bg-stone-300 text-stone-800",
 ];
 
-fn avatar(author: &Author) -> Markup {
+fn avatar(author: &Author, ctx: &Context) -> Markup {
     let base = "flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg font-bold";
     match author {
         Author::User { id, display_name } => {
@@ -546,7 +627,7 @@ fn avatar(author: &Author) -> Markup {
         Author::Bot {
             icon: Some(emoji), ..
         } if emoji.starts_with(':') => html! {
-            div class={ (base) " bg-screen text-xl dark:bg-night-2" } aria-hidden="true" { (PreEscaped(markup::render(emoji))) }
+            div class={ (base) " bg-screen text-xl dark:bg-night-2" } aria-hidden="true" { (PreEscaped(markup::render(emoji, ctx))) }
         },
         Author::Bot { .. } | Author::Removed => html! {
             div class={ (base) " bg-screen text-floor-3 dark:bg-night-2 dark:text-haint" } aria-hidden="true" {
@@ -556,11 +637,11 @@ fn avatar(author: &Author) -> Markup {
     }
 }
 
-fn attachment_card(attachment: &Attachment) -> Markup {
+fn attachment_card(attachment: &Attachment, render: &Render<'_>) -> Markup {
     let color = attachment.color.as_deref().unwrap_or("#B9C7C4");
     html! {
         @if let Some(pretext) = &attachment.pretext {
-            div class="rich mt-1" { (PreEscaped(markup::render(pretext))) }
+            div class="rich mt-1" { (render.markup(pretext)) }
         }
         div class="mt-1.5 max-w-2xl rounded-r-lg border-l-4 bg-screen px-4 py-2.5 dark:bg-night-2" style={ "border-left-color: " (color) } {
             @if let Some(author) = &attachment.author_name {
@@ -570,36 +651,142 @@ fn attachment_card(attachment: &Attachment) -> Markup {
                 p class="font-bold" {
                     @if let Some(link) = &attachment.title_link {
                         a href=(link) target="_blank" rel="noopener noreferrer nofollow" class="underline underline-offset-2" {
-                            (PreEscaped(markup::render(title)))
+                            (render.markup(title))
                         }
                     } @else {
-                        (PreEscaped(markup::render(title)))
+                        (render.markup(title))
                     }
                 }
             }
             @if let Some(text) = &attachment.text {
-                div class="rich" { (PreEscaped(markup::render(text))) }
+                div class="rich" { (render.markup(text)) }
             }
             @if !attachment.fields.is_empty() {
                 dl class="mt-2 grid grid-cols-2 gap-x-6 gap-y-2" {
                     @for field in &attachment.fields {
                         div class=(if field.short { "col-span-1" } else { "col-span-2" }) {
-                            dt class="text-sm font-bold" { (PreEscaped(markup::render(&field.title))) }
-                            dd class="rich" { (PreEscaped(markup::render(&field.value))) }
+                            dt class="text-sm font-bold" { (render.markup(&field.title)) }
+                            dd class="rich" { (render.markup(&field.value)) }
                         }
                     }
                 }
             }
             @if let Some(footer) = &attachment.footer {
-                p class="mt-2 text-xs text-muted dark:text-haint" { (PreEscaped(markup::render(footer))) }
+                p class="mt-2 text-xs text-muted dark:text-haint" { (render.markup(footer)) }
             }
         }
     }
 }
 
+fn file_card(file: &FileRef) -> Markup {
+    let href = format!("/files/{}", file.id);
+    html! {
+        @if file.mime.starts_with("image/") {
+            a href=(href) target="_blank" class="block overflow-hidden rounded-lg border border-line dark:border-night-line" {
+                img src=(href) alt=(file.name) loading="lazy" class="max-h-72 max-w-full object-contain sm:max-w-sm";
+            }
+        } @else {
+            a href=(href) download=(file.name)
+                class="flex max-w-xs items-center gap-3 rounded-lg border border-line px-3 py-2 hover:bg-screen dark:border-night-line dark:hover:bg-night-2" {
+                (icon(icons::FILE, "h-6 w-6 shrink-0 text-floor-3 dark:text-haint"))
+                span class="min-w-0" {
+                    span class="block truncate font-semibold" { (file.name) }
+                    span class="block text-xs text-muted dark:text-haint" { (human_size(file.size)) }
+                }
+                (icon(icons::DOWNLOAD_SIMPLE, "ml-auto h-4 w-4 shrink-0 text-muted dark:text-haint"))
+            }
+        }
+    }
+}
+
+fn human_size(bytes: i64) -> String {
+    const KB: i64 = 1024;
+    const MB: i64 = KB * KB;
+    if bytes >= MB {
+        let tenths = bytes.saturating_mul(10) / MB;
+        format!("{}.{} MB", tenths / 10, tenths % 10)
+    } else if bytes >= KB {
+        format!("{} kB", bytes / KB)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+/// A message's reactions. Each chip is a form, so reacting works without
+/// JavaScript; app.js submits it in the background instead.
+pub fn reactions_bar(message: &Message, render: &Render<'_>) -> Markup {
+    let action = format!("/c/{}/m/{}/reactions", message.channel_id, message.id);
+    html! {
+        div id={ "reactions-" (message.id) } class="flex flex-wrap gap-1 empty:hidden [&:not(:empty)]:mt-1" {
+            @for reaction in &message.reactions {
+                @let mine = render.viewer.is_some_and(|viewer| reaction.user_ids.contains(&viewer));
+                @let users = reaction.user_ids.iter().map(ToString::to_string).collect::<Vec<_>>().join(",");
+                form method="post" action=(action) data-reaction-form {
+                    button type="submit" name="emoji" value=(reaction.emoji) data-users=(users)
+                        aria-pressed=(if mine { "true" } else { "false" })
+                        title={ (reaction.names.join(", ")) " reacted with :" (reaction.emoji) ":" }
+                        class="flex items-center gap-1 rounded-full border border-line bg-white px-2 py-0.5 text-sm hover:border-floor-3 aria-pressed:border-floor-3 aria-pressed:bg-haint-2 dark:border-night-line dark:bg-night-2 dark:aria-pressed:bg-floor-2" {
+                        (PreEscaped(render.ctx.emoji_html(&reaction.emoji).unwrap_or_default()))
+                        span class="font-semibold" { (reaction.user_ids.len()) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn emoji_choices(ctx: &Context) -> Vec<(String, String)> {
+    markup::BUILTIN_EMOJI
+        .iter()
+        .take(markup::PICKER_SIZE)
+        .map(|(name, _)| (*name).to_owned())
+        .chain(ctx.custom_emoji.keys().cloned())
+        .filter_map(|name| ctx.emoji_html(&name).map(|html| (name, html)))
+        .collect()
+}
+
+/// One shared picker per page, opened next to a message by app.js.
+fn emoji_picker(ctx: &Context) -> Markup {
+    html! {
+        div id="emoji-picker" popover
+            class="m-0 w-72 rounded-xl border border-line bg-white p-2 shadow-xl dark:border-night-line dark:bg-night-2 dark:text-haint-2" {
+            div class="grid grid-cols-8 gap-0.5" {
+                @for (name, html) in emoji_choices(ctx) {
+                    button type="button" data-emoji=(name) title={ ":" (name) ":" } aria-label=(name)
+                        class="flex h-8 items-center justify-center rounded-md text-xl hover:bg-screen dark:hover:bg-night" {
+                        (PreEscaped(html))
+                    }
+                }
+            }
+            a href="/emoji" class="mt-2 block px-1 text-xs text-muted underline-offset-2 hover:underline dark:text-haint" { "Add custom emoji" }
+        }
+    }
+}
+
+/// The reaction picker as a page, for browsers without JavaScript.
+pub fn react_page(shell: &Shell<'_>, channel_id: i64, message_id: i64, ctx: &Context) -> Markup {
+    let action = format!("/c/{channel_id}/m/{message_id}/reactions");
+    panel_page(
+        "Add reaction",
+        shell,
+        &html! { "Add a reaction" },
+        &html! {
+            form method="post" action=(action) class="grid max-w-md grid-cols-8 gap-1" {
+                @for (name, html) in emoji_choices(ctx) {
+                    button type="submit" name="emoji" value=(name) title={ ":" (name) ":" } aria-label=(name)
+                        class="flex h-10 items-center justify-center rounded-lg text-2xl hover:bg-screen dark:hover:bg-night-2" {
+                        (PreEscaped(html))
+                    }
+                }
+            }
+            a href={ "/c/" (channel_id) } class="btn-quiet mt-6" { "Back to the channel" }
+        },
+    )
+}
+
 // Management pages
 
-fn panel_page(title: &str, shell: &Shell<'_>, heading: &Markup, content: &Markup) -> Markup {
+pub fn panel_page(title: &str, shell: &Shell<'_>, heading: &Markup, content: &Markup) -> Markup {
     let main = html! {
         main class="flex min-w-0 flex-1 flex-col" {
             header class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-5 dark:border-night-line" {
@@ -640,7 +827,7 @@ fn copy_row(value: &str) -> Markup {
     }
 }
 
-fn section(title: &str, intro: &str, content: &Markup) -> Markup {
+pub fn section(title: &str, intro: &str, content: &Markup) -> Markup {
     html! {
         section class="mb-10" {
             h2 class="text-lg font-bold" { (title) }
@@ -724,7 +911,7 @@ pub fn people_page(
                 ul {
                     @for user in users {
                         li class="flex items-center gap-3 border-b border-line py-3 last:border-b-0 dark:border-night-line" {
-                            (avatar(&Author::User { id: user.id, display_name: user.display_name.clone() }))
+                            (avatar(&Author::User { id: user.id, display_name: user.display_name.clone() }, &Context::default()))
                             div class="min-w-0 flex-1" {
                                 p class="truncate font-semibold" {
                                     (user.display_name)

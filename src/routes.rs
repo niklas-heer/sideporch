@@ -13,10 +13,13 @@ use serde::Deserialize;
 use crate::{
     AppState, assets,
     auth::{self, CurrentUser},
+    automations,
     error::{AppError, AppResult},
-    now_ms, realtime,
-    store::{self, ChannelKind, Message, NewMessage},
-    views::{self, AccountForm, ChannelView, Shell},
+    files::{self, MessageInput},
+    messages::{self, Draft, Sender},
+    now_ms, push, realtime, search,
+    store::{self, ChannelKind},
+    views::{self, AccountForm, ChannelView, Render, Shell},
     webhook,
 };
 
@@ -38,7 +41,34 @@ pub fn router(state: AppState) -> Router {
         .route("/channels", post(create_channel))
         .route("/c/{channel_id}", get(channel))
         .route("/c/{channel_id}/t/{message_id}", get(thread))
-        .route("/c/{channel_id}/messages", post(post_message))
+        .route(
+            "/c/{channel_id}/messages",
+            post(post_message).layer(DefaultBodyLimit::max(files::UPLOAD_BODY_LIMIT)),
+        )
+        .route("/c/{channel_id}/m/{message_id}/react", get(react_page))
+        .route("/c/{channel_id}/m/{message_id}/reactions", post(react))
+        .route("/files/{file_id}", get(files::download))
+        .route(
+            "/emoji",
+            get(files::emoji_page)
+                .post(files::add_emoji)
+                .layer(DefaultBodyLimit::max(files::UPLOAD_BODY_LIMIT)),
+        )
+        .route("/emoji/{name}/delete", post(files::delete_emoji))
+        .route("/search", get(search::search))
+        .route("/push/key", get(push::public_key))
+        .route("/push/subscriptions", post(push::subscribe))
+        .route("/push/unsubscribe", post(push::unsubscribe))
+        .route("/automations", get(automation_list).post(create_automation))
+        .route("/automations/new", get(new_automation))
+        .route(
+            "/automations/{automation_id}",
+            get(edit_automation).post(update_automation),
+        )
+        .route(
+            "/automations/{automation_id}/delete",
+            post(delete_automation),
+        )
         .route("/c/{channel_id}/settings", get(channel_settings))
         .route("/c/{channel_id}/topic", post(set_topic))
         .route("/c/{channel_id}/webhooks", post(create_webhook))
@@ -136,7 +166,7 @@ async fn index(State(state): State<AppState>, headers: HeaderMap) -> AppResult<R
         .into_response())
 }
 
-async fn shell_data(state: &AppState, user_id: i64) -> AppResult<store::Sidebar> {
+pub async fn shell_data(state: &AppState, user_id: i64) -> AppResult<store::Sidebar> {
     state
         .db
         .call(move |conn| store::sidebar(conn, user_id))
@@ -405,7 +435,7 @@ async fn render_channel(
     thread: Option<i64>,
 ) -> AppResult<Markup> {
     let user_id = user.id;
-    let (channel, messages, older, thread, sidebar) = state
+    let (channel, messages, older, thread, sidebar, ctx) = state
         .db
         .call(move |conn| {
             let channel =
@@ -433,7 +463,8 @@ async fn render_channel(
                 store::mark_read(conn, user_id, channel_id, latest)?;
             }
             let sidebar = store::sidebar(conn, user_id)?;
-            Ok((channel, messages, older, thread, sidebar))
+            let ctx = store::render_context(conn)?;
+            Ok((channel, messages, older, thread, sidebar, ctx))
         })
         .await?;
     let shell = Shell {
@@ -450,14 +481,9 @@ async fn render_channel(
             thread: thread
                 .as_ref()
                 .map(|(root, replies)| (root, replies.as_slice())),
+            render: &Render::for_user(&ctx, user_id),
         },
     ))
-}
-
-#[derive(Deserialize)]
-struct MessageForm {
-    body: String,
-    parent_id: Option<i64>,
 }
 
 /// Browsers running app.js send this header and read `204` as success.
@@ -470,11 +496,13 @@ async fn post_message(
     State(state): State<AppState>,
     Path(channel_id): Path<i64>,
     headers: HeaderMap,
-    Form(form): Form<MessageForm>,
+    input: MessageInput,
 ) -> AppResult<Response> {
-    let body = form.body.trim().to_owned();
-    if body.is_empty() {
-        return Err(AppError::bad_request("Write something before sending."));
+    let body = input.body.trim().to_owned();
+    if body.is_empty() && input.files.is_empty() {
+        return Err(AppError::bad_request(
+            "Write something or attach a file before sending.",
+        ));
     }
     if body.chars().count() > MAX_MESSAGE_CHARS {
         return Err(AppError::bad_request(
@@ -482,40 +510,24 @@ async fn post_message(
         ));
     }
     let user_id = user.id;
-    let now = now_ms();
-    let (message, reply_count, audience) = state
+    state
         .db
-        .call(move |conn| {
-            store::channel_for(conn, channel_id, user_id)?.ok_or(AppError::NotFound)?;
-            let parent_id = match form.parent_id {
-                Some(parent_id) => {
-                    let parent = store::message(conn, parent_id)?
-                        .filter(|parent| parent.channel_id == channel_id)
-                        .ok_or(AppError::NotFound)?;
-                    // Threads are one level deep; a reply to a reply joins the root.
-                    Some(parent.parent_id.unwrap_or(parent.id))
-                }
-                None => None,
-            };
-            let id = store::insert_message(
-                conn,
-                &NewMessage {
-                    channel_id,
-                    parent_id,
-                    user_id: Some(user_id),
-                    webhook_id: None,
-                    bot_name: None,
-                    bot_icon: None,
-                    body: &body,
-                    attachments: &[],
-                    created_at: now,
-                },
-            )?;
-            store::mark_read(conn, user_id, channel_id, id)?;
-            stored_message(conn, id, channel_id)
-        })
-        .await?;
-    publish(&state, &message, reply_count, audience);
+        .call(move |conn| store::channel_for(conn, channel_id, user_id))
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let files = files::store_uploads(&state, user_id, input.files).await?;
+    let message = messages::post(
+        &state,
+        Draft {
+            channel_id,
+            parent_id: input.parent_id,
+            sender: Sender::User(user_id),
+            body,
+            attachments: Vec::new(),
+            files,
+        },
+    )
+    .await?;
     if wants_no_content(&headers) {
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
@@ -526,38 +538,48 @@ async fn post_message(
     Ok(Redirect::to(&target).into_response())
 }
 
-type Stored = (Message, Option<i64>, Option<Vec<i64>>);
-
-/// Loads a message just written, its parent's reply count, and who may see it.
-fn stored_message(conn: &rusqlite::Connection, id: i64, channel_id: i64) -> AppResult<Stored> {
-    let message =
-        store::message(conn, id)?.ok_or_else(|| AppError::internal("new message not found"))?;
-    let reply_count = match message.parent_id {
-        Some(parent) => store::message(conn, parent)?.map(|parent| parent.reply_count),
-        None => None,
+async fn react_page(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path((channel_id, message_id)): Path<(i64, i64)>,
+) -> AppResult<Markup> {
+    let user_id = user.id;
+    let (sidebar, ctx) = state
+        .db
+        .call(move |conn| {
+            store::channel_for(conn, channel_id, user_id)?.ok_or(AppError::NotFound)?;
+            store::message(conn, message_id)?
+                .filter(|message| message.channel_id == channel_id)
+                .ok_or(AppError::NotFound)?;
+            Ok((store::sidebar(conn, user_id)?, store::render_context(conn)?))
+        })
+        .await?;
+    let shell = Shell {
+        user: &user,
+        sidebar: &sidebar,
+        current: Some(channel_id),
     };
-    Ok((message, reply_count, store::audience(conn, channel_id)?))
+    Ok(views::react_page(&shell, channel_id, message_id, &ctx))
 }
 
-fn publish(
-    state: &AppState,
-    message: &Message,
-    reply_count: Option<i64>,
-    audience: Option<Vec<i64>>,
-) {
-    let html = views::message_item(message, false, message.parent_id.is_none()).into_string();
-    state.hub.publish(
-        audience,
-        &realtime::Event::Message {
-            channel_id: message.channel_id,
-            id: message.id,
-            parent_id: message.parent_id,
-            author: views::author_key(&message.author),
-            created_at: message.created_at,
-            html,
-            reply_count,
-        },
-    );
+#[derive(Deserialize)]
+struct ReactionForm {
+    emoji: String,
+}
+
+async fn react(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path((channel_id, message_id)): Path<(i64, i64)>,
+    headers: HeaderMap,
+    Form(form): Form<ReactionForm>,
+) -> AppResult<Response> {
+    let emoji = form.emoji.trim().trim_matches(':').to_owned();
+    messages::toggle_reaction(&state, user.id, channel_id, message_id, emoji).await?;
+    if wants_no_content(&headers) {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+    Ok(Redirect::to(&format!("/c/{channel_id}#m{message_id}")).into_response())
 }
 
 async fn new_channel_form(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
@@ -751,41 +773,43 @@ async fn incoming_webhook(
         Ok(parsed) => parsed,
         Err(rejection) => return (StatusCode::BAD_REQUEST, rejection.code()).into_response(),
     };
-    let now = now_ms();
-    let result = state
+    let override_channel = parsed.channel.clone();
+    let target = state
         .db
         .call(move |conn| {
             let Some(hook) = store::webhook_by_token(conn, &token)? else {
                 return Ok(None);
             };
             // Like Mattermost, a payload may pick another public channel by name.
-            let channel_id = match parsed.channel.as_deref() {
+            let channel_id = match override_channel.as_deref() {
                 Some(name) => store::public_channel_id(conn, name)?.unwrap_or(hook.channel_id),
                 None => hook.channel_id,
             };
-            let id = store::insert_message(
-                conn,
-                &NewMessage {
-                    channel_id,
-                    parent_id: None,
-                    user_id: None,
-                    webhook_id: Some(hook.id),
-                    bot_name: Some(parsed.username.as_deref().unwrap_or(&hook.name)),
-                    bot_icon: parsed.icon_url.as_deref(),
-                    body: &parsed.text,
-                    attachments: &parsed.attachments,
-                    created_at: now,
-                },
-            )?;
-            stored_message(conn, id, channel_id).map(Some)
+            Ok(Some((hook, channel_id)))
         })
         .await;
-    match result {
-        Ok(Some((message, reply_count, audience))) => {
-            publish(&state, &message, reply_count, audience);
-            (StatusCode::OK, "ok").into_response()
+    let (hook, channel_id) = match target {
+        Ok(Some(target)) => target,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no_service").into_response(),
+        Err(error) => {
+            tracing::error!(?error, "webhook lookup failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal_error").into_response();
         }
-        Ok(None) => (StatusCode::NOT_FOUND, "no_service").into_response(),
+    };
+    let draft = Draft {
+        channel_id,
+        parent_id: None,
+        sender: Sender::Webhook {
+            id: hook.id,
+            name: parsed.username.unwrap_or(hook.name),
+            icon: parsed.icon_url,
+        },
+        body: parsed.text,
+        attachments: parsed.attachments,
+        files: Vec::new(),
+    };
+    match messages::post(&state, draft).await {
+        Ok(_) => (StatusCode::OK, "ok").into_response(),
         Err(error) => {
             tracing::error!(?error, "webhook delivery failed");
             (StatusCode::INTERNAL_SERVER_ERROR, "internal_error").into_response()
@@ -874,6 +898,152 @@ async fn revoke_invite(
         .call(move |conn| store::revoke_invite(conn, &token))
         .await?;
     Ok(Redirect::to("/people").into_response())
+}
+
+// Automations (admins only)
+
+const fn require_admin(user: &CurrentUser) -> AppResult<()> {
+    if user.is_admin {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
+async fn automation_list(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
+    require_admin(&user)?;
+    let list = state.db.call(|conn| store::automations(conn)).await?;
+    let sidebar = shell_data(&state, user.id).await?;
+    let shell = Shell {
+        user: &user,
+        sidebar: &sidebar,
+        current: None,
+    };
+    Ok(views::automations::list_page(&shell, &list))
+}
+
+async fn automation_editor(
+    state: &AppState,
+    user: &CurrentUser,
+    editor: &views::automations::Editor<'_>,
+) -> AppResult<Markup> {
+    let sidebar = shell_data(state, user.id).await?;
+    let shell = Shell {
+        user,
+        sidebar: &sidebar,
+        current: None,
+    };
+    Ok(views::automations::editor_page(&shell, editor))
+}
+
+async fn new_automation(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
+    require_admin(&user)?;
+    let editor = views::automations::Editor {
+        id: None,
+        name: "",
+        source: automations::EXAMPLE,
+        enabled: true,
+        last_error: None,
+        form_error: None,
+    };
+    automation_editor(&state, &user, &editor).await
+}
+
+async fn edit_automation(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path(automation_id): Path<i64>,
+) -> AppResult<Markup> {
+    require_admin(&user)?;
+    let automation = state
+        .db
+        .call(move |conn| store::automation(conn, automation_id))
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let editor = views::automations::Editor {
+        id: Some(automation.id),
+        name: &automation.name,
+        source: &automation.source,
+        enabled: automation.enabled,
+        last_error: automation.last_error.as_deref(),
+        form_error: None,
+    };
+    automation_editor(&state, &user, &editor).await
+}
+
+#[derive(Deserialize)]
+struct AutomationForm {
+    name: String,
+    source: String,
+    enabled: Option<String>,
+}
+
+async fn save_automation(
+    state: &AppState,
+    user: &CurrentUser,
+    id: Option<i64>,
+    form: AutomationForm,
+) -> AppResult<Response> {
+    require_admin(user)?;
+    let name: String = form.name.trim().chars().take(80).collect();
+    let enabled = form.enabled.is_some();
+    if name.is_empty() || form.source.len() > 100_000 {
+        let editor = views::automations::Editor {
+            id,
+            name: &name,
+            source: &form.source,
+            enabled,
+            last_error: None,
+            form_error: Some("Give the automation a name, and keep the script under 100 kB."),
+        };
+        let page = automation_editor(state, user, &editor).await?;
+        return Ok((StatusCode::BAD_REQUEST, page).into_response());
+    }
+    let user_id = user.id;
+    let now = now_ms();
+    let source = form.source;
+    let saved = state
+        .db
+        .call(move |conn| {
+            if let Some(id) = id {
+                store::automation(conn, id)?.ok_or(AppError::NotFound)?;
+            }
+            store::save_automation(conn, id, &name, &source, enabled, user_id, now)
+        })
+        .await?;
+    state.automations.reload(state).await?;
+    Ok(Redirect::to(&format!("/automations/{saved}")).into_response())
+}
+
+async fn create_automation(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Form(form): Form<AutomationForm>,
+) -> AppResult<Response> {
+    save_automation(&state, &user, None, form).await
+}
+
+async fn update_automation(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path(automation_id): Path<i64>,
+    Form(form): Form<AutomationForm>,
+) -> AppResult<Response> {
+    save_automation(&state, &user, Some(automation_id), form).await
+}
+
+async fn delete_automation(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path(automation_id): Path<i64>,
+) -> AppResult<Response> {
+    require_admin(&user)?;
+    state
+        .db
+        .call(move |conn| store::delete_automation(conn, automation_id))
+        .await?;
+    state.automations.reload(&state).await?;
+    Ok(Redirect::to("/automations").into_response())
 }
 
 #[cfg(test)]

@@ -6,8 +6,11 @@ Sideporch is a self-hosted team chat shipped as a single Rust binary. See [READM
 
 - `src/routes.rs`: HTTP handlers. `src/store.rs`: SQL queries. `src/db.rs`: connection and migrations.
 - `src/views.rs`: maud templates. `src/markup.rs`: Slack-style message formatting to safe HTML.
-- `src/webhook.rs`: Slack-compatible webhook parsing. `src/realtime.rs`: WebSocket fan-out.
-- `assets/`: the one script, base CSS, logo, and fonts. `build.rs` compiles utility classes with encre-css using `encre-css.toml`.
+- `src/messages.rs`: the one pipeline every new message takes (store, index, live update, push, automations).
+- `src/webhook.rs`: Slack-compatible webhook parsing. `src/realtime.rs`: WebSocket fan-out and presence.
+- `src/files.rs`: uploads, downloads, custom emoji. `src/search.rs`: FTS5 search. `src/push.rs`: Web Push.
+- `src/automations.rs`: the sandboxed Lua runtime.
+- `assets/`: the page script, service worker, base CSS, logo, and fonts. `build.rs` compiles utility classes with encre-css using `encre-css.toml`.
 - `tests/`: end-to-end tests against a real server on a random port. `tests/fixtures/gatus/` holds captured Gatus payloads.
 
 ## Commands

@@ -22,6 +22,7 @@ pub async fn start() -> Server {
     let app = Sideporch::open(Config {
         data_dir: data.path().to_owned(),
         public_url: None,
+        allow_insecure_push: true,
     })
     .await
     .unwrap();
@@ -121,6 +122,52 @@ impl Browser {
             .status()
     }
 
+    /// Posts a message with files, the way app.js does.
+    pub async fn upload(
+        &self,
+        channel_id: i64,
+        body: &str,
+        files: &[(&str, &[u8])],
+    ) -> reqwest::Response {
+        let mut form = reqwest::multipart::Form::new().text("body", body.to_owned());
+        for (name, data) in files {
+            form = form.part(
+                "files",
+                reqwest::multipart::Part::bytes(data.to_vec()).file_name((*name).to_owned()),
+            );
+        }
+        self.client
+            .post(self.url(&format!("/c/{channel_id}/messages")))
+            .header("cookie", &self.cookie)
+            .header("x-sideporch-fetch", "1")
+            .multipart(form)
+            .send()
+            .await
+            .unwrap()
+    }
+
+    pub async fn post_json(&self, path: &str, body: &serde_json::Value) -> reqwest::Response {
+        self.client
+            .post(self.url(path))
+            .header("cookie", &self.cookie)
+            .json(body)
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// Waits until `path` contains `needle`, polling for up to five seconds.
+    pub async fn wait_for(&self, path: &str, needle: &str) -> String {
+        for _ in 0..50 {
+            let page = self.page(path).await;
+            if page.contains(needle) {
+                return page;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("{needle:?} never appeared on {path}");
+    }
+
     pub async fn live(&self) -> Live {
         let url = self.base.replace("http://", "ws://") + "/ws";
         let mut request = url.into_client_request().unwrap();
@@ -132,6 +179,28 @@ impl Browser {
     }
 }
 
+/// The id of the newest message in a channel page.
+pub fn last_message_id(page: &str) -> i64 {
+    let list = between(page, r#"id="messages""#, "</ol>");
+    list.rsplit(r#"data-message-id=""#)
+        .next()
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+/// A valid 1×1 PNG.
+pub const PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0,
+    0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99, 0x3D, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
 pub struct Live {
     socket: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -139,6 +208,14 @@ pub struct Live {
 }
 
 impl Live {
+    pub async fn send(&mut self, value: &serde_json::Value) {
+        use futures_util::SinkExt;
+        self.socket
+            .send(Message::Text(value.to_string().into()))
+            .await
+            .unwrap();
+    }
+
     /// The next event, or `None` if nothing arrives within `wait`.
     pub async fn next_event(&mut self, wait: Duration) -> Option<serde_json::Value> {
         let deadline = tokio::time::Instant::now() + wait;

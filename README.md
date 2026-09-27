@@ -4,7 +4,7 @@
 
 Sideporch is a small, self-hosted team chat: channels, direct messages, and threads for a team, a club, or a family. It ships as one binary you copy to a server and run.
 
-> **Status:** early. Version 0.1 works end to end, but expect rough edges and breaking changes before 1.0.
+> **Status:** early. It works end to end, but expect rough edges and breaking changes before 1.0.
 
 ## Goals
 
@@ -13,11 +13,16 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 - **Built for small groups.** Invite links instead of an email server, and sensible defaults instead of configuration.
 - **Works with your existing tools.** Monitors, CI systems, and bots post into channels through webhooks. Services that already speak Slack's incoming-webhook format, such as [Gatus](https://gatus.io/) and Grafana, work unchanged.
 
-## What's in 0.1
+## Features
 
 - Channels anyone can join, direct messages, and threads one level deep.
 - Messages appear live over a WebSocket, with unread markers in the sidebar.
-- Slack-style formatting: `*bold*`, `_italic_`, `` `code` ``, code blocks, `>` quotes, links, and common `:emoji:` codes.
+- Slack-style formatting: `*bold*`, `_italic_`, `` `code` ``, code blocks, `>` quotes, links, `@mentions`, and `:emoji:` codes.
+- **Search** across every channel and conversation you're part of (SQLite full-text search).
+- **File uploads**: images show inline; other files download. Files live in the same database as everything else.
+- **Reactions** with emoji, and **custom emoji** anyone can add, like Slack's.
+- **Push notifications** for direct messages, thread replies and mentions, sent by Sideporch itself through Web Push. On iPhone and iPad, add Sideporch to the home screen first.
+- **Automations**: admins write small Lua scripts in the browser that answer messages, post on a schedule, and remember data. They run sandboxed, with limits on time, memory and posts.
 - A one-time setup link for the first account, then invite links. No email needed.
 - Slack-compatible incoming webhooks per channel, tested against the payloads Gatus sends.
 - Works on phones, in dark mode, and without JavaScript (pages reload instead of updating live).
@@ -41,7 +46,7 @@ Put Sideporch behind a reverse proxy such as Caddy for HTTPS. The proxy must pas
 
 ### Back up and move
 
-Everything lives in the data directory. Stop Sideporch and copy the directory, or copy it live with `sqlite3 sideporch-data/sideporch.db ".backup backup.db"`. [Litestream](https://litestream.io) can replicate it continuously.
+Everything, including uploaded files, lives in one SQLite database in the data directory. Stop Sideporch and copy the directory, or copy it live with `sqlite3 sideporch-data/sideporch.db ".backup backup.db"`. [Litestream](https://litestream.io) can replicate it continuously.
 
 ## Connect Gatus and other tools
 
@@ -64,7 +69,25 @@ mise run dev    # run locally with data in ./data
 mise run check  # formatting, Clippy, unit and end-to-end tests
 ```
 
-The web interface is rendered on the server with [maud](https://maud.lambda.xyz). Styles are Tailwind-style utility classes compiled at build time by [encre-css](https://gitlab.com/encre-org/encre-css), a Rust implementation of Tailwind, so there is no Node toolchain. `assets/app.js` is the only script.
+The web interface is rendered on the server with [maud](https://maud.lambda.xyz). Styles are Tailwind-style utility classes compiled at build time by [encre-css](https://gitlab.com/encre-org/encre-css), a Rust implementation of Tailwind, so there is no Node toolchain. `assets/app.js` is the only page script; `assets/sw.js` shows push notifications.
+
+## Automations
+
+Open the lightning icon in the sidebar (admins only) and create an automation:
+
+```lua
+sideporch.on_message(function(msg)
+  if msg.text == "!ping" then
+    sideporch.reply(msg, "pong")
+  end
+end)
+
+sideporch.every(24 * 60 * 60, function()
+  sideporch.post("general", "Good morning, porch! :sunny:")
+end)
+```
+
+Scripts see new messages in public channels (`msg.text`, `msg.author`, `msg.username`, `msg.channel`, `msg.id`, `msg.thread_id`, `msg.is_bot`) and can `post`, `reply`, and keep data with `sideporch.get` and `sideporch.set`. They cannot read files or reach the network.
 
 ## Decisions
 

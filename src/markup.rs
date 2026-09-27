@@ -3,9 +3,36 @@
 //! Supported: `*bold*`, `_italic_`, `~strike~`, `` `code` ``, fenced code
 //! blocks, `>` quotes, `<url|label>` links, bare URLs, `:emoji:` shortcodes,
 //! and Slack's `&amp;` `&lt;` `&gt;` escapes. Everything else is escaped.
+//! Custom emoji and `@username` mentions come from a [`Context`].
+
+use std::collections::{HashMap, HashSet};
+
+/// What rendering needs to know about this Sideporch.
+#[derive(Debug, Default, Clone)]
+pub struct Context {
+    /// Custom emoji names mapped to their image URLs.
+    pub custom_emoji: HashMap<String, String>,
+    /// Lowercase usernames, for highlighting `@mentions`.
+    pub usernames: HashSet<String>,
+}
+
+impl Context {
+    /// Whether `name` is a built-in or custom emoji shortcode.
+    pub fn has_emoji(&self, name: &str) -> bool {
+        builtin_emoji(name).is_some() || self.custom_emoji.contains_key(name)
+    }
+
+    /// Renders one emoji shortcode (without colons) as HTML.
+    pub fn emoji_html(&self, name: &str) -> Option<String> {
+        let mut out = String::new();
+        let rest = format!(":{name}:");
+        emoji(&mut out, &rest, self)?;
+        Some(out)
+    }
+}
 
 /// Renders `text` to HTML that is safe to embed in a page.
-pub fn render(text: &str) -> String {
+pub fn render(text: &str, ctx: &Context) -> String {
     let mut out = String::with_capacity(text.len().saturating_add(16));
     let parts: Vec<&str> = text.split("```").collect();
     // An odd number of fences leaves the last one unclosed; render it as text.
@@ -18,16 +45,14 @@ pub fn render(text: &str) -> String {
     for (index, part) in parts.into_iter().enumerate() {
         if index >= closed {
             out.push_str("```");
-            lines(&mut out, part);
+            lines(&mut out, part, ctx);
         } else if index.is_multiple_of(2) {
-            lines(
-                &mut out,
-                if several {
-                    part.trim_matches('\n')
-                } else {
-                    part
-                },
-            );
+            let part = if several {
+                part.trim_matches('\n')
+            } else {
+                part
+            };
+            lines(&mut out, part, ctx);
         } else {
             out.push_str("<pre><code>");
             escape_text(&mut out, part.trim_matches('\n'));
@@ -37,7 +62,7 @@ pub fn render(text: &str) -> String {
     out
 }
 
-fn lines(out: &mut String, text: &str) {
+fn lines(out: &mut String, text: &str, ctx: &Context) {
     let mut in_quote = false;
     let mut first = true;
     for line in text.split('\n') {
@@ -55,7 +80,7 @@ fn lines(out: &mut String, text: &str) {
         if !first {
             out.push_str("<br>");
         }
-        inline(out, content);
+        inline(out, content, ctx);
         first = false;
     }
     if in_quote {
@@ -63,7 +88,7 @@ fn lines(out: &mut String, text: &str) {
     }
 }
 
-fn inline(out: &mut String, text: &str) {
+fn inline(out: &mut String, text: &str, ctx: &Context) {
     let mut rest = text;
     let mut prev: Option<char> = None;
     while let Some(c) = rest.chars().next() {
@@ -71,10 +96,11 @@ fn inline(out: &mut String, text: &str) {
         let token = match c {
             '<' => slack_link(out, rest),
             '`' => code_span(out, rest),
-            '*' if at_word_start => emphasis(out, rest, '*', "strong"),
-            '_' if at_word_start => emphasis(out, rest, '_', "em"),
-            '~' if at_word_start => emphasis(out, rest, '~', "s"),
-            ':' => emoji(out, rest),
+            '*' if at_word_start => emphasis(out, rest, '*', "strong", ctx),
+            '_' if at_word_start => emphasis(out, rest, '_', "em", ctx),
+            '~' if at_word_start => emphasis(out, rest, '~', "s", ctx),
+            ':' => emoji(out, rest, ctx),
+            '@' if at_word_start => user_mention(out, rest, ctx),
             'h' if at_word_start => bare_url(out, rest),
             '&' => entity(out, rest),
             _ => None,
@@ -147,7 +173,13 @@ fn code_span<'a>(out: &mut String, rest: &'a str) -> Option<&'a str> {
     Some(after)
 }
 
-fn emphasis<'a>(out: &mut String, rest: &'a str, marker: char, tag: &str) -> Option<&'a str> {
+fn emphasis<'a>(
+    out: &mut String,
+    rest: &'a str,
+    marker: char,
+    tag: &str,
+    ctx: &Context,
+) -> Option<&'a str> {
     let tail = rest.strip_prefix(marker)?;
     for (index, _) in tail.match_indices(marker) {
         let (content, closing) = tail.split_at_checked(index)?;
@@ -162,7 +194,7 @@ fn emphasis<'a>(out: &mut String, rest: &'a str, marker: char, tag: &str) -> Opt
         out.push('<');
         out.push_str(tag);
         out.push('>');
-        inline(out, content);
+        inline(out, content, ctx);
         out.push_str("</");
         out.push_str(tag);
         out.push('>');
@@ -171,14 +203,41 @@ fn emphasis<'a>(out: &mut String, rest: &'a str, marker: char, tag: &str) -> Opt
     None
 }
 
-fn emoji<'a>(out: &mut String, rest: &'a str) -> Option<&'a str> {
+fn emoji<'a>(out: &mut String, rest: &'a str, ctx: &Context) -> Option<&'a str> {
     let (name, after) = rest.strip_prefix(':')?.split_once(':')?;
-    let glyph = emoji_glyph(name)?;
-    out.push_str(r#"<span role="img" aria-label=""#);
-    out.push_str(name);
-    out.push_str(r#"">"#);
-    out.push_str(glyph);
-    out.push_str("</span>");
+    if let Some(glyph) = builtin_emoji(name) {
+        out.push_str(r#"<span role="img" aria-label=""#);
+        out.push_str(name);
+        out.push_str(r#"">"#);
+        out.push_str(glyph);
+        out.push_str("</span>");
+    } else {
+        let url = ctx.custom_emoji.get(name)?;
+        out.push_str(r#"<img class="inline-block h-5 w-5 align-text-bottom" src=""#);
+        escape_text(out, url);
+        out.push_str(r#"" alt=":"#);
+        escape_text(out, name);
+        out.push_str(r#":" title=":"#);
+        escape_text(out, name);
+        out.push_str(r#":">"#);
+    }
+    Some(after)
+}
+
+/// `@username`, highlighted only when that user exists.
+fn user_mention<'a>(out: &mut String, rest: &'a str, ctx: &Context) -> Option<&'a str> {
+    let tail = rest.strip_prefix('@')?;
+    let end = tail
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')))
+        .unwrap_or(tail.len());
+    let (candidate, _) = tail.split_at_checked(end)?;
+    let name = candidate.trim_end_matches(['.', '-', '_']);
+    let (_, after) = tail.split_at_checked(name.len())?;
+    let lower = name.to_ascii_lowercase();
+    if !(ctx.usernames.contains(&lower) || matches!(lower.as_str(), "here" | "channel")) {
+        return None;
+    }
+    mention(out, "@", name);
     Some(after)
 }
 
@@ -236,52 +295,72 @@ fn escape_text(out: &mut String, text: &str) {
     }
 }
 
-/// Shortcodes commonly sent by monitors, CI systems and people.
-fn emoji_glyph(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "white_check_mark" => "✅",
-        "heavy_check_mark" => "✔️",
-        "x" => "❌",
-        "warning" => "⚠️",
-        "rotating_light" => "🚨",
-        "helmet_with_white_cross" => "⛑️",
-        "fire" => "🔥",
-        "boom" => "💥",
-        "red_circle" => "🔴",
-        "large_green_circle" => "🟢",
-        "large_yellow_circle" => "🟡",
-        "large_blue_circle" => "🔵",
-        "information_source" => "ℹ️",
-        "bell" => "🔔",
-        "rocket" => "🚀",
-        "tada" => "🎉",
-        "bug" => "🐛",
-        "construction" => "🚧",
-        "hourglass" => "⌛",
-        "lock" => "🔒",
-        "+1" | "thumbsup" => "👍",
-        "-1" | "thumbsdown" => "👎",
-        "eyes" => "👀",
-        "wave" => "👋",
-        "pray" => "🙏",
-        "clap" => "👏",
-        "heart" => "❤️",
-        "smile" => "😄",
-        "joy" => "😂",
-        "thinking_face" => "🤔",
-        "sunglasses" => "😎",
-        "coffee" => "☕",
-        "sunny" => "☀️",
-        "house" => "🏠",
-        "robot_face" => "🤖",
-        "ghost" => "👻",
-        _ => return None,
-    })
+/// Built-in shortcodes: the ones monitors and CI systems send, and the ones
+/// people react with. The first [`PICKER_SIZE`] appear in the reaction picker.
+pub const BUILTIN_EMOJI: &[(&str, &str)] = &[
+    ("+1", "👍"),
+    ("heart", "❤️"),
+    ("joy", "😂"),
+    ("tada", "🎉"),
+    ("eyes", "👀"),
+    ("pray", "🙏"),
+    ("fire", "🔥"),
+    ("white_check_mark", "✅"),
+    ("smile", "😄"),
+    ("thinking_face", "🤔"),
+    ("clap", "👏"),
+    ("rocket", "🚀"),
+    ("wave", "👋"),
+    ("sunglasses", "😎"),
+    ("-1", "👎"),
+    ("coffee", "☕"),
+    ("sunny", "☀️"),
+    ("seedling", "🌱"),
+    ("cake", "🍰"),
+    ("hugging_face", "🤗"),
+    ("100", "💯"),
+    ("raised_hands", "🙌"),
+    ("muscle", "💪"),
+    ("sweat_smile", "😅"),
+    ("cry", "😢"),
+    ("warning", "⚠️"),
+    ("x", "❌"),
+    ("house", "🏠"),
+    ("heavy_check_mark", "✔️"),
+    ("rotating_light", "🚨"),
+    ("helmet_with_white_cross", "⛑️"),
+    ("boom", "💥"),
+    ("red_circle", "🔴"),
+    ("large_green_circle", "🟢"),
+    ("large_yellow_circle", "🟡"),
+    ("large_blue_circle", "🔵"),
+    ("information_source", "ℹ️"),
+    ("bell", "🔔"),
+    ("bug", "🐛"),
+    ("construction", "🚧"),
+    ("hourglass", "⌛"),
+    ("lock", "🔒"),
+    ("robot_face", "🤖"),
+    ("ghost", "👻"),
+    ("thumbsup", "👍"),
+    ("thumbsdown", "👎"),
+];
+
+pub const PICKER_SIZE: usize = 24;
+
+fn builtin_emoji(name: &str) -> Option<&'static str> {
+    BUILTIN_EMOJI
+        .iter()
+        .find_map(|(shortcode, glyph)| (*shortcode == name).then_some(*glyph))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::render;
+    use super::Context;
+
+    fn render(text: &str) -> String {
+        super::render(text, &Context::default())
+    }
 
     #[test]
     fn escapes_html() {
@@ -355,6 +434,17 @@ mod tests {
         assert_eq!(
             render(":x: - :unknown: 10:30"),
             r#"<span role="img" aria-label="x">❌</span> - :unknown: 10:30"#
+        );
+    }
+
+    #[test]
+    fn renders_custom_emoji_and_known_mentions() {
+        let mut ctx = Context::default();
+        ctx.custom_emoji.insert("porch".into(), "/files/7".into());
+        ctx.usernames.insert("mara".into());
+        assert_eq!(
+            super::render(":porch: @Mara @nobody mail@x.y", &ctx),
+            r#"<img class="inline-block h-5 w-5 align-text-bottom" src="/files/7" alt=":porch:" title=":porch:"> <span class="font-semibold">@Mara</span> @nobody mail@x.y"#
         );
     }
 }

@@ -74,6 +74,9 @@
   .rich blockquote { border-left-color: #3B6660; color: #B5C6C2; }
 }
 
+/* The reaction picker is a popover that app.js places next to a message. */
+#emoji-picker { position: fixed; inset: auto; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }

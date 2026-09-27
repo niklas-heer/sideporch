@@ -40,6 +40,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let app = Sideporch::open(Config {
         data_dir: args.data.clone(),
         public_url: args.public_url,
+        allow_insecure_push: false,
     })
     .await?;
     let listener = tokio::net::TcpListener::bind(args.listen).await?;

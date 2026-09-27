@@ -1,7 +1,11 @@
 //! Live updates over WebSocket. Every event is rendered once on the server
 //! and fanned out to the connections that may see it.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use axum::{
     extract::{
@@ -30,6 +34,12 @@ pub enum Event {
         html: String,
         reply_count: Option<i64>,
     },
+    /// A message's reactions changed. `html` replaces its reaction bar.
+    Reactions {
+        channel_id: i64,
+        message_id: i64,
+        html: String,
+    },
 }
 
 struct Envelope {
@@ -41,17 +51,41 @@ struct Envelope {
 #[derive(Clone)]
 pub struct Hub {
     sender: broadcast::Sender<Arc<Envelope>>,
+    /// Open, visible browser tabs per user. Push notifications skip people
+    /// who are looking at Sideporch right now.
+    visible: Arc<Mutex<HashMap<i64, usize>>>,
 }
 
 impl Default for Hub {
     fn default() -> Self {
         Self {
             sender: broadcast::channel(512).0,
+            visible: Arc::default(),
         }
     }
 }
 
 impl Hub {
+    pub fn is_watching(&self, user_id: i64) -> bool {
+        self.visible
+            .lock()
+            .is_ok_and(|visible| visible.get(&user_id).is_some_and(|count| *count > 0))
+    }
+
+    fn set_visible(&self, user_id: i64, was: bool, now: bool) {
+        if was == now {
+            return;
+        }
+        if let Ok(mut visible) = self.visible.lock() {
+            let count = visible.entry(user_id).or_default();
+            *count = if now {
+                count.saturating_add(1)
+            } else {
+                count.saturating_sub(1)
+            };
+        }
+    }
+
     pub fn publish(&self, audience: Option<Vec<i64>>, event: &Event) {
         match serde_json::to_string(event) {
             // Sending fails only when nobody is connected, which is fine.
@@ -66,6 +100,7 @@ impl Hub {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMessage {
     Read { channel_id: i64, message_id: i64 },
+    Visibility { visible: bool },
 }
 
 pub async fn connect(
@@ -80,6 +115,7 @@ async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
     let mut events = state.hub.sender.subscribe();
     let (mut sink, mut stream) = socket.split();
     let mut keepalive = tokio::time::interval(Duration::from_secs(25));
+    let mut visible = false;
     loop {
         tokio::select! {
             event = events.recv() => match event {
@@ -98,11 +134,16 @@ async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
                 Err(broadcast::error::RecvError::Closed) => break,
             },
             incoming = stream.next() => match incoming {
-                Some(Ok(WsMessage::Text(text))) => {
-                    if let Ok(ClientMessage::Read { channel_id, message_id }) = serde_json::from_str(&text) {
+                Some(Ok(WsMessage::Text(text))) => match serde_json::from_str(&text) {
+                    Ok(ClientMessage::Read { channel_id, message_id }) => {
                         mark_read(&state, user_id, channel_id, message_id).await;
                     }
-                }
+                    Ok(ClientMessage::Visibility { visible: now }) => {
+                        state.hub.set_visible(user_id, visible, now);
+                        visible = now;
+                    }
+                    Err(_) => {}
+                },
                 Some(Ok(WsMessage::Close(_)) | Err(_)) | None => break,
                 Some(Ok(_)) => {}
             },
@@ -113,6 +154,7 @@ async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
             }
         }
     }
+    state.hub.set_visible(user_id, visible, false);
 }
 
 async fn mark_read(state: &AppState, user_id: i64, channel_id: i64, message_id: i64) {

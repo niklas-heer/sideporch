@@ -5,12 +5,17 @@
 
 mod assets;
 mod auth;
+mod automations;
 mod db;
 mod error;
+mod files;
 mod icons;
 mod markup;
+mod messages;
+mod push;
 mod realtime;
 mod routes;
+mod search;
 mod store;
 mod views;
 mod webhook;
@@ -24,7 +29,7 @@ use axum::Router;
 use sha2::{Digest, Sha256};
 
 pub use crate::error::AppError as Error;
-use crate::{db::Db, realtime::Hub};
+use crate::{automations::Automations, db::Db, push::Push, realtime::Hub};
 
 /// Where Sideporch keeps its data and how people reach it.
 #[derive(Debug, Clone)]
@@ -34,12 +39,18 @@ pub struct Config {
     /// The public base URL, such as `https://chat.example.com`. Used for
     /// invite and webhook links; derived from each request when unset.
     pub public_url: Option<String>,
+    /// Accept plain-HTTP push endpoints. Browsers only use HTTPS ones; this
+    /// exists so tests can run a local push service.
+    #[doc(hidden)]
+    pub allow_insecure_push: bool,
 }
 
 #[derive(Clone)]
 pub(crate) struct AppState {
     db: Db,
     hub: Hub,
+    push: Arc<Push>,
+    automations: Automations,
     public_url: Option<String>,
     secure_cookies: bool,
     /// One-time token for creating the first account, while none exists.
@@ -79,12 +90,26 @@ impl Sideporch {
     /// Fails if the data directory or database cannot be opened.
     pub async fn open(config: Config) -> Result<Self, Error> {
         std::fs::create_dir_all(&config.data_dir).map_err(Error::internal)?;
-        let db = Db::open(&config.data_dir.join("sideporch.db"))?;
+        let db_path = config.data_dir.join("sideporch.db");
+        let db = Db::open(&db_path)?;
         let now = now_ms();
-        let users = db
+        let public_url = config
+            .public_url
+            .map(|url| url.trim_end_matches('/').to_owned())
+            .filter(|url| !url.is_empty());
+        // Push services use this to reach whoever runs the server.
+        let subject = public_url
+            .clone()
+            .filter(|url| url.starts_with("https://"))
+            .unwrap_or_else(|| "https://github.com/niklas-heer/sideporch".to_owned());
+        let allow_http = config.allow_insecure_push;
+        let (users, push) = db
             .call(move |conn| {
                 store::delete_expired_sessions(conn, now)?;
-                store::user_count(conn)
+                Ok((
+                    store::user_count(conn)?,
+                    Push::load(conn, subject, allow_http)?,
+                ))
             })
             .await?;
         let setup_token = if users == 0 {
@@ -92,21 +117,20 @@ impl Sideporch {
         } else {
             None
         };
-        let public_url = config
-            .public_url
-            .map(|url| url.trim_end_matches('/').to_owned())
-            .filter(|url| !url.is_empty());
-        Ok(Self {
-            state: AppState {
-                db,
-                hub: Hub::default(),
-                secure_cookies: public_url
-                    .as_deref()
-                    .is_some_and(|url| url.starts_with("https://")),
-                public_url,
-                setup_token: Arc::new(Mutex::new(setup_token)),
-            },
-        })
+        let state = AppState {
+            db,
+            hub: Hub::default(),
+            push: Arc::new(push),
+            automations: Automations::start(&db_path)?,
+            secure_cookies: public_url
+                .as_deref()
+                .is_some_and(|url| url.starts_with("https://")),
+            public_url,
+            setup_token: Arc::new(Mutex::new(setup_token)),
+        };
+        state.automations.serve(state.clone());
+        state.automations.reload(&state).await?;
+        Ok(Self { state })
     }
 
     /// The path of the one-time setup page, while no account exists yet.

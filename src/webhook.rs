@@ -79,6 +79,28 @@ pub struct Attachment {
     pub footer: Option<String>,
 }
 
+impl Attachment {
+    /// The attachment's text, for the search index.
+    pub fn searchable_text(&self) -> Vec<String> {
+        [
+            &self.pretext,
+            &self.author_name,
+            &self.title,
+            &self.text,
+            &self.footer,
+        ]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .chain(
+            self.fields
+                .iter()
+                .flat_map(|field| [field.title.clone(), field.value.clone()]),
+        )
+        .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Field {
     pub title: String,

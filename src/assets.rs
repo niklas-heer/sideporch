@@ -11,6 +11,7 @@ use crate::AppState;
 
 const APP_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/app.css"));
 const APP_JS: &str = include_str!("../assets/app.js");
+const SERVICE_WORKER: &str = include_str!("../assets/sw.js");
 const LOGO: &str = include_str!("../assets/logo.svg");
 const MANIFEST: &str = r##"{
   "name": "Sideporch",
@@ -25,6 +26,8 @@ const MANIFEST: &str = r##"{
 /// Versioned URLs (`?v=`) change with their content, so they never expire.
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 const DAY: &str = "public, max-age=86400";
+/// Browsers check the service worker for updates; keep it fresh.
+const NO_CACHE: &str = "no-cache";
 
 fn serve(content_type: &'static str, cache: &'static str, body: &'static [u8]) -> Response {
     (
@@ -62,6 +65,16 @@ pub fn router() -> Router<AppState> {
                     "text/javascript; charset=utf-8",
                     IMMUTABLE,
                     APP_JS.as_bytes(),
+                )
+            }),
+        )
+        .route(
+            "/sw.js",
+            get(|| async {
+                serve(
+                    "text/javascript; charset=utf-8",
+                    NO_CACHE,
+                    SERVICE_WORKER.as_bytes(),
                 )
             }),
         )

@@ -12,26 +12,33 @@ categories = ["web-programming::http-server"]
 
 [dependencies]
 argon2 = "0.6.0"
-axum = { version = "0.8.9", features = ["ws"] }
+axum = { version = "0.8.9", features = ["multipart", "ws"] }
+base64ct = { version = "1.8.3", features = ["alloc"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 futures-util = "0.3.34"
 getrandom = "0.4.3"
+http-body-util = "0.1.5"
+hyper-rustls = { version = "0.27.10", default-features = false, features = ["ring", "webpki-roots", "http1", "http2", "tls12"] }
+hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "http2", "tokio"] }
 jiff = "0.2.37"
 maud = { version = "0.27.0", features = ["axum"] }
+mlua = { version = "0.12.1", features = ["lua54", "vendored", "send"] }
 phosphor-svgs = "0.5.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+web-push-native = "0.5.0"
 
 [build-dependencies]
 encre-css = "0.21.1"
 
 [dev-dependencies]
-reqwest = { version = "0.13.5", default-features = false, features = ["json", "cookies", "form"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "cookies", "form", "multipart"] }
 tempfile = "3.27.0"
 tokio-tungstenite = "0.29"
 
