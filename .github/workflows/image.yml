@@ -6,18 +6,23 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag to publish from the selected ref
+        required: true
+        default: main
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: image-main
+  group: image-${{ inputs.tag || 'main' }}
   cancel-in-progress: true
 
 jobs:
   publish:
-    name: Publish main image (amd64 + arm64)
+    name: Publish the image (amd64 + arm64)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -28,4 +33,4 @@ jobs:
         with:
           version: "0.21.9"
           verb: call
-          args: publish --tag main --username ${{ github.actor }} --password env://REGISTRY_TOKEN
+          args: publish --tag ${{ inputs.tag || 'main' }} --username ${{ github.actor }} --password env://REGISTRY_TOKEN

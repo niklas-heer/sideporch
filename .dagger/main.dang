@@ -10,6 +10,7 @@ type SideporchCi {
     "!rust-toolchain.toml",
     "!clippy.toml",
     "!mise.toml",
+    "!mise.lock",
     "!build.rs",
     "!encre-css.toml",
     "!src",
@@ -31,6 +32,8 @@ type SideporchCi {
       .withWorkdir("/src")
       .withEnvVariable("MISE_TRUSTED_CONFIG_PATHS", "/src")
       .withFile("mise.toml", source.file("mise.toml"))
+      # Locked download URLs keep installs off the rate-limited GitHub API.
+      .withFile("mise.lock", source.file("mise.lock"))
       .withFile("rust-toolchain.toml", source.file("rust-toolchain.toml"))
       .withExec(["mise", "install", "rust", "zig", "github:rust-cross/cargo-zigbuild"])
       .withEnvVariable("MISE_AUTO_INSTALL", "false")
