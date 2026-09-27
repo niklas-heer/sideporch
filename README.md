@@ -27,14 +27,33 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 - Slack-compatible incoming webhooks per channel, tested against the payloads Gatus sends.
 - Works on phones, in dark mode, and without JavaScript (pages reload instead of updating live).
 
+## Install
+
+Every release has prebuilt binaries for Linux and macOS, on x86-64 and ARM64. The Linux binaries are fully static: they need no libc or any other library, so they run on any distribution.
+
+```sh
+# Script: detects your system, verifies the checksum, installs to /usr/local/bin or ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/niklas-heer/sideporch/main/install.sh | sh
+
+# Homebrew (macOS and Linux)
+brew install niklas-heer/tap/sideporch
+
+# Docker: a 5 MB image with nothing but the binary
+docker run -d -p 8080:8080 -v sideporch:/data ghcr.io/niklas-heer/sideporch
+
+# Nix
+nix run github:niklas-heer/sideporch
+```
+
+On NixOS, the flake provides a module: import `sideporch.nixosModules.default` and set `services.sideporch.enable = true;`. You can also build from source with `cargo build --release`.
+
 ## Run it
 
 ```sh
-cargo build --release
-./target/release/sideporch --data /var/lib/sideporch --public-url https://chat.example.com
+sideporch --data /var/lib/sideporch --public-url https://chat.example.com
 ```
 
-On first start, Sideporch prints a setup link. Open it to create the first account, which is an admin. Then open **People** to create invite links for everyone else.
+On first start, Sideporch prints a setup link. Open it to create the first account, which is an admin. Then open **People** to create invite links for everyone else. With Docker, run `docker logs` to find the link.
 
 | Option | Environment variable | Default | Meaning |
 | --- | --- | --- | --- |
@@ -42,7 +61,7 @@ On first start, Sideporch prints a setup link. Open it to create the first accou
 | `--data` | `SIDEPORCH_DATA` | `sideporch-data` | Directory for the SQLite database. |
 | `--public-url` | `SIDEPORCH_PUBLIC_URL` | derived from requests | The URL people use, for invite and webhook links. An `https://` URL also turns on secure cookies. |
 
-Put Sideporch behind a reverse proxy such as Caddy for HTTPS. The proxy must pass WebSocket upgrades for `/ws`.
+Put Sideporch behind a reverse proxy such as Caddy for HTTPS. The proxy must pass WebSocket upgrades for `/ws`. Browsers only allow push notifications and installing Sideporch as an app over HTTPS.
 
 ### Back up and move
 
@@ -65,9 +84,14 @@ Gatus's `mattermost` provider works too. Its `channel` setting posts to another 
 Tool versions and tasks live in `mise.toml`:
 
 ```sh
-mise run dev    # run locally with data in ./data
-mise run check  # formatting, Clippy, unit and end-to-end tests
+mise run dev           # run locally with data in ./data
+mise run check         # formatting, Clippy, unit and end-to-end tests
+mise run ci            # the Linux CI pipeline in containers, through Dagger
+mise run build-static  # static Linux binaries with zig and musl
+mise run image         # build the container image and load it into Docker
 ```
+
+CI runs through [Dagger](https://dagger.io) (`.dagger/main.dang`); the GitHub workflows only call it. Pushing a `vX.Y.Z` tag that matches `Cargo.toml` builds, tests and publishes a release, its container images, and the checksums that the Homebrew formula and `install.sh` verify.
 
 The web interface is rendered on the server with [maud](https://maud.lambda.xyz). Styles are Tailwind-style utility classes compiled at build time by [encre-css](https://gitlab.com/encre-org/encre-css), a Rust implementation of Tailwind, so there is no Node toolchain. `assets/app.js` is the only page script; `assets/sw.js` shows push notifications.
 
