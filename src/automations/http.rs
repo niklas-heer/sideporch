@@ -310,7 +310,13 @@ mod tests {
         .await
         .unwrap();
         assert!(blocked.0.unwrap_err().contains("internal address"));
-        assert!(blocked.1.unwrap_err().contains("internal address"));
+        // Build sandboxes may have no resolver; then the name cannot resolve at all.
+        let resolvable = std::net::ToSocketAddrs::to_socket_addrs("localhost:9").is_ok();
+        if resolvable {
+            assert!(blocked.1.unwrap_err().contains("internal address"));
+        } else {
+            assert!(blocked.1.is_err());
+        }
         assert!(blocked.2.unwrap_err().contains("only http and https"));
     }
 }
