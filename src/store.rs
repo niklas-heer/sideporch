@@ -802,6 +802,17 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
     })
 }
 
+/// How many conversations look unread to `user_id`, for the app icon.
+pub fn unread_count(conn: &Connection, user_id: i64) -> AppResult<usize> {
+    let sidebar = sidebar(conn, user_id)?;
+    Ok(sidebar
+        .channels
+        .iter()
+        .chain(&sidebar.direct)
+        .filter(|item| item.unread)
+        .count())
+}
+
 /// The channel to open after signing in: `general` if it exists.
 pub fn home_channel(conn: &Connection) -> AppResult<Option<i64>> {
     Ok(conn

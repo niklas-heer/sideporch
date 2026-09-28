@@ -60,7 +60,7 @@ async fn signing_in_and_out() {
         .await;
     assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
     assert!(wrong.text().await.unwrap().contains("don't match"));
-    assert_eq!(location(&browser.get("/home").await), "/login");
+    assert_eq!(location(&browser.get("/home").await), "/login?next=/home");
 
     let right = browser
         .submit(
@@ -72,7 +72,7 @@ async fn signing_in_and_out() {
     assert!(browser.page("/home").await.contains("general"));
 
     browser.submit("/logout", &[]).await;
-    assert_eq!(location(&browser.get("/home").await), "/login");
+    assert_eq!(location(&browser.get("/home").await), "/login?next=/home");
 }
 
 #[tokio::test]

@@ -90,11 +90,17 @@ fn document(title: &str, body_class: &str, content: &Markup) -> Markup {
         html lang="en" data-assets=(ASSET_VERSION) {
             head {
                 meta charset="utf-8";
-                meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover";
+                // Resizing for the on-screen keyboard keeps the composer visible.
+                meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content";
                 meta name="theme-color" content="#24403C";
+                meta name="mobile-web-app-capable" content="yes";
+                meta name="apple-mobile-web-app-capable" content="yes";
+                meta name="apple-mobile-web-app-title" content="Sideporch";
+                meta name="apple-mobile-web-app-status-bar-style" content="default";
                 title { (title) " · Sideporch" }
                 link rel="icon" href="/assets/logo.svg" type="image/svg+xml";
-                link rel="apple-touch-icon" href="/assets/logo.svg";
+                link rel="icon" href="/assets/icons/icon-192.png" type="image/png" sizes="192x192";
+                link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png";
                 link rel="manifest" href="/manifest.webmanifest";
                 link rel="stylesheet" href={ "/assets/app.css?v=" (ASSET_VERSION) };
                 script src={ "/assets/app.js?v=" (ASSET_VERSION) } defer {}
@@ -150,13 +156,16 @@ pub fn text_field(
     }
 }
 
-pub fn login_page(error: Option<&str>, username: &str) -> Markup {
+pub fn login_page(error: Option<&str>, username: &str, next: Option<&str>) -> Markup {
     auth_page(
         "Sign in",
         &html! {
             h1 class="mb-5 text-xl font-bold" { "Sign in" }
             (form_error(error))
             form method="post" action="/login" {
+                @if let Some(next) = next {
+                    input type="hidden" name="next" value=(next);
+                }
                 (text_field("Username", "username", "text", username, "username", None))
                 (text_field("Password", "password", "password", "", "current-password", None))
                 button type="submit" class="btn mt-2 w-full" { "Sign in" }
@@ -332,6 +341,15 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                     @if shell.sidebar.direct.is_empty() {
                         li class="px-3 py-1.5 text-sm text-haint" { "Nobody yet. Say hello from People." }
                     }
+                }
+            }
+            // app.js fills and shows this: how to install Sideporch or turn
+            // on notifications, depending on the device.
+            div data-install hidden class="mx-3 mb-3 rounded-xl bg-floor-2 p-3 text-sm text-haint-2" {
+                p data-install-text {}
+                div class="mt-2 flex items-center gap-2" {
+                    button type="button" data-install-action class="rounded-lg bg-lamp px-3 py-1 text-sm font-semibold text-floor" {}
+                    button type="button" data-install-dismiss class="rounded-lg px-2 py-1 text-sm text-haint hover:text-white" { "Not now" }
                 }
             }
             div class="flex items-center gap-1 border-t border-floor-2 px-3 py-3" {

@@ -212,17 +212,33 @@ async fn home(user: CurrentUser, State(state): State<AppState>) -> AppResult<Mar
 struct LoginForm {
     username: String,
     password: String,
+    next: Option<String>,
 }
 
-async fn login_form(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
+#[derive(Deserialize, Default)]
+struct NextQuery {
+    next: Option<String>,
+}
+
+async fn login_form(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<NextQuery>,
+) -> AppResult<Response> {
+    let next = query.next.as_deref().and_then(auth::safe_next);
     if signed_in(&state, &headers).await?.is_some() {
-        return Ok(Redirect::to("/").into_response());
+        return Ok(Redirect::to(next.unwrap_or("/")).into_response());
     }
-    Ok(views::login_page(None, "").into_response())
+    Ok(views::login_page(None, "", next).into_response())
 }
 
 async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -> AppResult<Response> {
     let username = form.username.trim().to_owned();
+    let next = form
+        .next
+        .as_deref()
+        .and_then(auth::safe_next)
+        .map(ToOwned::to_owned);
     let lookup = username.clone();
     let record = state
         .db
@@ -237,12 +253,16 @@ async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -> Ap
     let Some(user_id) = verified else {
         return Ok((
             StatusCode::UNAUTHORIZED,
-            views::login_page(Some("That username and password don't match."), &username),
+            views::login_page(
+                Some("That username and password don't match."),
+                &username,
+                next.as_deref(),
+            ),
         )
             .into_response());
     };
     let cookie = auth::start_session(&state, user_id).await?;
-    redirect_with_cookie("/", &cookie)
+    redirect_with_cookie(next.as_deref().unwrap_or("/"), &cookie)
 }
 
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {

@@ -3,7 +3,7 @@
 
 use axum::{
     Form, Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -40,6 +40,7 @@ pub fn router() -> Router<AppState> {
         .route("/c/{channel_id}/pins", get(pins))
         .route("/saved", get(saved))
         .route("/activity", get(activity))
+        .route("/share", get(share_form).post(share))
 }
 
 /// Where a message is shown: its thread, or the page of channel history
@@ -408,4 +409,86 @@ async fn click(
         &message_href(&message),
         serde_json::Value::Null,
     ))
+}
+
+/// What another app shares, as Android's share sheet sends it.
+#[derive(Deserialize, Default)]
+struct Shared {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    url: String,
+}
+
+impl Shared {
+    /// The pieces as one message, without repeating the link when the text
+    /// already has it.
+    fn message(&self) -> String {
+        let mut parts: Vec<&str> = Vec::new();
+        for part in [self.title.trim(), self.text.trim(), self.url.trim()] {
+            if !part.is_empty() && !parts.iter().any(|seen| seen.contains(part)) {
+                parts.push(part);
+            }
+        }
+        parts.join("\n")
+    }
+}
+
+/// Where the installed app lands when someone shares into Sideporch.
+async fn share_form(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Query(shared): Query<Shared>,
+) -> AppResult<Markup> {
+    let sidebar = super::shell_data(&state, user.id).await?;
+    let shell = Shell {
+        user: &user,
+        sidebar: &sidebar,
+        current: None,
+    };
+    Ok(views::messages::share_page(&shell, &shared.message()))
+}
+
+#[derive(Deserialize)]
+struct ShareForm {
+    channel_id: i64,
+    body: String,
+}
+
+async fn share(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Form(form): Form<ShareForm>,
+) -> AppResult<Redirect> {
+    let body = form.body.trim().to_owned();
+    if body.is_empty() || body.chars().count() > MAX_MESSAGE_CHARS {
+        return Err(AppError::bad_request(
+            "Write something, up to 10,000 characters.",
+        ));
+    }
+    let user_id = user.id;
+    let channel_id = form.channel_id;
+    state
+        .db
+        .call(move |conn| store::channel_for(conn, channel_id, user_id))
+        .await?
+        .ok_or(AppError::NotFound)?;
+    messages::post(
+        &state,
+        messages::Draft {
+            channel_id,
+            parent_id: None,
+            sender: messages::Sender::User(user_id),
+            body,
+            attachments: Vec::new(),
+            files: Vec::new(),
+            gif: None,
+            poll: Vec::new(),
+            buttons: Vec::new(),
+        },
+    )
+    .await?;
+    Ok(Redirect::to(&format!("/c/{channel_id}")))
 }

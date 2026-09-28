@@ -1152,3 +1152,104 @@ async fn outgoing_webhooks_send_messages_and_post_answers() {
     // Only the trigger word sent anything.
     assert!(received.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn phones_can_install_share_and_come_back_after_signing_in() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+
+    // The manifest has PNG and maskable icons, shortcuts and a share target.
+    let manifest: Value = admin
+        .get("/manifest.webmanifest")
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(manifest["display"], "standalone");
+    assert_eq!(manifest["share_target"]["action"], "/share");
+    assert!(
+        manifest["icons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|icon| icon["purpose"] == "maskable")
+    );
+    for path in [
+        "/assets/icons/icon-192.png",
+        "/assets/icons/icon-512.png",
+        "/assets/icons/maskable-512.png",
+        "/assets/icons/apple-touch-icon.png",
+        "/assets/icons/badge-96.png",
+    ] {
+        let icon = admin.get(path).await;
+        assert_eq!(icon.headers()["content-type"], "image/png", "{path}");
+        assert!(
+            icon.bytes().await.unwrap().starts_with(b"\x89PNG"),
+            "{path}"
+        );
+    }
+    let page = admin.page(&format!("/c/{general}")).await;
+    assert!(page.contains(r#"rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png""#));
+    assert!(page.contains("data-install"));
+    let offline = Browser::anonymous(&server).page("/offline").await;
+    assert!(offline.contains("You're offline"));
+    let worker = admin.page("/sw.js").await;
+    assert!(worker.contains("/offline") && worker.contains("setAppBadge"));
+
+    // Sharing from another app.
+    let shared = admin
+        .page("/share?title=Porch%20ideas&text=Look%20at%20this&url=https%3A%2F%2Fexample.com%2Fporch")
+        .await;
+    assert!(shared.contains("Porch ideas\nLook at this\nhttps://example.com/porch"));
+    let sent = admin
+        .post(
+            "/share",
+            &[
+                ("channel_id", &general.to_string()),
+                ("body", "Look at this porch"),
+            ],
+        )
+        .await;
+    assert_eq!(common::location(&sent), format!("/c/{general}"));
+    assert!(
+        admin
+            .page(&format!("/c/{general}"))
+            .await
+            .contains("Look at this porch")
+    );
+
+    // Signed out, a link leads through the login page and back.
+    let mut phone = Browser::anonymous(&server);
+    let bounce = phone.get("/share?text=hello").await;
+    assert_eq!(
+        common::location(&bounce),
+        "/login?next=/share%3Ftext%3Dhello"
+    );
+    let login = phone.page("/login?next=/share%3Ftext%3Dhello").await;
+    assert!(login.contains(r#"name="next" value="/share?text=hello""#));
+    let signed_in = phone
+        .submit(
+            "/login",
+            &[
+                ("username", "ada"),
+                ("password", "correct horse"),
+                ("next", "/share?text=hello"),
+            ],
+        )
+        .await;
+    assert_eq!(common::location(&signed_in), "/share?text=hello");
+    // Never to another site.
+    let mut other = Browser::anonymous(&server);
+    let evil = other
+        .submit(
+            "/login",
+            &[
+                ("username", "ada"),
+                ("password", "correct horse"),
+                ("next", "//evil.example"),
+            ],
+        )
+        .await;
+    assert_eq!(common::location(&evil), "/");
+}

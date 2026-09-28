@@ -16,15 +16,40 @@ const EDITOR_JS: &str = include_str!("../assets/editor.js");
 const MERMAID_JS_GZ: &[u8] = include_bytes!("../assets/vendor/mermaid-12.0.0.min.js.gz");
 const SERVICE_WORKER: &str = include_str!("../assets/sw.js");
 const LOGO: &str = include_str!("../assets/logo.svg");
+/// What phones and browsers need to install Sideporch as an app. PNG icons
+/// come first because iOS and Android don't use SVG app icons; the share
+/// target lets Android share links and text into a conversation.
 const MANIFEST: &str = r##"{
+  "id": "/",
   "name": "Sideporch",
   "short_name": "Sideporch",
+  "description": "Team chat",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#24403C",
   "theme_color": "#24403C",
-  "icons": [{ "src": "/assets/logo.svg", "sizes": "any", "type": "image/svg+xml" }]
+  "categories": ["social", "productivity"],
+  "icons": [
+    { "src": "/assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/assets/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Activity", "url": "/activity", "icons": [{ "src": "/assets/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Saved", "url": "/saved", "icons": [{ "src": "/assets/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Search", "url": "/search", "icons": [{ "src": "/assets/icons/icon-192.png", "sizes": "192x192" }] }
+  ],
+  "share_target": {
+    "action": "/share",
+    "method": "GET",
+    "params": { "title": "title", "text": "text", "url": "url" }
+  }
 }"##;
+
+/// Shown by the service worker when a page can't load without a network.
+const OFFLINE: &str = include_str!("../assets/offline.html");
 
 /// Versioned URLs (`?v=`) change with their content, so they never expire.
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
@@ -41,6 +66,18 @@ fn serve(content_type: &'static str, cache: &'static str, body: &'static [u8]) -
         body,
     )
         .into_response()
+}
+
+macro_rules! icon {
+    ($file:literal) => {
+        get(|| async {
+            serve(
+                "image/png",
+                DAY,
+                include_bytes!(concat!("../assets/icons/", $file)),
+            )
+        })
+    };
 }
 
 macro_rules! font {
@@ -122,6 +159,19 @@ pub fn router() -> Router<AppState> {
         .route(
             "/favicon.ico",
             get(|| async { serve("image/svg+xml", DAY, LOGO.as_bytes()) }),
+        )
+        .route("/assets/icons/icon-192.png", icon!("icon-192.png"))
+        .route("/assets/icons/icon-512.png", icon!("icon-512.png"))
+        .route("/assets/icons/maskable-512.png", icon!("maskable-512.png"))
+        .route(
+            "/assets/icons/apple-touch-icon.png",
+            icon!("apple-touch-icon.png"),
+        )
+        .route("/apple-touch-icon.png", icon!("apple-touch-icon.png"))
+        .route("/assets/icons/badge-96.png", icon!("badge-96.png"))
+        .route(
+            "/offline",
+            get(|| async { serve("text/html; charset=utf-8", DAY, OFFLINE.as_bytes()) }),
         )
         .route(
             "/manifest.webmanifest",

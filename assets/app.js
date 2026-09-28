@@ -5,6 +5,8 @@
 
 (() => {
   const app = document.getElementById("app");
+  // Touch keyboards: Enter makes a new line instead of sending.
+  const touch = matchMedia("(pointer: coarse)").matches;
   const GROUP_WINDOW_MS = 5 * 60 * 1000;
   const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
   const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
@@ -221,7 +223,10 @@
     if (here) stopTyping(event.author, event.parent_id);
     if (!here) {
       const link = document.querySelector(`[data-channel-link="${event.channel_id}"]`);
-      if (link && link.dataset.muted === undefined && event.author !== `u:${app?.dataset.me}`) link.dataset.unread = "";
+      if (link && link.dataset.muted === undefined && event.author !== `u:${app?.dataset.me}`) {
+        link.dataset.unread = "";
+        updateAppBadge();
+      }
       return;
     }
     if (event.parent_id === null) {
@@ -478,6 +483,7 @@
     const fileInput = form.querySelector("input[type=file]");
     const fileList = form.querySelector("[data-file-list]");
     const draftKey = `sideporch:draft:${form.action}:${form.elements.parent_id?.value ?? ""}`;
+    textarea.enterKeyHint = touch ? "enter" : "send";
     textarea.value = sessionStorage.getItem(draftKey) ?? "";
 
     const resize = () => {
@@ -558,7 +564,8 @@
           return;
         }
       }
-      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      // On phones, Enter starts a new line and the Send button sends.
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing && !touch) {
         event.preventDefault();
         form.requestSubmit();
       }
@@ -944,7 +951,7 @@
       if (event.key === "Escape") {
         event.preventDefault();
         close();
-      } else if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      } else if (event.key === "Enter" && !event.shiftKey && !event.isComposing && !touch) {
         event.preventDefault();
         form.requestSubmit();
       }
@@ -1101,6 +1108,66 @@
     }
   });
 
+  // Nudges people towards a good phone setup: on iPhone and iPad, adding
+  // Sideporch to the home screen (the only way to get notifications there);
+  // elsewhere, installing it or turning notifications on. Each hint can be
+  // dismissed for good on this device.
+  function setupInstallHint() {
+    const card = document.querySelector("[data-install]");
+    if (!card) return;
+    const text = card.querySelector("[data-install-text]");
+    const action = card.querySelector("[data-install-action]");
+    const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+    const iPad = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+    const iOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || iPad;
+    const show = (key, message, label, run) => {
+      if (localStorage.getItem(`sideporch:hint:${key}`)) return;
+      text.textContent = message;
+      action.hidden = !label;
+      action.textContent = label || "";
+      action.onclick = () => {
+        card.hidden = true;
+        run();
+      };
+      card.querySelector("[data-install-dismiss]").onclick = () => {
+        localStorage.setItem(`sideporch:hint:${key}`, "1");
+        card.hidden = true;
+      };
+      card.hidden = false;
+    };
+    if (iOS && !standalone) {
+      const device = /iPad/.test(navigator.userAgent) || iPad ? "iPad" : "iPhone";
+      show("ios", `To get notifications on this ${device}, tap Share, then Add to Home Screen, and open Sideporch from there.`);
+      return;
+    }
+    if ("PushManager" in window && window.Notification?.permission === "default" && (standalone || matchMedia("(pointer: coarse)").matches)) {
+      show("notifications", "Turn on notifications to hear about direct messages, mentions and replies.", "Turn on", () =>
+        document.querySelector("[data-push-toggle]")?.click(),
+      );
+    }
+    addEventListener("beforeinstallprompt", (event) => {
+      event.preventDefault();
+      show("install", "Install Sideporch to open it like an app, in its own window.", "Install", async () => {
+        event.prompt();
+        await event.userChoice.catch(() => null);
+      });
+    });
+  }
+
+  // The app icon shows how many conversations are unread, and opening one
+  // clears its notifications.
+  function updateAppBadge() {
+    if (!("setAppBadge" in navigator)) return;
+    const unread = document.querySelectorAll("nav a[data-channel-link][data-unread]").length;
+    (unread > 0 ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {});
+  }
+  async function clearNotifications() {
+    if (!app?.dataset.channel || document.visibilityState !== "visible" || !navigator.serviceWorker) return;
+    const registration = await navigator.serviceWorker.getRegistration();
+    const shown = (await registration?.getNotifications({ tag: `channel-${app.dataset.channel}` })) ?? [];
+    for (const notification of shown) notification.close();
+  }
+
   function base64UrlToBytes(text) {
     const base64 = (text + "===".slice((text.length + 3) % 4)).replace(/-/g, "+").replace(/_/g, "/");
     return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
@@ -1109,9 +1176,11 @@
   // The bell in the sidebar turns push notifications on and off for this
   // browser. On iPhone and iPad this needs Sideporch added to the home screen.
   async function setupPush() {
-    const toggle = document.querySelector("[data-push-toggle]");
-    if (!toggle || !("serviceWorker" in navigator) || !("PushManager" in window) || !window.Notification) return;
+    if (!("serviceWorker" in navigator)) return;
+    // The worker also shows the offline page, so register it everywhere.
     const registration = await navigator.serviceWorker.register("/sw.js");
+    const toggle = document.querySelector("[data-push-toggle]");
+    if (!toggle || !("PushManager" in window) || !window.Notification) return;
     const show = (subscribed) => toggle.setAttribute("aria-pressed", subscribed ? "true" : "false");
     show(Boolean(await registration.pushManager.getSubscription()));
     toggle.hidden = false;
@@ -1160,6 +1229,10 @@
   setupCopyButtons();
   setupReactions();
   setupPush().catch((error) => console.warn("sideporch: notifications unavailable", error));
+  setupInstallHint();
+  updateAppBadge();
+  clearNotifications().catch(() => {});
+  document.addEventListener("visibilitychange", () => clearNotifications().catch(() => {}));
   if (gifPicker) {
     for (const button of document.querySelectorAll("[data-gif-button]")) button.hidden = false;
   }

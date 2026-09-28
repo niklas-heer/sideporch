@@ -156,19 +156,42 @@ pub async fn end_session(state: &AppState, token: String) -> AppResult<()> {
         .await
 }
 
-/// Rejection for [`CurrentUser`]: a redirect to the login page.
+/// Rejection for [`CurrentUser`]: a redirect to the login page, which
+/// sends people back to the page they wanted afterwards.
 pub enum AuthRejection {
-    Login,
+    Login(Option<String>),
     Error(AppError),
 }
 
 impl IntoResponse for AuthRejection {
     fn into_response(self) -> Response {
         match self {
-            Self::Login => Redirect::to("/login").into_response(),
+            Self::Login(Some(next)) => {
+                Redirect::to(&format!("/login?next={}", encode_component(&next))).into_response()
+            }
+            Self::Login(None) => Redirect::to("/login").into_response(),
             Self::Error(error) => error.into_response(),
         }
     }
+}
+
+/// Percent-encodes a query parameter value.
+fn encode_component(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/') {
+                char::from(byte).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+/// A local path to go to after signing in, never another site.
+pub fn safe_next(next: &str) -> Option<&str> {
+    (next.starts_with('/') && !next.starts_with("//") && !next.contains('\\')).then_some(next)
 }
 
 impl FromRequestParts<AppState> for CurrentUser {
@@ -178,11 +201,18 @@ impl FromRequestParts<AppState> for CurrentUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let token = session_token(&parts.headers).ok_or(AuthRejection::Login)?;
+        // Pages worth returning to after signing in, such as a shared link
+        // or a tapped notification.
+        let next = (parts.method == Method::GET)
+            .then(|| parts.uri.path_and_query().map(ToString::to_string))
+            .flatten()
+            .filter(|path| path != "/");
+        let token =
+            session_token(&parts.headers).ok_or_else(|| AuthRejection::Login(next.clone()))?;
         lookup_session(state, token)
             .await
             .map_err(AuthRejection::Error)?
-            .ok_or(AuthRejection::Login)
+            .ok_or(AuthRejection::Login(next))
     }
 }
 

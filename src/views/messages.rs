@@ -163,3 +163,41 @@ pub fn activity_page(shell: &Shell<'_>, items: &[ActivityItem], render: &Render<
         },
     )
 }
+
+/// Sharing from another app: pick a conversation, adjust the text, send.
+pub fn share_page(shell: &Shell<'_>, text: &str) -> Markup {
+    let sidebar = shell.sidebar;
+    panel_page(
+        "Share",
+        shell,
+        &html! { "Share to Sideporch" },
+        &html! {
+            form method="post" action="/share" class="max-w-xl space-y-4" {
+                div {
+                    label for="share-channel" class="field-label" { "Send to" }
+                    select id="share-channel" name="channel_id" class="field" {
+                        @if !sidebar.channels.is_empty() {
+                            optgroup label="Channels" {
+                                @for item in &sidebar.channels {
+                                    option value=(item.channel_id) { "#" (item.label) }
+                                }
+                            }
+                        }
+                        @if !sidebar.direct.is_empty() {
+                            optgroup label="Direct messages" {
+                                @for item in &sidebar.direct {
+                                    option value=(item.channel_id) { (item.label) }
+                                }
+                            }
+                        }
+                    }
+                }
+                div {
+                    label for="share-body" class="field-label" { "Message" }
+                    textarea id="share-body" name="body" rows="6" maxlength="10000" required class="field" { (text) }
+                }
+                button type="submit" class="btn" { (icon(icons::PAPER_PLANE_RIGHT, "h-5 w-5")) "Send" }
+            }
+        },
+    )
+}

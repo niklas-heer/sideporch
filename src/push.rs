@@ -140,12 +140,16 @@ enum Delivery {
 }
 
 /// The JSON the service worker turns into a notification.
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct Payload {
     title: String,
     body: String,
     url: String,
     tag: String,
+    /// When the message was sent, in milliseconds.
+    timestamp: i64,
+    /// Unread conversations for the app icon; set per person.
+    badge: usize,
 }
 
 /// Notifies `targets` about `message` in the background, skipping people
@@ -183,6 +187,8 @@ pub fn notify(state: &AppState, message: &Message, targets: Vec<i64>) {
         body,
         url,
         tag: format!("channel-{}", message.channel_id),
+        timestamp: message.created_at,
+        badge: 0,
     };
     let state = state.clone();
     tokio::spawn(async move {
@@ -193,12 +199,23 @@ pub fn notify(state: &AppState, message: &Message, targets: Vec<i64>) {
 }
 
 async fn deliver(state: &AppState, targets: Vec<i64>, payload: &Payload) -> AppResult<()> {
-    let subscriptions = state
+    let (subscriptions, unread) = state
         .db
-        .call(move |conn| store::push_subscriptions(conn, &targets))
+        .call(move |conn| {
+            let subscriptions = store::push_subscriptions(conn, &targets)?;
+            let unread = targets
+                .iter()
+                .map(|user| Ok((*user, store::unread_count(conn, *user)?)))
+                .collect::<AppResult<std::collections::HashMap<i64, usize>>>()?;
+            Ok((subscriptions, unread))
+        })
         .await?;
-    let payload = serde_json::to_vec(payload).map_err(AppError::internal)?;
     for subscription in subscriptions {
+        let payload = serde_json::to_vec(&Payload {
+            badge: unread.get(&subscription.user_id).copied().unwrap_or(0),
+            ..payload.clone()
+        })
+        .map_err(AppError::internal)?;
         match state.push.send(&subscription, &payload).await {
             Delivery::Sent => {}
             Delivery::Expired => {

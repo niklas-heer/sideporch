@@ -79,7 +79,14 @@ Open <http://localhost:8080> (or <http://127.0.0.1:8080> for the Homebrew versio
 
 ### On your phone
 
-Sideporch works in any mobile browser and in dark mode. Add it to your home screen to use it like an app and get notifications, on iPhone and iPad too. It even works without JavaScript: pages reload instead of updating live.
+Sideporch works in any mobile browser, and installs as an app: its own icon and window, the number of unread conversations on the icon, and on Android a place in the share sheet, so links and text from other apps go straight into a conversation. When the connection drops, it says so instead of showing an error page.
+
+**Get notifications on your phone.** Your server needs HTTPS (see [Run it](#run-it)). Then:
+
+- **iPhone and iPad** (iOS 16.4 or newer): open Sideporch in Safari, tap **Share**, then **Add to Home Screen**. Open it from the home screen and tap **Turn on** in the hint at the bottom of the sidebar, or the bell. iOS only lets installed web apps send notifications, so this step is needed.
+- **Android**: open Sideporch in Chrome or Firefox and tap **Turn on** or the bell. Installing it (**Install** in the hint, or *Add to Home screen*) is optional but gives it its own window.
+
+Notifications cover direct messages, mentions and replies in your threads, and skip the ones you're already looking at. Each device turns them on separately. Sideporch sends them itself through the browsers' push services, so no app store account is involved; your server only needs to reach the internet.
 
 <p align="center"><img src="docs/screenshots/phones.webp" alt="Sideporch on two phones: the channel list, and a thread." width="560"></p>
 

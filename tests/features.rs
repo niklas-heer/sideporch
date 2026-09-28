@@ -148,7 +148,7 @@ async fn uploads_are_stored_shown_and_private() {
                 .get(&format!("/files/{private}"))
                 .await
         ),
-        "/login"
+        format!("/login?next=/files/{private}")
     );
 
     // File names are searchable.
@@ -334,6 +334,9 @@ async fn push_notifications_reach_people_who_are_away() {
     assert_eq!(payload["title"], "Ada Admin");
     assert_eq!(payload["body"], "psst, cake in the kitchen");
     assert_eq!(payload["url"], format!("/c/{dm}"));
+    // The app icon shows the unread conversations: this one.
+    assert!(payload["badge"].as_u64() >= Some(1), "{payload}");
+    assert!(payload["timestamp"].as_i64().is_some());
 
     // Mentions notify too; ordinary channel messages don't.
     admin.send(general, "Nothing to see here", None).await;

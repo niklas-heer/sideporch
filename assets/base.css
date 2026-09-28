@@ -248,3 +248,18 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Installed on a phone, Sideporch reaches under the notch and the home
+   indicator (viewport-fit=cover); keep content clear of both. */
+#app {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+html, body {
+  /* No rubber-band scrolling of the whole app, only of its lists. */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+/* iOS zooms into fields with text smaller than 16px; keep them readable instead. */
+@media (pointer: coarse) {
+  input, textarea, select { font-size: max(16px, 1em); }
+}

@@ -5,3 +5,6 @@
 /data
 /sideporch-data
 result
+
+# macOS setups often ignore `Icon?` globally, which also matches this folder.
+!/assets/icons/
