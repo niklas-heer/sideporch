@@ -21,6 +21,27 @@
     }
   }
 
+  // Mermaid is large, so it loads only when a page shows a diagram.
+  let mermaid = null;
+  function drawDiagrams(root) {
+    const blocks = [...root.querySelectorAll("pre.mermaid:not([data-processed])")];
+    if (blocks.length === 0) return;
+    mermaid ||= new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/assets/mermaid.js?v=12.0.0";
+      script.onload = () => {
+        const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+        globalThis.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "neutral" });
+        resolve(globalThis.mermaid);
+      };
+      script.onerror = reject;
+      document.head.append(script);
+    });
+    mermaid
+      .then((library) => library.run({ nodes: blocks, suppressErrors: true }))
+      .catch((error) => console.warn("sideporch: diagrams unavailable", error));
+  }
+
   function scrollToEnd(scroller) {
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
   }
@@ -47,6 +68,7 @@
     const follow = nearEnd(scroller);
     localizeTimes(item);
     markOwnReactions(item);
+    drawDiagrams(item);
     list.append(item);
     if (follow) scrollToEnd(scroller);
   }
@@ -309,6 +331,7 @@
 
   localizeTimes(document);
   markOwnReactions(document);
+  drawDiagrams(document);
   setupCopyButtons();
   setupReactions();
   setupPush().catch((error) => console.warn("sideporch: notifications unavailable", error));

@@ -12,6 +12,8 @@ use crate::AppState;
 const APP_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/app.css"));
 const APP_JS: &str = include_str!("../assets/app.js");
 const EDITOR_JS: &str = include_str!("../assets/editor.js");
+/// Mermaid, gzip-compressed; see `assets/vendor/README.md`.
+const MERMAID_JS_GZ: &[u8] = include_bytes!("../assets/vendor/mermaid-12.0.0.min.js.gz");
 const SERVICE_WORKER: &str = include_str!("../assets/sw.js");
 const LOGO: &str = include_str!("../assets/logo.svg");
 const MANIFEST: &str = r##"{
@@ -77,6 +79,20 @@ pub fn router() -> Router<AppState> {
                     IMMUTABLE,
                     EDITOR_JS.as_bytes(),
                 )
+            }),
+        )
+        .route(
+            "/assets/mermaid.js",
+            get(|| async {
+                (
+                    [
+                        (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+                        (header::CACHE_CONTROL, IMMUTABLE),
+                        (header::CONTENT_ENCODING, "gzip"),
+                    ],
+                    MERMAID_JS_GZ,
+                )
+                    .into_response()
             }),
         )
         .route(

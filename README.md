@@ -17,7 +17,7 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 
 - Channels anyone can join, direct messages, and threads one level deep.
 - Messages appear live over a WebSocket, with unread markers in the sidebar.
-- Slack-style formatting: `*bold*`, `_italic_`, `` `code` ``, code blocks, `>` quotes, links, `@mentions`, and `:emoji:` codes.
+- GitHub-flavored Markdown: headings, lists and task lists, tables, code blocks, quotes and alerts, links, `@mentions`, `:emoji:` codes, and [Mermaid](https://mermaid.js.org) diagrams in ```` ```mermaid ```` blocks. Webhook posts keep Slack's own formatting.
 - **Search** across every channel and conversation you're part of (SQLite full-text search).
 - **File uploads**: images show inline; other files download. Files live in the same database as everything else.
 - **Reactions** with emoji, and **custom emoji** anyone can add, like Slack's.
@@ -164,4 +164,4 @@ Lasting choices are recorded in [decisions/](decisions/) using [vrdx](https://gi
 
 ## License
 
-[MIT](LICENSE). Icons are from [Phosphor](https://phosphoricons.com) (MIT). The embedded [Atkinson Hyperlegible Next](https://github.com/googlefonts/atkinson-hyperlegible-next) font is under the [SIL Open Font License](assets/fonts/OFL.txt).
+[MIT](LICENSE). Diagrams are drawn by the embedded [Mermaid](https://mermaid.js.org) (MIT; see `assets/vendor/README.md`). Icons are from [Phosphor](https://phosphoricons.com) (MIT). The embedded [Atkinson Hyperlegible Next](https://github.com/googlefonts/atkinson-hyperlegible-next) font is under the [SIL Open Font License](assets/fonts/OFL.txt).

@@ -118,7 +118,7 @@ pub const FUNCTIONS: &[Function] = &[
             optional("options", Kind::Table),
         ],
         snippet: "post(\"$0\", \"\")",
-        doc: "Posts `text` to the public channel named `channel` (with or without `#`), under the automation's name. `options.thread` is a message id to answer in that thread. Text uses Slack-style formatting such as `*bold*` and `<https://example.com|links>`.",
+        doc: "Posts `text` to the public channel named `channel` (with or without `#`), under the automation's name. `options.thread` is a message id to answer in that thread. Text is GitHub-flavored Markdown, such as `**bold**`, `[a link](https://example.com)`, tables, and ```` ```mermaid ```` diagrams.",
         must_use: false,
     },
     Function {

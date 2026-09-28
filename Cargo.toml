@@ -25,6 +25,7 @@ jiff = "0.2.37"
 maud = { version = "0.27.0", features = ["axum"] }
 mlua = { version = "0.12.1", features = ["lua54", "vendored", "send", "serde"] }
 phosphor-svgs = "0.5.0"
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 selene-lib = { version = "0.31.0", default-features = false, features = ["lua54"] }

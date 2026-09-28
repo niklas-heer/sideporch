@@ -39,8 +39,18 @@ impl<'a> Render<'a> {
         }
     }
 
+    /// Slack-style text, as webhooks send it.
     fn markup(&self, text: &str) -> PreEscaped<String> {
         PreEscaped(markup::render(text, self.ctx))
+    }
+
+    /// A message body, in the format its sender wrote.
+    fn body(&self, message: &Message) -> PreEscaped<String> {
+        if message.slack_format {
+            self.markup(&message.body)
+        } else {
+            PreEscaped(crate::markdown::render(&message.body, self.ctx))
+        }
     }
 }
 
@@ -557,7 +567,7 @@ pub fn message_item(
                     (timestamp(message.created_at))
                 }
                 @if !message.body.is_empty() {
-                    div class="rich" { (render.markup(&message.body)) }
+                    div class="rich" { (render.body(message)) }
                 }
                 @for attachment in &message.attachments {
                     (attachment_card(attachment, render))

@@ -119,6 +119,34 @@ fn inline(out: &mut String, text: &str, ctx: &Context) {
     }
 }
 
+/// Escapes plain text and renders the `:emoji:` shortcodes, `@mentions`
+/// and bare URLs in it. The Markdown renderer uses this for text outside
+/// code and links.
+pub fn decorate(out: &mut String, text: &str, ctx: &Context) {
+    let mut rest = text;
+    let mut prev: Option<char> = None;
+    while let Some(c) = rest.chars().next() {
+        let at_word_start = prev.is_none_or(|p| !p.is_alphanumeric());
+        let token = match c {
+            ':' => emoji(out, rest, ctx),
+            '@' if at_word_start => user_mention(out, rest, ctx),
+            'h' if at_word_start => bare_url(out, rest),
+            _ => None,
+        };
+        if let Some(after) = token {
+            prev = rest
+                .get(..rest.len().saturating_sub(after.len()))
+                .and_then(|t| t.chars().last());
+            rest = after;
+            continue;
+        }
+        let (current, after) = rest.split_at_checked(c.len_utf8()).unwrap_or((rest, ""));
+        escape_text(out, current);
+        prev = Some(c);
+        rest = after;
+    }
+}
+
 /// `<https://example.com|label>`, `<!here>`, `<@U123>` and `<#C123|name>`.
 fn slack_link<'a>(out: &mut String, rest: &'a str) -> Option<&'a str> {
     let (inner, after) = rest.strip_prefix('<')?.split_once('>')?;
@@ -269,14 +297,14 @@ fn entity<'a>(out: &mut String, rest: &'a str) -> Option<&'a str> {
     })
 }
 
-fn is_safe_url(url: &str) -> bool {
+pub fn is_safe_url(url: &str) -> bool {
     (url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:"))
         && !url.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// Escapes HTML special characters. Slack's own `&amp;`, `&lt;` and `&gt;`
 /// escapes are already valid HTML and pass through unchanged.
-fn escape_text(out: &mut String, text: &str) {
+pub fn escape_text(out: &mut String, text: &str) {
     for (index, c) in text.char_indices() {
         match c {
             '&' => {

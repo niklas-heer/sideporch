@@ -85,7 +85,7 @@ async fn invited_people_join_and_talk_in_channels() {
     let response = bea
         .post(
             &format!("/c/{general}/messages"),
-            &[("body", "Hi *everyone* <script>alert(1)</script>")],
+            &[("body", "Hi **everyone** <script>alert(1)</script>")],
         )
         .await;
     assert_eq!(location(&response), format!("/c/{general}"));
@@ -425,4 +425,24 @@ async fn a_required_setup_link_is_kept_private_and_removed_after_use() {
     assert!(!file.exists(), "a used link is deleted");
     assert!(app.setup_is_secret() || app.setup_path().is_none());
     assert!(app.save_setup_link(&base).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn messages_are_github_flavored_markdown_with_diagrams() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let body = "## Plan\n- [x] **ship** it\n- [ ] ~~wait~~\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n```mermaid\ngraph LR\n  A-->B\n```";
+    admin.send(general, body, None).await;
+    let page = admin.page(&format!("/c/{general}")).await;
+    assert!(page.contains("<h2>Plan</h2>"), "{page}");
+    assert!(page.contains("<strong>ship</strong>"));
+    assert!(page.contains("<del>wait</del>"));
+    assert!(page.contains("<td>2</td>"));
+    assert!(page.contains("<pre class=\"mermaid\">graph LR\n  A--&gt;B</pre>"));
+
+    // The diagram library is served compressed, only when a page asks.
+    let script = admin.get("/assets/mermaid.js?v=12.0.0").await;
+    assert_eq!(script.status(), StatusCode::OK);
+    assert_eq!(script.headers()["content-encoding"], "gzip");
 }

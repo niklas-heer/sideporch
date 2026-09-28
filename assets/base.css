@@ -61,6 +61,35 @@
   white-space: pre;
 }
 .rich pre code { padding: 0; background: none; }
+/* Markdown blocks. Tailwind-style resets remove list markers and margins. */
+.rich > :first-child { margin-top: 0; }
+.rich > :last-child { margin-bottom: 0; }
+.rich p { margin: 0.25rem 0; }
+.rich h1, .rich h2, .rich h3, .rich h4, .rich h5, .rich h6 { margin: 0.6rem 0 0.25rem; font-weight: 700; line-height: 1.3; }
+.rich h1 { font-size: 1.35rem; }
+.rich h2 { font-size: 1.2rem; }
+.rich h3 { font-size: 1.05rem; }
+.rich ul, .rich ol { margin: 0.25rem 0; padding-left: 1.5rem; }
+.rich ul { list-style: disc; }
+.rich ol { list-style: decimal; }
+.rich li > input[type="checkbox"] { margin-right: 0.4rem; vertical-align: middle; }
+.rich ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 0.25rem; }
+.rich hr { margin: 0.75rem 0; border: 0; border-top: 1px solid #DCE4E2; }
+.rich table { margin: 0.4rem 0; border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; }
+.rich th, .rich td { padding: 0.3rem 0.6rem; border: 1px solid #DCE4E2; text-align: left; }
+.rich th { background: #F5F8F7; font-weight: 700; }
+.rich pre.mermaid { background: none; padding: 0.25rem 0; text-align: center; white-space: pre; }
+.rich pre.mermaid:not([data-processed]) { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.8rem; color: #5A6D69; text-align: left; }
+.rich blockquote[class^="markdown-alert-"] { padding: 0.4rem 0.75rem; border-left-width: 4px; border-left-color: #3B6660; border-radius: 0 6px 6px 0; background: #F5F8F7; color: inherit; }
+.rich blockquote[class^="markdown-alert-"]::before { display: block; margin-bottom: 0.15rem; font-weight: 700; }
+.rich .markdown-alert-note::before { content: "Note"; }
+.rich .markdown-alert-tip::before { content: "Tip"; }
+.rich .markdown-alert-important::before { content: "Important"; }
+.rich .markdown-alert-warning::before { content: "Warning"; }
+.rich .markdown-alert-caution::before { content: "Caution"; }
+.rich .markdown-alert-important { border-left-color: #8B2F6B; }
+.rich .markdown-alert-warning, .rich .markdown-alert-caution { border-left-color: #DC9A12; }
+.rich sup a { text-decoration: none; }
 .rich blockquote {
   margin: 0.25rem 0;
   padding-left: 0.75rem;
@@ -72,6 +101,9 @@
   .rich a { color: #9FD6CE; }
   .rich code, .rich pre { background: #1F2E2C; }
   .rich blockquote { border-left-color: #3B6660; color: #B5C6C2; }
+  .rich hr, .rich th, .rich td { border-color: #2A3B38; }
+  .rich th, .rich blockquote[class^="markdown-alert-"] { background: #172422; }
+  .rich pre.mermaid:not([data-processed]) { color: #B5C6C2; }
 }
 
 /* The reaction picker is a popover that app.js places next to a message. */

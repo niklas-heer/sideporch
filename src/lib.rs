@@ -11,6 +11,7 @@ mod db;
 mod error;
 mod files;
 mod icons;
+mod markdown;
 mod markup;
 mod mcp;
 mod messages;

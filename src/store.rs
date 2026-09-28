@@ -56,6 +56,8 @@ pub struct Message {
     pub parent_id: Option<i64>,
     pub author: Author,
     pub body: String,
+    /// Written in Slack's mrkdwn by a webhook; everything else is Markdown.
+    pub slack_format: bool,
     pub attachments: Vec<Attachment>,
     pub created_at: i64,
     pub reply_count: i64,
@@ -368,7 +370,7 @@ pub fn home_channel(conn: &Connection) -> AppResult<Option<i64>> {
 // Messages
 
 const MESSAGE_SELECT: &str = "SELECT m.id, m.channel_id, m.parent_id, m.user_id, u.display_name,
-        m.bot_name, m.bot_icon_url, m.body, m.attachments, m.created_at,
+        m.bot_name, m.bot_icon_url, m.body, m.attachments, m.created_at, m.webhook_id IS NOT NULL,
         (SELECT COUNT(*) FROM messages r WHERE r.parent_id = m.id)
     FROM messages m LEFT JOIN users u ON u.id = m.user_id";
 
@@ -395,7 +397,8 @@ fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
             .and_then(|json| serde_json::from_str(&json).ok())
             .unwrap_or_default(),
         created_at: row.get(9)?,
-        reply_count: row.get(10)?,
+        slack_format: row.get(10)?,
+        reply_count: row.get(11)?,
         files: Vec::new(),
         reactions: Vec::new(),
     })
@@ -922,12 +925,12 @@ pub fn search(
                            WHERE o.channel_id = c.id AND o.user_id != ?2), 'yourself')",
     ))?;
     let hits = statement.query_map(params![query, user_id, limit], |row| {
-        let kind: String = row.get(12)?;
+        let kind: String = row.get(13)?;
         Ok(SearchHit {
             message: message_from_row(row)?,
-            snippet: row.get(11)?,
+            snippet: row.get(12)?,
             is_direct: kind == "dm",
-            channel: row.get(13)?,
+            channel: row.get(14)?,
         })
     })?;
     Ok(hits.collect::<Result<_, _>>()?)

@@ -235,7 +235,7 @@ async fn automations_answer_their_webhook() {
     return { status = 405, body = "POST only" }
   end
   local service = req.json and req.json.service or "something"
-  sideporch.post("general", "Deploying *" .. service .. "* (" .. req.path .. ", token " .. tostring(req.headers["x-token"]) .. ")")
+  sideporch.post("general", "Deploying **" .. service .. "** (" .. req.path .. ", token " .. tostring(req.headers["x-token"]) .. ")")
   return { json = { ok = true, service = service } }
 end)"#,
     )
