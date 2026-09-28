@@ -1,40 +1,104 @@
 <p align="center"><img src="assets/logo.svg" alt="" width="96" height="96"></p>
 
-# Sideporch
+<h1 align="center">Sideporch</h1>
 
-Sideporch is a small, self-hosted team chat: channels, direct messages, and threads for a team, a club, or a family. It ships as one binary you copy to a server and run.
+<p align="center"><strong>A small, self-hosted team chat in one binary.</strong><br>
+Channels, threads and direct messages for a team, a club or a family,<br>
+with the things people miss from Slack, on a server you control.</p>
+
+<p align="center">
+<a href="#try-it">Try it</a> ·
+<a href="#a-tour">Tour</a> ·
+<a href="#install">Install</a> ·
+<a href="#automations">Automations</a> ·
+<a href="#good-to-know">Good to know</a>
+</p>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/channel-dark.webp">
+  <img src="docs/screenshots/channel.webp" alt="A Sideporch channel with a thread open on the right: messages with reactions, a checklist and a poll.">
+</picture>
 
 > **Status:** early. It works end to end, but expect rough edges and breaking changes before 1.0.
 
-## Goals
+## Why Sideporch
 
-- **One binary.** The server, realtime WebSocket connection, and web interface ship as a single self-contained Rust executable. No external database, message broker, cache, or container runtime.
-- **Easy to run and move.** Your data should be easy to back up, copy to another server, and replicate.
-- **Built for small groups.** Invite links instead of an email server, and sensible defaults instead of configuration.
-- **Works with your existing tools.** Monitors, CI systems, and bots post into channels through webhooks. Services that already speak Slack's incoming-webhook format, such as [Gatus](https://gatus.io/) and Grafana, work unchanged.
+- **Yours, and simple to run.** One program and one data directory. No database server, no email server, nothing else to install. It runs on a small VPS, a home server or an ARM board.
+- **Familiar.** Channels, threads, mentions, reactions, search and notifications work the way people know from Slack, and you can bring your Slack history along.
+- **Easy to back up and move.** Everything lives in one directory; download a complete backup from the browser, or have Sideporch write one every day.
+- **Works with your tools.** Monitors, CI and bots post through Slack-compatible webhooks, so tools like [Gatus](https://gatus.io/) and Grafana work unchanged. Automations in Lua do the rest.
 
-## Features
+## Try it
 
-- Public channels anyone can join, **private channels** for the people you add, direct messages, and threads one level deep. Leave channels you don't need, and **mute** noisy ones.
-- Messages appear live over a WebSocket, with unread markers in the sidebar.
-- GitHub-flavored Markdown: headings, lists and task lists, tables, code blocks, quotes and alerts, links, `@mentions`, `:emoji:` codes, and [Mermaid](https://mermaid.js.org) diagrams in ```` ```mermaid ```` blocks. Webhook posts keep Slack's own formatting.
-- **Edit and delete** your messages (↑ in an empty composer edits your last one), **pin** messages to a channel, and **save** messages for later.
-- **Activity**: mentions and replies in your threads, in one place. See who is typing, and move around with the keyboard: ⌘K (Ctrl+K) jumps anywhere, Alt+↑/↓ switches channels, ⌘/ lists every shortcut.
-- **Reminders and scheduled messages**: `/remind me tomorrow to water the plants`, “Remind me” on any message, and a clock next to Send to send a message later, all in your own time zone.
-- **Link previews** with the title, description and image of the first link in a message, fetched safely by the server; admins can turn them off.
-- **Search** across every channel and conversation you're part of (SQLite full-text search).
-- **Files and images**: attach, paste or drop them into a message; images show inline, other files download. They are stored in the data directory, next to the database.
-- **GIFs** from the team's own library, which anyone can add to, or, if an admin chooses, from [GIPHY](https://giphy.com) or [KLIPY](https://klipy.com) with a free API key.
-- **Reactions** with every standard emoji, in a searchable picker grouped by category, with your favorites or most used emoji first, plus **custom emoji** anyone can add.
-- **Profiles** with a picture, a status, a bio and links.
-- **A system page** for admins: CPU and memory with a short history, database and file sizes, free disk space, and activity.
-- **Push notifications** for direct messages, thread replies and mentions, sent by Sideporch itself through Web Push. On iPhone and iPad, add Sideporch to the home screen first.
-- **Automations**: Lua scripts that react to events, run on cron schedules, answer slash commands and webhooks, call APIs with encrypted secrets, and share code through libraries. They are written in an editor with a linter, formatter, test runs and version history, and AI can write them, from the editor or through MCP.
-- **Move from Slack**: import a workspace export with its people, channels, direct messages, threads and reactions.
-- Set up in the browser: the first visitor creates the admin account, then invites everyone else. No email needed: admins hand out password reset links, make other people admins, and deactivate accounts.
-- Slack-compatible incoming webhooks per channel, tested against the payloads Gatus sends, and **outgoing webhooks** that send people's messages (optionally only those starting with a trigger word) to another service and post its answer.
-- **Polls** with `/poll Where do we eat? | Pizza | Tacos`, one vote per person.
-- Works on phones, in dark mode, and without JavaScript (pages reload instead of updating live).
+With Docker:
+
+```sh
+docker run -d -p 8080:8080 -v sideporch:/data ghcr.io/niklas-heer/sideporch
+```
+
+Or with Homebrew on macOS and Linux:
+
+```sh
+brew install niklas-heer/tap/sideporch
+sideporch
+```
+
+Open <http://localhost:8080> (or <http://127.0.0.1:8080> for the Homebrew version). The first person to open it creates the admin account. Then invite everyone else from **People** with an invite link; nobody needs an email address. To run it for real, see [Install](#install) and [Run it](#run-it).
+
+## A tour
+
+### Chat the way your team already does
+
+- Public channels anyone can join, **private channels** for the people you add, direct messages, and **threads**.
+- Messages appear live, with unread markers in the sidebar and **someone is typing…** under the box.
+- **Markdown** as on GitHub: bold and italics, lists and task lists, tables, code blocks, quotes, links, `@mentions`, `:emoji:`, and diagrams drawn from [Mermaid](https://mermaid.js.org) code blocks.
+- **Reactions** with every emoji, **custom emoji** anyone can add, **GIFs** from the team's own library (or GIPHY or KLIPY, if an admin sets them up), **files and images** you paste or drop in, and **link previews**.
+- **Polls**: `/poll Where do we eat? | Pizza | Tacos`.
+- **Edit and delete** your messages (press ↑ in an empty box to edit your last one), and **pin** the important ones to the channel.
+
+![A #deploys channel: Gatus alerts posted through a webhook, a Mermaid diagram of the release process, and an automation asking for deploy approval with buttons in a thread.](docs/screenshots/deploys.webp)
+
+### Stay on top of things
+
+- **Activity** collects mentions and replies to threads you're in. **Saved** keeps messages you want to come back to.
+- **Reminders**: `/remind me tomorrow to water the plants`, or *Remind me* in any message's menu. They arrive as a message to yourself, in your own time zone.
+- **Send later**: the clock next to Send schedules a message; **Scheduled** lists what's waiting.
+- **Search** every channel and conversation you're in.
+- **Push notifications** for direct messages, mentions and thread replies, straight from your server. Mute noisy channels; leave the ones you don't need.
+- **Keyboard shortcuts**:
+
+  | Keys | What they do |
+  | --- | --- |
+  | ⌘K (Ctrl+K) | Jump to any channel, person or page |
+  | Alt+↑ / Alt+↓ | Previous or next channel; add Shift for unread ones |
+  | ↑ | Edit your last message |
+  | Esc | Close the thread |
+  | ⌘/ (Ctrl+/) | Show all shortcuts |
+
+![The quick switcher, opened with Cmd+K over a channel, filtering channels as you type.](docs/screenshots/switcher.webp)
+
+### On your phone
+
+Sideporch works in any mobile browser and in dark mode. Add it to your home screen to use it like an app and get notifications, on iPhone and iPad too. It even works without JavaScript: pages reload instead of updating live.
+
+<p align="center"><img src="docs/screenshots/phones.webp" alt="Sideporch on two phones: the channel list, and a thread." width="560"></p>
+
+### Profiles and people
+
+Everyone has a profile with a picture, a status, a bio and links, and picks the emoji their reaction picker shows first. Admins invite people with links, make others admins, create password reset links (no email needed), and deactivate accounts of people who leave.
+
+### Automate the busywork
+
+Admins write small **Lua scripts** in the browser that react to messages and reactions, run on a schedule, answer `/commands` and webhooks, call other services' APIs with encrypted secrets, and put buttons under their messages, for approvals and the like. The editor checks and formats the code, runs tests without touching anything, and keeps every version. An AI model can write scripts for you, in the editor or from your own agent through [MCP](https://modelcontextprotocol.io). [More below](#automations).
+
+![The automation editor: a Lua script that asks for deploy approvals, with what it listens to, a test run panel and Ask AI.](docs/screenshots/automation.webp)
+
+### For admins
+
+- **Backups** from the browser, on a schedule, and `sideporch restore`. See [Back up and move](#back-up-and-move).
+- **Import from Slack**. See [Move from Slack](#move-from-slack).
+- A **system page** with CPU and memory over the last minutes, database and file sizes, free disk space and activity.
+- Settings for GIFs and link previews.
 
 ## Install
 
@@ -47,7 +111,7 @@ curl -fsSL https://raw.githubusercontent.com/niklas-heer/sideporch/main/install.
 # Homebrew (macOS and Linux)
 brew install niklas-heer/tap/sideporch
 
-# Docker: a 5 MB image with nothing but the binary
+# Docker: a small image with nothing but the binary
 docker run -d -p 8080:8080 -v sideporch:/data ghcr.io/niklas-heer/sideporch
 
 # Nix
@@ -78,7 +142,19 @@ docker exec <container> /sideporch setup-link
 | `--public-url` | `SIDEPORCH_PUBLIC_URL` | derived from requests | The URL people use, for invite and webhook links. An `https://` URL also turns on secure cookies. |
 | `--require-setup-link` | `SIDEPORCH_REQUIRE_SETUP_LINK` | off | Require the one-time link from `sideporch setup-link` to create the first account. |
 
-Put Sideporch behind a reverse proxy such as Caddy for HTTPS. The proxy must pass WebSocket upgrades for `/ws`. Browsers only allow push notifications and installing Sideporch as an app over HTTPS.
+Put Sideporch behind a reverse proxy for HTTPS; browsers only allow push notifications and installing Sideporch as an app over HTTPS. With [Caddy](https://caddyserver.com), this is the whole configuration, and it passes the WebSocket that live updates use:
+
+```
+chat.example.com {
+	reverse_proxy 127.0.0.1:8080
+}
+```
+
+Other proxies need to pass WebSocket upgrades for `/ws`.
+
+### Update
+
+Install the new version (`brew upgrade sideporch`, `docker pull`, or the install script again) and restart Sideporch. It updates its database on start. Take a backup first: once a new version has updated the database, older versions may not work with it.
 
 ### Back up and move
 
@@ -94,9 +170,13 @@ You can also stop Sideporch and copy the directory. To back up while it runs, co
 
 Sideporch 0.1 and 0.2 kept uploads inside the database. Newer versions move them to `files/` on the first start and then compact the database.
 
+### Move from Slack
+
+In Slack, export your workspace (*Workspace settings → Import/Export Data*). In Sideporch, upload the ZIP under **Admin → Import**. People, public and private channels, direct messages, threads and reactions come over; people who already have an account are matched by username, and the others get accounts without a password, so send each of them a reset link from their profile. Files stay in Slack, since Slack keeps them behind its login; messages name them instead. Importing the same export again only adds what's new.
+
 ## Connect Gatus and other tools
 
-In a channel, open the settings (the gear icon) and create a webhook. Copy its URL into the tool. For Gatus:
+**Incoming webhooks** let tools post into a channel. In the channel, open the settings (the gear icon) and create a webhook, then copy its URL into the tool. For Gatus:
 
 ```yaml
 alerting:
@@ -106,21 +186,7 @@ alerting:
 
 Gatus's `mattermost` provider works too. Its `channel` setting posts to another public channel by name, and `username` and `icon_url` set the sender. Any tool that posts Slack-style `text` and `attachments` works the same way.
 
-## Develop
-
-Tool versions and tasks live in `mise.toml`:
-
-```sh
-mise run dev           # run locally with data in ./data
-mise run check         # formatting, Clippy, unit and end-to-end tests
-mise run ci            # the Linux CI pipeline in containers, through Dagger
-mise run build-static  # static Linux binaries with zig and musl
-mise run image         # build the container image and load it into Docker
-```
-
-CI runs through [Dagger](https://dagger.io) (`.dagger/main.dang`); the GitHub workflows only call it. Pushing a `vX.Y.Z` tag that matches `Cargo.toml` builds, tests and publishes a release, its container images, and the checksums that the Homebrew formula and `install.sh` verify.
-
-The web interface is rendered on the server with [maud](https://maud.lambda.xyz). Styles are Tailwind-style utility classes compiled at build time by [encre-css](https://gitlab.com/encre-org/encre-css), a Rust implementation of Tailwind, so there is no Node toolchain. `assets/app.js` is the main page script, `assets/editor.js` powers the automation editor, and `assets/sw.js` shows push notifications.
+**Outgoing webhooks** send people's messages from a channel to another service, like Slack's and Mattermost's. Add one in the channel settings with a URL and, optionally, trigger words such as `!deploy`; then only messages starting with one go out. Sideporch posts JSON with the text, the author, the channel and a `token` to check. If the service answers with JSON that has `text`, Sideporch posts it in the channel, or in the thread with `"response_type": "comment"`. For anything more involved, write an [automation](#automations).
 
 ## Automations
 
@@ -186,6 +252,30 @@ Scripts, libraries, their history and their data all live in the SQLite database
   ```
 
   Agents get what a developer needs: the API reference, channels and recent messages, lint, format, dry-run tests and live runs, run logs, versions and restore, saved data, write-only secrets, settings, and cron previews. Scripts are also available as MCP resources. Automations an agent creates start switched off, and every change is kept in the history under the token's name.
+
+## Good to know
+
+- **It's for small groups.** Sideporch runs on one server with SQLite, which is plenty for a team, a club or a family, not for thousands of people.
+- **The server can read everything.** Messages are not end-to-end encrypted. Whoever runs the server, and admins through backups, can read all of them. Use HTTPS.
+- **No calls, no email.** There are no voice or video calls, and notifications are push notifications, not email.
+- **No group direct messages.** Make a private channel instead.
+- **Automations only see public channels**, never private channels or direct messages.
+
+## Develop
+
+Tool versions and tasks live in `mise.toml`:
+
+```sh
+mise run dev           # run locally with data in ./data
+mise run check         # formatting, Clippy, unit and end-to-end tests
+mise run ci            # the Linux CI pipeline in containers, through Dagger
+mise run build-static  # static Linux binaries with zig and musl
+mise run image         # build the container image and load it into Docker
+```
+
+CI runs through [Dagger](https://dagger.io) (`.dagger/main.dang`); the GitHub workflows only call it. Pushing a `vX.Y.Z` tag that matches `Cargo.toml` builds, tests and publishes a release, its container images, and the checksums that the Homebrew formula and `install.sh` verify.
+
+The web interface is rendered on the server with [maud](https://maud.lambda.xyz). Styles are Tailwind-style utility classes compiled at build time by [encre-css](https://gitlab.com/encre-org/encre-css), a Rust implementation of Tailwind, so there is no Node toolchain. `assets/app.js` is the main page script, `assets/editor.js` powers the automation editor, and `assets/sw.js` shows push notifications.
 
 ## Decisions
 
