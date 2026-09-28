@@ -249,15 +249,45 @@
   const gifPicker = document.getElementById("gif-picker");
   let gifForm = null;
   let gifTimer = 0;
+  // KLIPY's terms want searches and media loads to come from the browser,
+  // so its Tenor-style API is called from here rather than the server.
+  async function klipyGifs(query) {
+    const { klipyKey: key, klipyFilter: filter } = gifPicker.dataset;
+    const params = new URLSearchParams({ key, client_key: "sideporch", limit: "24", media_filter: "gif,tinygif", contentfilter: filter });
+    if (query.trim()) params.set("q", query.trim());
+    const response = await fetch(`https://api.klipy.com/v2/${query.trim() ? "search" : "featured"}?${params}`, { referrerPolicy: "no-referrer" });
+    if (!response.ok) throw new Error(`KLIPY answered ${response.status}`);
+    const { results = [] } = await response.json();
+    return results.flatMap((result) => {
+      const preview = result.media_formats?.tinygif ?? result.media_formats?.gif;
+      const full = result.media_formats?.gif ?? preview;
+      if (!preview?.url || !full?.url) return [];
+      const [width, height] = full.dims ?? [0, 0];
+      const [previewWidth, previewHeight] = preview.dims ?? [0, 0];
+      return [{
+        id: String(result.id),
+        title: result.content_description || result.title || "GIF",
+        preview: preview.url,
+        width: previewWidth,
+        height: previewHeight,
+        send: { gif_url: full.url, gif_title: result.content_description || result.title || "GIF", gif_width: String(width), gif_height: String(height) },
+      }];
+    });
+  }
   async function searchGifs() {
     const results = gifPicker.querySelector("[data-gif-results]");
     const status = gifPicker.querySelector("[data-gif-status]");
     const query = gifPicker.querySelector("[data-gif-search]").value;
     status.textContent = "Loading…";
     try {
-      const response = await fetch(`/gifs?q=${encodeURIComponent(query)}`);
-      if (!response.ok) throw new Error(await response.text());
-      const { results: gifs } = await response.json();
+      let gifs;
+      if (gifPicker.dataset.provider === "klipy") {
+        gifs = await klipyGifs(query);
+      } else {
+        const response = await fetch(`/gifs?q=${encodeURIComponent(query)}`);
+        if (!response.ok) throw new Error(await response.text());
+        ({ results: gifs } = await response.json());
+      }
       results.replaceChildren(
         ...gifs.map((gif) => {
           const button = document.createElement("button");
@@ -275,11 +305,12 @@
             image.height = gif.height;
           }
           button.append(image);
-          button.addEventListener("click", () => sendGif(gif.id));
+          button.addEventListener("click", () => sendGif(gif.id, gif.send));
           return button;
         }),
       );
-      status.textContent = gifs.length ? "" : "No GIFs found.";
+      const empty = gifPicker.dataset.provider === "local" && !query ? "The library is empty. Add GIFs below." : "No GIFs found.";
+      status.textContent = gifs.length ? "" : empty;
     } catch {
       status.textContent = "GIF search is unavailable right now.";
     }
@@ -290,7 +321,8 @@
     gifPicker.showPopover();
     const box = trigger.getBoundingClientRect();
     gifPicker.style.left = `${Math.max(8, Math.min(box.left, innerWidth - gifPicker.offsetWidth - 8))}px`;
-    gifPicker.style.top = `${Math.max(8, box.top - gifPicker.offsetHeight - 8)}px`;
+    // Anchor the bottom edge, so the picker grows upward as results arrive.
+    gifPicker.style.bottom = `${Math.max(8, innerHeight - box.top + 8)}px`;
     const search = gifPicker.querySelector("[data-gif-search]");
     search.focus();
     if (!gifPicker.dataset.loaded) {
@@ -302,10 +334,10 @@
       searchGifs();
     }
   }
-  async function sendGif(id) {
+  async function sendGif(id, extra = {}) {
     if (!gifForm) return;
     gifPicker.hidePopover();
-    const body = new URLSearchParams({ gif: id });
+    const body = new URLSearchParams({ ...extra, gif: id });
     const parent = gifForm.elements.parent_id?.value;
     if (parent) body.set("parent_id", parent);
     const response = await fetch(gifForm.action, { method: "POST", headers: { "x-sideporch-fetch": "1" }, body });
@@ -623,7 +655,7 @@
   setupCopyButtons();
   setupReactions();
   setupPush().catch((error) => console.warn("sideporch: notifications unavailable", error));
-  if (app?.dataset.gifs !== undefined) {
+  if (gifPicker) {
     for (const button of document.querySelectorAll("[data-gif-button]")) button.hidden = false;
   }
   document.querySelectorAll("form[data-composer]").forEach(setupComposer);

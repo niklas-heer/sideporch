@@ -195,38 +195,131 @@ async fn fake_giphy() -> String {
     base
 }
 
+/// Posts a GIF from the picker, as app.js does.
+async fn send_gif(browser: &common::Browser, channel: i64, form: &[(&str, &str)]) -> StatusCode {
+    browser
+        .client
+        .post(browser.url(&format!("/c/{channel}/messages")))
+        .header("cookie", &browser.cookie)
+        .header("x-sideporch-fetch", "1")
+        .form(form)
+        .send()
+        .await
+        .unwrap()
+        .status()
+}
+
+/// A GIF header saying 320 by 240, which is all the library reads.
+const GIF: &[u8] = b"GIF89a\x40\x01\xf0\x00\x00\x00\x00;";
+
 #[tokio::test]
-async fn gifs_come_from_giphy() {
+async fn gifs_come_from_the_teams_library_by_default() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let page = admin.page(&format!("/c/{general}")).await;
+    assert!(page.contains(r#"data-provider="local""#) && page.contains("data-gif-button"));
+    let empty: Value = admin.get("/gifs").await.json().await.unwrap();
+    assert_eq!(empty["results"], json!([]));
+
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    let add = |title: &'static str, data: &'static [u8]| {
+        let form = multipart::Form::new()
+            .text("title", title)
+            .text("tags", "#Party, dance")
+            .part("file", multipart::Part::bytes(data).file_name("porch.gif"));
+        member
+            .client
+            .post(member.url("/gifs/library"))
+            .header("cookie", &member.cookie)
+            .multipart(form)
+            .send()
+    };
+    assert_eq!(
+        add("Porch dance", GIF).await.unwrap().status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        add("Not a GIF", b"plain text").await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+    let library = member.page("/gifs/library").await;
+    assert!(library.contains("Porch dance") && library.contains("party dance"));
+
+    let found: Value = admin.get("/gifs?q=PARTY").await.json().await.unwrap();
+    let gif = &found["results"][0];
+    assert_eq!(gif["title"], "Porch dance");
+    assert_eq!(
+        (gif["width"].as_u64(), gif["height"].as_u64()),
+        (Some(320), Some(240))
+    );
+    let preview = gif["preview"].as_str().unwrap().to_owned();
+    assert_eq!(
+        admin.get(&preview).await.bytes().await.unwrap().as_ref(),
+        GIF
+    );
+    let none: Value = admin.get("/gifs?q=nothing").await.json().await.unwrap();
+    assert_eq!(none["results"], json!([]));
+
+    let id = gif["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        send_gif(&admin, general, &[("gif", &id)]).await,
+        StatusCode::NO_CONTENT
+    );
+    let page = admin.page(&format!("/c/{general}")).await;
+    assert!(page.contains(&format!(r#"src="{preview}""#)), "{page}");
+    assert!(!page.contains("via GIPHY"));
+    assert_eq!(
+        send_gif(&admin, general, &[("gif", "999")]).await,
+        StatusCode::BAD_REQUEST
+    );
+    assert!(admin.page("/gifs/library").await.contains("1 use"));
+
+    // Only the person who added a GIF, or an admin, can remove it.
+    let other = invite(&server, &admin, "Ola Other", "ola").await;
+    assert_eq!(
+        other
+            .post(&format!("/gifs/library/{id}/delete"), &[])
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        member
+            .post(&format!("/gifs/library/{id}/delete"), &[])
+            .await
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(admin.get(&preview).await.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn gifs_can_come_from_giphy() {
     let giphy = fake_giphy().await;
     let server = start_with(|config| config.gif_api_base = Some(giphy)).await;
     let admin = admin(&server).await;
     let general = home_channel(&admin).await;
-    assert!(
-        !admin
-            .page(&format!("/c/{general}"))
-            .await
-            .contains("data-gifs")
-    );
-    assert_eq!(
-        admin.get("/gifs?q=cat").await.status(),
-        StatusCode::BAD_REQUEST
-    );
+    let missing_key = admin
+        .post("/admin/gifs", &[("provider", "giphy"), ("rating", "pg")])
+        .await;
+    assert_eq!(missing_key.status(), StatusCode::BAD_REQUEST);
 
     let saved = admin
         .post(
             "/admin/gifs",
-            &[("api_key", "giphy-key-1234"), ("rating", "pg")],
+            &[
+                ("provider", "giphy"),
+                ("giphy_key", "giphy-key-1234"),
+                ("rating", "pg"),
+            ],
         )
         .await;
     assert_eq!(saved.status(), StatusCode::OK);
     let settings = saved.text().await.unwrap();
     assert!(!settings.contains("giphy-key-1234") && settings.contains("…1234"));
-    assert!(
-        admin
-            .page(&format!("/c/{general}"))
-            .await
-            .contains("data-gifs")
-    );
+    let page = admin.page(&format!("/c/{general}")).await;
+    assert!(page.contains(r#"data-provider="giphy""#) && page.contains("Powered by GIPHY"));
 
     let trending: Value = admin.get("/gifs").await.json().await.unwrap();
     assert_eq!(trending["results"].as_array().unwrap().len(), 2);
@@ -234,31 +327,103 @@ async fn gifs_come_from_giphy() {
     assert_eq!(found["results"][0]["id"], "abc123");
     assert_eq!(found["attribution"], "Powered by GIPHY");
 
-    let sent = admin
-        .client
-        .post(admin.url(&format!("/c/{general}/messages")))
-        .header("cookie", &admin.cookie)
-        .header("x-sideporch-fetch", "1")
-        .form(&[("gif", "abc123")])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(sent.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        send_gif(&admin, general, &[("gif", "abc123")]).await,
+        StatusCode::NO_CONTENT
+    );
     let page = admin.page(&format!("/c/{general}")).await;
     assert!(
         page.contains(r#"src="https://media.giphy.com/media/abc123/giphy.gif""#),
         "{page}"
     );
     assert!(page.contains("via GIPHY"));
-    let bad = admin
-        .client
-        .post(admin.url(&format!("/c/{general}/messages")))
-        .header("cookie", &admin.cookie)
-        .form(&[("gif", "../../etc")])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        send_gif(&admin, general, &[("gif", "../../etc")]).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Switching back keeps the key for later.
+    admin
+        .post("/admin/gifs", &[("provider", "local"), ("rating", "pg")])
+        .await;
+    assert!(admin.page("/admin/gifs").await.contains("…1234"));
+    assert!(
+        admin
+            .page(&format!("/c/{general}"))
+            .await
+            .contains(r#"data-provider="local""#)
+    );
+}
+
+#[tokio::test]
+async fn klipy_is_searched_from_the_browser() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let saved = admin
+        .post(
+            "/admin/gifs",
+            &[
+                ("provider", "klipy"),
+                ("klipy_key", "klipy-key-5678"),
+                ("rating", "g"),
+            ],
+        )
+        .await;
+    assert_eq!(saved.status(), StatusCode::OK);
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    let page = member.page(&format!("/c/{general}")).await;
+    assert!(page.contains(r#"data-provider="klipy""#));
+    assert!(
+        page.contains(r#"data-klipy-key="klipy-key-5678""#)
+            && page.contains(r#"data-klipy-filter="high""#)
+    );
+    assert!(page.contains("Powered by KLIPY"));
+    let csp = member.get("/").await.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(csp.contains("connect-src 'self' https://api.klipy.com"));
+    assert_eq!(
+        member.get("/gifs?q=cat").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    let gif = |url: &'static str| {
+        [
+            ("gif", "4242"),
+            ("gif_url", url),
+            ("gif_title", "Porch wave"),
+            ("gif_width", "480"),
+            ("gif_height", "270"),
+        ]
+    };
+    assert_eq!(
+        send_gif(
+            &member,
+            general,
+            &gif("https://static.klipy.com/ii/wave.gif")
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    let page = member.page(&format!("/c/{general}")).await;
+    assert!(
+        page.contains(r#"src="https://static.klipy.com/ii/wave.gif""#)
+            && page.contains("via KLIPY")
+    );
+    for url in [
+        "https://evil.example/wave.gif",
+        "https://klipy.com.evil.example/wave.gif",
+        "http://static.klipy.com/wave.gif",
+        "javascript:alert(1)",
+    ] {
+        assert_eq!(
+            send_gif(&member, general, &gif(url)).await,
+            StatusCode::BAD_REQUEST,
+            "{url}"
+        );
+    }
 }
 
 #[tokio::test]

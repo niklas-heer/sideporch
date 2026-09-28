@@ -20,7 +20,7 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 - GitHub-flavored Markdown: headings, lists and task lists, tables, code blocks, quotes and alerts, links, `@mentions`, `:emoji:` codes, and [Mermaid](https://mermaid.js.org) diagrams in ```` ```mermaid ```` blocks. Webhook posts keep Slack's own formatting.
 - **Search** across every channel and conversation you're part of (SQLite full-text search).
 - **Files and images**: attach, paste or drop them into a message; images show inline, other files download. They are stored in the data directory, next to the database.
-- **GIFs** from [GIPHY](https://giphy.com), once an admin adds a free API key.
+- **GIFs** from the team's own library, which anyone can add to, or, if an admin chooses, from [GIPHY](https://giphy.com) or [KLIPY](https://klipy.com) with a free API key.
 - **Reactions** with every standard emoji, in a searchable picker grouped by category, with your favorites or most used emoji first, plus **custom emoji** anyone can add.
 - **Profiles** with a picture, a status, a bio and links.
 - **A system page** for admins: CPU and memory with a short history, database and file sizes, free disk space, and activity.

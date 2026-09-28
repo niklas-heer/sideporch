@@ -1,12 +1,12 @@
-//! The admin area: system resources and GIF search.
+//! The admin area: system resources and where GIFs come from.
 
 use std::fmt::Write as _;
 
-use maud::{Markup, PreEscaped, html};
+use maud::{Markup, html};
 
 use super::{Shell, form_error, panel_page};
 use crate::{
-    gifs,
+    gifs::{self, Provider},
     icons::{self, icon},
     store::Counts,
     system::{self, Sample, Snapshot},
@@ -179,11 +179,35 @@ pub fn system_page(shell: &Shell<'_>, view: &SystemView<'_>) -> Markup {
 
 pub fn gifs_page(
     shell: &Shell<'_>,
-    settings: Option<&gifs::Settings>,
+    settings: &gifs::Settings,
     error: Option<&str>,
     saved: bool,
 ) -> Markup {
-    let rating = settings.map_or("pg", |settings| settings.rating.as_str());
+    let placeholder = |key: Option<&String>| {
+        key.map_or_else(String::new, |key| {
+            format!(
+                "Saved key ending in …{}; leave empty to keep it",
+                gifs::key_hint(key)
+            )
+        })
+    };
+    let choices = [
+        (
+            Provider::Local,
+            "Your own library",
+            "People add GIFs to the team's library and pick from it. Nothing leaves your server.",
+        ),
+        (
+            Provider::Giphy,
+            "GIPHY",
+            "Search GIPHY through Sideporch, so the key stays on the server. GIFs load from GIPHY's servers, as its terms require.",
+        ),
+        (
+            Provider::Klipy,
+            "KLIPY",
+            "People's browsers search KLIPY directly, as its terms require, so they can see the key.",
+        ),
+    ];
     panel_page(
         "GIFs",
         shell,
@@ -191,41 +215,56 @@ pub fn gifs_page(
         &html! {
             (tabs("/admin/gifs"))
             p class="mb-5 max-w-xl text-muted dark:text-haint" {
-                "Let people search for GIFs from the message composer, through "
-                a href="https://developers.giphy.com" class="underline" { "GIPHY" }
-                ". Create a free API key there and paste it here. Searches go through Sideporch, so the key stays on the server; "
-                "GIFs are shown from GIPHY's servers, as its terms require, so people's browsers load them from there. "
-                "(Tenor closed its API in June 2026.)"
+                "Choose where the composer's GIF button finds GIFs. The team's "
+                a href="/gifs/library" class="underline" { "GIF library" }
+                " is the default and works without an account anywhere. (Tenor closed its API in June 2026.)"
             }
             (form_error(error))
             @if saved {
                 p role="status" class="mb-4 rounded-lg border border-line bg-haint-2 px-3 py-2 text-sm text-floor dark:border-night-line dark:bg-floor-2 dark:text-haint-2" {
-                    "Saved. The GIF button now appears in every composer."
+                    "Saved."
                 }
             }
             form method="post" action="/admin/gifs" class="max-w-lg space-y-4" {
+                fieldset class="space-y-2" {
+                    legend class="field-label" { "GIFs come from" }
+                    @for (provider, label, help) in choices {
+                        label class="flex gap-3 rounded-lg border border-line p-3 dark:border-night-line" {
+                            input type="radio" name="provider" value=(provider.key()) checked[settings.provider == provider] class="mt-1";
+                            span {
+                                span class="block font-semibold" { (label) }
+                                span class="block text-sm text-muted dark:text-haint" { (help) }
+                            }
+                        }
+                    }
+                }
                 div {
-                    label for="gif-key" class="field-label" { "GIPHY API key" }
-                    input id="gif-key" name="api_key" type="password" autocomplete="off" class="field font-mono text-sm"
-                        placeholder=(settings.map_or_else(String::new, |settings| format!("Saved key ending in …{}; leave empty to keep it", settings.key_hint())));
-                    p class="mt-1 text-sm text-muted dark:text-haint" { "Stored encrypted, like secrets." }
+                    label for="giphy-key" class="field-label" { "GIPHY API key" }
+                    input id="giphy-key" name="giphy_key" type="password" autocomplete="off" class="field font-mono text-sm"
+                        placeholder=(placeholder(settings.giphy_key.as_ref()));
+                    p class="mt-1 text-sm text-muted dark:text-haint" {
+                        "From " a href="https://developers.giphy.com" class="underline" { "developers.giphy.com" } ". Stored encrypted, like secrets."
+                    }
+                }
+                div {
+                    label for="klipy-key" class="field-label" { "KLIPY API key" }
+                    input id="klipy-key" name="klipy_key" type="password" autocomplete="off" class="field font-mono text-sm"
+                        placeholder=(placeholder(settings.klipy_key.as_ref()));
+                    p class="mt-1 text-sm text-muted dark:text-haint" {
+                        "From " a href="https://partner.klipy.com" class="underline" { "partner.klipy.com" } ". Stored encrypted, but sent to signed-in browsers while KLIPY is chosen."
+                    }
                 }
                 div {
                     label for="gif-rating" class="field-label" { "Content rating" }
                     select id="gif-rating" name="rating" class="field" {
                         @for (value, label) in [("g", "G: suitable for everyone"), ("pg", "PG"), ("pg-13", "PG-13"), ("r", "R: adults only")] {
-                            option value=(value) selected[value == rating] { (label) }
+                            option value=(value) selected[value == settings.rating] { (label) }
                         }
                     }
+                    p class="mt-1 text-sm text-muted dark:text-haint" { "For GIPHY and KLIPY searches." }
                 }
                 button type="submit" class="btn" { (icon(icons::GIF, "h-5 w-5")) "Save" }
             }
-            @if settings.is_some() {
-                form method="post" action="/admin/gifs/remove" class="mt-8" {
-                    button type="submit" class="btn-quiet text-sm" { (icon(icons::TRASH, "h-4 w-4")) "Turn GIF search off" }
-                }
-            }
-            p class="mt-10 text-xs text-muted dark:text-haint" { (PreEscaped("Powered by GIPHY")) }
         },
     )
 }

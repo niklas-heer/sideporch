@@ -228,6 +228,20 @@ ALTER TABLE users ADD COLUMN favorite_emoji TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE messages ADD COLUMN gif TEXT;
 ",
+    r"
+CREATE TABLE gif_library (
+    id INTEGER PRIMARY KEY,
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    tags TEXT NOT NULL DEFAULT '',
+    width INTEGER NOT NULL DEFAULT 0,
+    height INTEGER NOT NULL DEFAULT 0,
+    added_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    uses INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX gif_library_by_file ON gif_library (file_id);
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on

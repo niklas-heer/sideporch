@@ -1,7 +1,7 @@
 //! Queries over the `SQLite` database. Functions here are synchronous and
 //! run inside [`crate::db::Db::call`].
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Write as _};
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -32,8 +32,6 @@ pub struct SidebarItem {
 pub struct Sidebar {
     pub channels: Vec<SidebarItem>,
     pub direct: Vec<SidebarItem>,
-    /// Whether GIF search is set up, so composers offer it.
-    pub gifs: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -495,11 +493,7 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
             })
         })?
         .collect::<Result<_, _>>()?;
-    Ok(Sidebar {
-        channels,
-        direct,
-        gifs: crate::gifs::configured(conn)?,
-    })
+    Ok(Sidebar { channels, direct })
 }
 
 /// The channel to open after signing in: `general` if it exists.
@@ -929,6 +923,7 @@ pub fn readable_file(
                  f.uploaded_by = ?2
                  OR EXISTS (SELECT 1 FROM custom_emoji e WHERE e.file_id = f.id)
                  OR EXISTS (SELECT 1 FROM users u WHERE u.avatar_file_id = f.id)
+                 OR EXISTS (SELECT 1 FROM gif_library g WHERE g.file_id = f.id)
                  OR EXISTS (
                      SELECT 1 FROM message_files mf
                      JOIN messages m ON m.id = mf.message_id
@@ -953,12 +948,132 @@ pub fn owns_unattached_file(conn: &Connection, file_id: i64, user_id: i64) -> Ap
         .query_row(
             "SELECT 1 FROM files f WHERE f.id = ?1 AND f.uploaded_by = ?2
              AND NOT EXISTS (SELECT 1 FROM message_files mf WHERE mf.file_id = f.id)
-             AND NOT EXISTS (SELECT 1 FROM custom_emoji e WHERE e.file_id = f.id)",
+             AND NOT EXISTS (SELECT 1 FROM custom_emoji e WHERE e.file_id = f.id)
+             AND NOT EXISTS (SELECT 1 FROM gif_library g WHERE g.file_id = f.id)",
             params![file_id, user_id],
             |_| Ok(()),
         )
         .optional()?
         .is_some())
+}
+
+// The team's GIF library
+
+#[derive(Debug, Clone)]
+pub struct LibraryGif {
+    pub id: i64,
+    pub file_id: i64,
+    pub title: String,
+    pub tags: String,
+    pub width: u32,
+    pub height: u32,
+    pub added_by: Option<i64>,
+    pub adder: Option<String>,
+    pub uses: i64,
+}
+
+const LIBRARY_COLUMNS: &str = "g.id, g.file_id, g.title, g.tags, g.width, g.height, g.added_by, \
+     u.display_name, g.uses FROM gif_library g LEFT JOIN users u ON u.id = g.added_by";
+
+fn library_gif_from_row(row: &Row<'_>) -> rusqlite::Result<LibraryGif> {
+    Ok(LibraryGif {
+        id: row.get(0)?,
+        file_id: row.get(1)?,
+        title: row.get(2)?,
+        tags: row.get(3)?,
+        width: row.get(4)?,
+        height: row.get(5)?,
+        added_by: row.get(6)?,
+        adder: row.get(7)?,
+        uses: row.get(8)?,
+    })
+}
+
+/// Library GIFs whose title or tags contain every word of `query`, most
+/// used first. An empty query lists everything.
+pub fn library_gifs(conn: &Connection, query: &str, limit: u32) -> AppResult<Vec<LibraryGif>> {
+    let words: Vec<String> = query
+        .split_whitespace()
+        .take(5)
+        .map(|word| {
+            let escaped = word
+                .to_lowercase()
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            format!("%{escaped}%")
+        })
+        .collect();
+    let mut sql = format!("SELECT {LIBRARY_COLUMNS} WHERE 1 = 1");
+    for index in 1..=words.len() {
+        // Writing to a String cannot fail.
+        let _ = write!(
+            sql,
+            " AND lower(g.title || ' ' || g.tags) LIKE ?{index} ESCAPE '\\'"
+        );
+    }
+    let _ = write!(sql, " ORDER BY g.uses DESC, g.id DESC LIMIT {limit}");
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(
+        rusqlite::params_from_iter(words.iter()),
+        library_gif_from_row,
+    )?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+pub fn library_gif(conn: &Connection, id: i64) -> AppResult<Option<LibraryGif>> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {LIBRARY_COLUMNS} WHERE g.id = ?1"),
+            [id],
+            library_gif_from_row,
+        )
+        .optional()?)
+}
+
+pub struct NewLibraryGif<'a> {
+    pub file_id: i64,
+    pub title: &'a str,
+    pub tags: &'a str,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub fn add_library_gif(
+    conn: &Connection,
+    gif: &NewLibraryGif<'_>,
+    user_id: i64,
+    now: i64,
+) -> AppResult<i64> {
+    conn.execute(
+        "INSERT INTO gif_library (file_id, title, tags, width, height, added_by, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            gif.file_id,
+            gif.title,
+            gif.tags,
+            gif.width,
+            gif.height,
+            user_id,
+            now
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Removes a library GIF. Its file stays for messages that show it.
+/// Removes a GIF and its file, so messages that showed it do not anymore.
+pub fn delete_library_gif(conn: &Connection, id: i64) -> AppResult<()> {
+    conn.execute(
+        "DELETE FROM files WHERE id = (SELECT file_id FROM gif_library WHERE id = ?1)",
+        [id],
+    )?;
+    Ok(())
+}
+
+pub fn count_gif_use(conn: &Connection, id: i64) -> AppResult<()> {
+    conn.execute("UPDATE gif_library SET uses = uses + 1 WHERE id = ?1", [id])?;
+    Ok(())
 }
 
 // Custom emoji

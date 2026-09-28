@@ -18,7 +18,6 @@ use crate::{
     automations,
     error::{AppError, AppResult},
     files::{self, MessageInput},
-    gifs,
     messages::{self, Draft, Sender},
     now_ms, push, realtime, search,
     store::{self, ChannelKind},
@@ -28,8 +27,11 @@ use crate::{
 
 mod admin;
 mod automation;
+mod gifs;
 mod profile;
 mod settings;
+
+pub use gifs::Posted as GifPosted;
 
 pub use automation::{Change, apply_change, restore_version, run_test};
 
@@ -89,6 +91,7 @@ pub fn router(state: AppState) -> Router {
         .merge(settings::router())
         .merge(profile::router())
         .merge(admin::router())
+        .merge(gifs::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -106,7 +109,7 @@ async fn security_headers(request: Request, next: Next) -> Response {
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
             "default-src 'self'; img-src 'self' https: http: data:; style-src 'self' 'unsafe-inline'; \
-             script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+             script-src 'self'; connect-src 'self' https://api.klipy.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         ),
     );
     headers.insert(
@@ -486,6 +489,7 @@ async fn render_channel(
     thread: Option<i64>,
 ) -> AppResult<Markup> {
     let user_id = user.id;
+    let vault = std::sync::Arc::clone(&state.vault);
     let (channel, messages, older, thread, sidebar, ctx) = state
         .db
         .call(move |conn| {
@@ -516,10 +520,18 @@ async fn render_channel(
             let sidebar = store::sidebar(conn, user_id)?;
             let ctx = store::render_context(conn)?;
             let favorites = store::picker_emoji(conn, user_id)?;
-            Ok((channel, messages, older, thread, sidebar, (ctx, favorites)))
+            let gifs = crate::gifs::settings(conn, &vault)?;
+            Ok((
+                channel,
+                messages,
+                older,
+                thread,
+                sidebar,
+                (ctx, favorites, gifs),
+            ))
         })
         .await?;
-    let (ctx, favorites) = ctx;
+    let (ctx, favorites, gifs) = ctx;
     let shell = Shell {
         user,
         sidebar: &sidebar,
@@ -536,6 +548,7 @@ async fn render_channel(
                 .map(|(root, replies)| (root, replies.as_slice())),
             render: &Render::for_user(&ctx, user_id),
             favorites: &favorites,
+            gifs: &gifs,
         },
     ))
 }
@@ -581,16 +594,8 @@ async fn post_message(
             &answers,
         ));
     }
-    let gif = match &input.gif {
-        Some(id) => {
-            let vault = std::sync::Arc::clone(&state.vault);
-            let settings = state
-                .db
-                .call(move |conn| gifs::settings(conn, &vault))
-                .await?
-                .ok_or_else(|| AppError::bad_request("GIF search is not set up here."))?;
-            Some(state.gifs.gif(&settings, id).await?)
-        }
+    let gif = match input.gif {
+        Some(posted) => Some(gifs::resolve(&state, posted).await?),
         None => None,
     };
     let files = files::store_uploads(&state, user_id, input.files).await?;

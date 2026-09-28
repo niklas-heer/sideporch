@@ -1,11 +1,19 @@
-//! GIF search through GIPHY.
+//! GIFs: a local library by default, or search through GIPHY or KLIPY.
 //!
-//! An admin enables it with a GIPHY API key. People search from the
-//! composer; Sideporch asks GIPHY on their behalf, so the key stays on the
-//! server, and a posted GIF is fetched again by id so a message can only
-//! show GIPHY's own media. GIPHY's terms require showing its URLs as they
-//! are, without caching the media, and crediting "Powered by GIPHY"; the
-//! picker and messages do both. (Tenor closed its API in June 2026.)
+//! The admin picks the source under Admin → GIFs.
+//!
+//! - **Local** (the default): GIFs that people add to the team's library,
+//!   stored like other files. No outside service is involved.
+//! - **GIPHY**: Sideporch searches on people's behalf, so the key stays on
+//!   the server, and fetches a posted GIF again by id so a message can only
+//!   show GIPHY's media. GIPHY's terms require showing its URLs unchanged,
+//!   without caching the media, and crediting "Powered by GIPHY".
+//! - **KLIPY**: its terms require API requests and media loads to come from
+//!   people's browsers, so the page script searches KLIPY's Tenor-compatible
+//!   API directly with the admin's key, and the server only accepts posted
+//!   GIFs whose media is on KLIPY's servers. KLIPY's branding is shown too.
+//!
+//! Tenor closed its API in June 2026.
 
 use std::{fmt::Write as _, time::Duration};
 
@@ -32,64 +40,149 @@ const RESULTS: u32 = 24;
 pub const RATINGS: &[&str] = &["g", "pg", "pg-13", "r"];
 
 const PROVIDER: &str = "gifs.provider";
-const API_KEY: &str = "gifs.api_key";
+const GIPHY_KEY: &str = "gifs.api_key";
+const KLIPY_KEY: &str = "gifs.klipy_key";
 const RATING: &str = "gifs.rating";
 
-/// How GIF search is set up.
-#[derive(Debug, Clone)]
+/// Where GIFs come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Provider {
+    #[default]
+    Local,
+    Giphy,
+    Klipy,
+}
+
+impl Provider {
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Giphy => "giphy",
+            Self::Klipy => "klipy",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "local" => Some(Self::Local),
+            "giphy" => Some(Self::Giphy),
+            "klipy" => Some(Self::Klipy),
+            _ => None,
+        }
+    }
+
+    /// The credit the picker and messages show.
+    pub const fn attribution(self) -> &'static str {
+        match self {
+            Self::Local => "",
+            Self::Giphy => "Powered by GIPHY",
+            Self::Klipy => "Powered by KLIPY",
+        }
+    }
+}
+
+/// How GIFs are set up.
+#[derive(Debug, Clone, Default)]
 pub struct Settings {
-    pub api_key: String,
+    pub provider: Provider,
+    pub giphy_key: Option<String>,
+    pub klipy_key: Option<String>,
     pub rating: String,
 }
 
 impl Settings {
-    /// The key's last characters, for the settings page.
-    pub fn key_hint(&self) -> String {
-        let count = self.api_key.chars().count();
-        self.api_key.chars().skip(count.saturating_sub(4)).collect()
+    /// The active service's key.
+    pub fn api_key(&self) -> Option<&str> {
+        match self.provider {
+            Provider::Local => None,
+            Provider::Giphy => self.giphy_key.as_deref(),
+            Provider::Klipy => self.klipy_key.as_deref(),
+        }
+    }
+
+    /// KLIPY's content filter for the rating.
+    pub fn klipy_filter(&self) -> &'static str {
+        match self.rating.as_str() {
+            "g" => "high",
+            "pg-13" => "low",
+            "r" => "off",
+            _ => "medium",
+        }
     }
 }
 
-pub fn configured(conn: &Connection) -> AppResult<bool> {
-    Ok(store::setting(conn, PROVIDER)?.is_some())
+/// The last characters of a key, for the settings page.
+pub fn key_hint(key: &str) -> String {
+    let count = key.chars().count();
+    key.chars().skip(count.saturating_sub(4)).collect()
 }
 
-pub fn settings(conn: &Connection, vault: &Vault) -> AppResult<Option<Settings>> {
-    if store::setting(conn, PROVIDER)?.is_none() {
-        return Ok(None);
-    }
-    let Some(sealed) = store::setting(conn, API_KEY)? else {
-        return Ok(None);
+pub fn settings(conn: &Connection, vault: &Vault) -> AppResult<Settings> {
+    let open = |name: &str| -> AppResult<Option<String>> {
+        store::setting(conn, name)?
+            .map(|sealed| vault.open_text(name, &sealed))
+            .transpose()
     };
-    Ok(Some(Settings {
-        api_key: vault.open_text(API_KEY, &sealed)?,
+    let giphy_key = open(GIPHY_KEY)?;
+    let klipy_key = open(KLIPY_KEY)?;
+    let provider = store::setting(conn, PROVIDER)?
+        .and_then(|key| Provider::from_key(&key))
+        .unwrap_or_default();
+    // A service without a key falls back to the local library.
+    let provider = match provider {
+        Provider::Giphy if giphy_key.is_none() => Provider::Local,
+        Provider::Klipy if klipy_key.is_none() => Provider::Local,
+        other => other,
+    };
+    Ok(Settings {
+        provider,
+        giphy_key,
+        klipy_key,
         rating: store::setting(conn, RATING)?.unwrap_or_else(|| "pg".to_owned()),
-    }))
+    })
 }
 
-pub fn save(
-    conn: &Connection,
-    vault: &Vault,
-    api_key: Option<&str>,
-    rating: &str,
-) -> AppResult<()> {
-    if !RATINGS.contains(&rating) {
+/// A change to the GIF settings; empty keys keep the saved ones.
+pub struct Change<'a> {
+    pub provider: Provider,
+    pub giphy_key: Option<&'a str>,
+    pub klipy_key: Option<&'a str>,
+    pub rating: &'a str,
+}
+
+pub fn save(conn: &Connection, vault: &Vault, change: &Change<'_>) -> AppResult<()> {
+    if !RATINGS.contains(&change.rating) {
         return Err(AppError::bad_request("Pick a rating: g, pg, pg-13 or r."));
     }
-    if let Some(key) = api_key {
-        store::set_setting(conn, API_KEY, &vault.seal_text(API_KEY, key)?)?;
-    } else if store::setting(conn, API_KEY)?.is_none() {
-        return Err(AppError::bad_request("Enter a GIPHY API key."));
+    for (name, key) in [(GIPHY_KEY, change.giphy_key), (KLIPY_KEY, change.klipy_key)] {
+        if let Some(key) = key {
+            store::set_setting(conn, name, &vault.seal_text(name, key)?)?;
+        }
     }
-    store::set_setting(conn, PROVIDER, "giphy")?;
-    store::set_setting(conn, RATING, rating)
+    let needed = match change.provider {
+        Provider::Local => None,
+        Provider::Giphy => Some((GIPHY_KEY, "GIPHY")),
+        Provider::Klipy => Some((KLIPY_KEY, "KLIPY")),
+    };
+    if let Some((name, service)) = needed
+        && store::setting(conn, name)?.is_none()
+    {
+        return Err(AppError::bad_request(format!("Enter a {service} API key.")));
+    }
+    store::set_setting(conn, PROVIDER, change.provider.key())?;
+    store::set_setting(conn, RATING, change.rating)
 }
 
-pub fn remove(conn: &Connection) -> AppResult<()> {
-    for key in [PROVIDER, API_KEY, RATING] {
-        store::delete_setting(conn, key)?;
-    }
-    Ok(())
+/// Whether a posted KLIPY media URL is on KLIPY's servers.
+pub fn is_klipy_media(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    (host == "klipy.com" || host.ends_with(".klipy.com"))
+        && !url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '"')
 }
 
 /// One search result, for the picker.
@@ -179,7 +272,7 @@ impl Gifs {
         let _ = write!(
             path,
             "api_key={}&limit={RESULTS}&offset={}&rating={}&bundle=messaging_non_clips",
-            encode(&settings.api_key),
+            encode(settings.giphy_key.as_deref().unwrap_or_default()),
             offset.min(4_999),
             encode(&settings.rating)
         );
@@ -214,7 +307,7 @@ impl Gifs {
         let answer = self
             .get(&format!(
                 "/v1/gifs/{id}?api_key={}",
-                encode(&settings.api_key)
+                encode(settings.giphy_key.as_deref().unwrap_or_default())
             ))
             .await?;
         let data = answer
@@ -268,5 +361,17 @@ mod tests {
         assert_eq!(encode("happy dance & more"), "happy%20dance%20%26%20more");
         assert_eq!(number(&serde_json::json!("200")), 200);
         assert_eq!(number(&serde_json::json!(120)), 120);
+    }
+
+    #[test]
+    fn accepts_only_klipy_media() {
+        assert!(is_klipy_media("https://static.klipy.com/ii/a.gif"));
+        assert!(is_klipy_media("https://klipy.com/a.gif"));
+        assert!(!is_klipy_media("http://static.klipy.com/a.gif"));
+        assert!(!is_klipy_media("https://klipy.com.evil.example/a.gif"));
+        assert!(!is_klipy_media("https://evilklipy.com/a.gif"));
+        assert!(!is_klipy_media(
+            "https://static.klipy.com/a.gif\" onerror=\"x"
+        ));
     }
 }

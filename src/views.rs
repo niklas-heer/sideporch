@@ -18,6 +18,7 @@ use crate::{
 pub mod admin;
 pub mod automations;
 pub mod emoji;
+pub mod gifs;
 pub mod profile;
 pub mod search;
 pub mod settings;
@@ -325,8 +326,7 @@ const APP_BODY: &str = "bg-white text-ink antialiased dark:bg-night dark:text-ha
 
 fn app_page(title: &str, shell: &Shell<'_>, data: &PageData, main: &Markup) -> Markup {
     let page = html! {
-        div id="app" data-me=(shell.user.id) data-channel=[data.channel] data-thread=[data.thread]
-            data-gifs[shell.sidebar.gifs] class="flex h-dvh overflow-hidden" {
+        div id="app" data-me=(shell.user.id) data-channel=[data.channel] data-thread=[data.thread] class="flex h-dvh overflow-hidden" {
             (sidebar(shell, false))
             (main)
         }
@@ -378,6 +378,8 @@ pub struct ChannelView<'a> {
     pub render: &'a Render<'a>,
     /// Emoji names the reaction picker shows first.
     pub favorites: &'a [String],
+    /// Where the GIF picker searches.
+    pub gifs: &'a crate::gifs::Settings,
 }
 
 pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
@@ -440,7 +442,7 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
             (main)
             @if let Some(thread) = thread { (thread) }
             (emoji_picker(view.render.ctx, view.favorites))
-            (gif_picker())
+            (gif_picker(view.gifs))
         },
     )
 }
@@ -628,15 +630,21 @@ pub fn message_item(
     }
 }
 
-/// A GIF, shown from its service's URL with the attribution it asks for.
+/// A GIF, from the library or shown from its service's URL with the
+/// attribution the service asks for.
 fn gif_card(gif: &Gif) -> Markup {
+    let credit = match gif.provider.as_str() {
+        "giphy" => Some("via GIPHY"),
+        "klipy" => Some("via KLIPY"),
+        _ => None,
+    };
     html! {
         figure class="mt-1.5 inline-block max-w-full" {
             img src=(gif.url) alt=(gif.title) title=(gif.title) width=(gif.width) height=(gif.height)
                 loading="lazy" referrerpolicy="no-referrer"
                 class="block h-auto max-h-64 w-auto max-w-full rounded-lg bg-screen dark:bg-night-2";
-            figcaption class="mt-0.5 text-xs text-muted dark:text-haint" {
-                @if gif.provider == "giphy" { "via GIPHY" } @else { "GIF" }
+            @if let Some(credit) = credit {
+                figcaption class="mt-0.5 text-xs text-muted dark:text-haint" { (credit) }
             }
         }
     }
@@ -866,18 +874,32 @@ fn emoji_picker(ctx: &Context, favorites: &[String]) -> Markup {
     }
 }
 
-/// The GIF search popover, opened from a composer by app.js.
-fn gif_picker() -> Markup {
+/// The GIF search popover, opened from a composer by app.js. KLIPY is
+/// searched from the browser, so its key and filter ride along.
+fn gif_picker(settings: &crate::gifs::Settings) -> Markup {
+    let klipy = settings.provider == crate::gifs::Provider::Klipy;
+    let placeholder = match settings.provider {
+        crate::gifs::Provider::Local => "Search the GIF library",
+        crate::gifs::Provider::Giphy => "Search GIPHY",
+        crate::gifs::Provider::Klipy => "Search KLIPY",
+    };
     html! {
-        div id="gif-picker" popover
+        div id="gif-picker" popover data-provider=(settings.provider.key())
+            data-klipy-key=[klipy.then(|| settings.api_key()).flatten()]
+            data-klipy-filter=[klipy.then(|| settings.klipy_filter())]
             class="m-0 flex max-h-[28rem] w-96 max-w-[95vw] flex-col rounded-xl border border-line bg-white shadow-xl dark:border-night-line dark:bg-night-2 dark:text-haint-2" {
             div class="border-b border-line p-2 dark:border-night-line" {
                 label for="gif-search" class="sr-only" { "Search GIFs" }
-                input id="gif-search" type="search" data-gif-search placeholder="Search GIPHY" autocomplete="off" class="field py-1.5 text-sm";
+                input id="gif-search" type="search" data-gif-search placeholder=(placeholder) autocomplete="off" class="field py-1.5 text-sm";
             }
             div data-gif-results class="grid min-h-0 flex-1 grid-cols-2 gap-1 overflow-y-auto p-2" {}
             p data-gif-status class="px-3 py-2 text-sm text-muted empty:hidden dark:text-haint" {}
-            p class="border-t border-line px-3 py-1.5 text-right text-xs font-semibold text-muted dark:border-night-line dark:text-haint" { "Powered by GIPHY" }
+            div class="flex items-center justify-between gap-2 border-t border-line px-3 py-1.5 text-xs text-muted dark:border-night-line dark:text-haint" {
+                a href="/gifs/library" class="underline" {
+                    @if settings.provider == crate::gifs::Provider::Local { "Add GIFs" } @else { "GIF library" }
+                }
+                span class="font-semibold" { (settings.provider.attribution()) }
+            }
         }
     }
 }

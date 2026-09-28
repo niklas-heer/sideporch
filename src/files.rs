@@ -51,13 +51,88 @@ impl Upload {
         }
     }
 
+    /// Width and height of a PNG, GIF, WebP or JPEG image.
+    pub fn image_size(&self) -> Option<(u32, u32)> {
+        image_size(&self.data)
+    }
+
     pub fn mime(&self) -> &'static str {
         self.image_type().unwrap_or("application/octet-stream")
     }
 }
 
+fn u16_le(data: &[u8], at: usize) -> Option<u32> {
+    let bytes: [u8; 2] = data.get(at..at.checked_add(2)?)?.try_into().ok()?;
+    Some(u32::from(u16::from_le_bytes(bytes)))
+}
+
+fn u16_be(data: &[u8], at: usize) -> Option<u32> {
+    let bytes: [u8; 2] = data.get(at..at.checked_add(2)?)?.try_into().ok()?;
+    Some(u32::from(u16::from_be_bytes(bytes)))
+}
+
+fn u24_le(data: &[u8], at: usize) -> Option<u32> {
+    let bytes = data.get(at..at.checked_add(3)?)?;
+    Some(
+        bytes
+            .iter()
+            .rev()
+            .fold(0_u32, |value, byte| (value << 8) | u32::from(*byte)),
+    )
+}
+
+/// Width and height from an image's header.
+pub fn image_size(data: &[u8]) -> Option<(u32, u32)> {
+    if data.starts_with(b"GIF8") {
+        return Some((u16_le(data, 6)?, u16_le(data, 8)?));
+    }
+    if data.starts_with(b"\x89PNG") {
+        let read = |at: usize| -> Option<u32> {
+            Some(u32::from_be_bytes(
+                data.get(at..at.checked_add(4)?)?.try_into().ok()?,
+            ))
+        };
+        return Some((read(16)?, read(20)?));
+    }
+    if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
+        return match data.get(12..16)? {
+            b"VP8X" => Some((
+                u24_le(data, 24)?.checked_add(1)?,
+                u24_le(data, 27)?.checked_add(1)?,
+            )),
+            b"VP8 " => Some((u16_le(data, 26)? & 0x3fff, u16_le(data, 28)? & 0x3fff)),
+            b"VP8L" => {
+                let bits = u32::from_le_bytes(data.get(21..25)?.try_into().ok()?);
+                Some((
+                    (bits & 0x3fff).checked_add(1)?,
+                    ((bits >> 14) & 0x3fff).checked_add(1)?,
+                ))
+            }
+            _ => None,
+        };
+    }
+    if data.starts_with(b"\xff\xd8") {
+        // Walk the segments to the frame header (SOF0 to SOF15, except DHT, JPG and DAC).
+        let mut at = 2_usize;
+        loop {
+            if *data.get(at)? != 0xff {
+                return None;
+            }
+            let marker = *data.get(at.checked_add(1)?)?;
+            let length = usize::try_from(u16_be(data, at.checked_add(2)?)?).ok()?;
+            if (0xc0..=0xcf).contains(&marker) && ![0xc4, 0xc8, 0xcc].contains(&marker) {
+                let height = u16_be(data, at.checked_add(5)?)?;
+                let width = u16_be(data, at.checked_add(7)?)?;
+                return Some((width, height));
+            }
+            at = at.checked_add(2)?.checked_add(length)?;
+        }
+    }
+    None
+}
+
 /// Keeps the last path component, drops control characters, and caps the length.
-fn clean_file_name(raw: &str) -> String {
+pub fn clean_file_name(raw: &str) -> String {
     let base = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
     let name: String = base.chars().filter(|c| !c.is_control()).take(200).collect();
     let name = name.trim();
@@ -73,8 +148,8 @@ pub struct MessageInput {
     pub body: String,
     pub parent_id: Option<i64>,
     pub files: Vec<Upload>,
-    /// A GIF id from the GIF picker.
-    pub gif: Option<String>,
+    /// A GIF from the GIF picker.
+    pub gif: Option<crate::routes::GifPosted>,
 }
 
 #[derive(Deserialize)]
@@ -83,6 +158,10 @@ struct PlainMessage {
     body: String,
     parent_id: Option<i64>,
     gif: Option<String>,
+    gif_url: Option<String>,
+    gif_title: Option<String>,
+    gif_width: Option<u32>,
+    gif_height: Option<u32>,
 }
 
 impl FromRequest<AppState> for MessageInput {
@@ -102,7 +181,16 @@ impl FromRequest<AppState> for MessageInput {
                 body: plain.body,
                 parent_id: plain.parent_id,
                 files: Vec::new(),
-                gif: plain.gif.filter(|gif| !gif.is_empty()),
+                gif: plain
+                    .gif
+                    .filter(|gif| !gif.is_empty())
+                    .map(|id| crate::routes::GifPosted {
+                        id,
+                        url: plain.gif_url,
+                        title: plain.gif_title,
+                        width: plain.gif_width,
+                        height: plain.gif_height,
+                    }),
             });
         }
         let mut form = Multipart::from_request(request, state)
@@ -412,7 +500,7 @@ pub async fn delete_emoji(
 
 #[cfg(test)]
 mod tests {
-    use super::{Upload, clean_file_name, percent_encode};
+    use super::{Upload, clean_file_name, image_size, percent_encode};
 
     #[test]
     fn recognises_images_by_content_only() {
@@ -426,6 +514,23 @@ mod tests {
             data: b"<svg onload=alert(1)>".to_vec(),
         };
         assert_eq!(svg.mime(), "application/octet-stream");
+    }
+
+    #[test]
+    fn reads_image_sizes_from_headers() {
+        assert_eq!(image_size(b"GIF89a\x40\x01\xf0\x00"), Some((320, 240)));
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\x02\x80\0\0\x01\xe0";
+        assert_eq!(image_size(png), Some((640, 480)));
+        let extended = b"RIFF\0\0\0\0WEBPVP8X\0\0\0\0\0\0\0\0\x3f\x01\0\xef\0\0";
+        assert_eq!(image_size(extended), Some((320, 240)));
+        let lossless = b"RIFF\0\0\0\0WEBPVP8L\0\0\0\0\x2f\x3f\xc1\x3b\0";
+        assert_eq!(image_size(lossless), Some((320, 240)));
+        let lossy = b"RIFF\0\0\0\0WEBPVP8 \0\0\0\0\0\0\0\x9d\x01\x2a\x40\x01\xf0\x00";
+        assert_eq!(image_size(lossy), Some((320, 240)));
+        let jpeg = b"\xff\xd8\xff\xe0\0\x04\0\0\xff\xc0\0\x11\x08\0\xf0\x01\x40";
+        assert_eq!(image_size(jpeg), Some((320, 240)));
+        assert_eq!(image_size(b"\xff\xd8\xff\xe0\xff\xff"), None);
+        assert_eq!(image_size(b"plain"), None);
     }
 
     #[test]

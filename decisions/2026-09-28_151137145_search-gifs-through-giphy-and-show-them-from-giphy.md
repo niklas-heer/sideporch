@@ -3,10 +3,10 @@ schema_version = 1
 id = "01M3M94K5SZGKP1431KYHG80RG"
 title = "Search GIFs through GIPHY and show them from GIPHY"
 date = "2026-09-28"
-status = "accepted"
+status = "superseded"
 tags = ["messages", "integrations"]
 supersedes = []
-superseded_by = []
+superseded_by = ["01M3MCV858SVVQE3G3CQWCVDM7"]
 depends_on = []
 related_to = []
 +++
