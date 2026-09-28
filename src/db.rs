@@ -212,7 +212,7 @@ fn migrate(conn: &mut Connection) -> AppResult<()> {
         if version <= applied {
             continue;
         }
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         tx.execute_batch(migration)?;
         tx.pragma_update(None, "user_version", version)?;
         tx.commit()?;

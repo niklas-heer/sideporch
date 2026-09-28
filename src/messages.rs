@@ -51,7 +51,7 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
     let posted = state
         .db
         .call(move |conn| {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let parent_id = match draft.parent_id {
                 Some(parent_id) => {
                     let parent = store::message(&tx, parent_id)?

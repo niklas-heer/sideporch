@@ -301,7 +301,7 @@ async fn setup(
     let created = state
         .db
         .call(move |conn| {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             if store::user_count(&tx)? > 0 {
                 return Ok(None);
             }
@@ -369,7 +369,7 @@ async fn join(
     let created = state
         .db
         .call(move |conn| {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             if !store::invite_is_valid(&tx, &invite, now)? {
                 return Ok(Err(
                     "This invite link has expired or was revoked. Ask for a new one.",

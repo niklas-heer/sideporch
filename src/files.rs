@@ -159,7 +159,7 @@ pub async fn store_uploads(
     state
         .db
         .call(move |conn| {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let ids = uploads
                 .iter()
                 .map(|upload| {
@@ -313,7 +313,7 @@ pub async fn add_emoji(
     let added = state
         .db
         .call(move |conn| {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let ctx = store::render_context(&tx)?;
             if ctx.has_emoji(&name) {
                 return Ok(false);

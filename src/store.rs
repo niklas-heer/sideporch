@@ -262,7 +262,7 @@ pub fn audience(conn: &Connection, channel_id: i64) -> AppResult<Option<Vec<i64>
 /// Finds or creates the direct conversation between two users.
 pub fn direct_channel(conn: &mut Connection, user: i64, other: i64, now: i64) -> AppResult<i64> {
     let key = format!("{}:{}", user.min(other), user.max(other));
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing: Option<i64> = tx
         .query_row("SELECT id FROM channels WHERE dm_key = ?1", [&key], |row| {
             row.get(0)
