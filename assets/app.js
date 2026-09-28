@@ -150,10 +150,59 @@
     if (event.parent_id !== null) updateReplyCount(event.parent_id, event.reply_count);
   }
 
+  // Who is writing, per composer on this page.
+  const typists = new Map();
+  function composerFor(parentId) {
+    return [...document.querySelectorAll("form[data-composer]")].find(
+      (form) => (form.elements.parent_id?.value ?? "") === String(parentId ?? ""),
+    );
+  }
+  function renderTyping(form) {
+    const label = form.querySelector("[data-typing]");
+    if (!label) return;
+    const names = [...(typists.get(form)?.values() ?? [])].map((person) => person.name);
+    label.textContent =
+      names.length === 0 ? "" :
+      names.length === 1 ? `${names[0]} is typing…` :
+      names.length === 2 ? `${names[0]} and ${names[1]} are typing…` :
+      "Several people are typing…";
+  }
+  function showTyping(event) {
+    if (String(event.user_id) === app?.dataset.me || app?.dataset.channel !== String(event.channel_id)) return;
+    const form = composerFor(event.parent_id);
+    if (!form) return;
+    const people = typists.get(form) ?? new Map();
+    typists.set(form, people);
+    clearTimeout(people.get(event.user_id)?.timer);
+    const timer = setTimeout(() => {
+      people.delete(event.user_id);
+      renderTyping(form);
+    }, 5000);
+    people.set(event.user_id, { name: event.name, timer });
+    renderTyping(form);
+  }
+  function stopTyping(author, parentId) {
+    const form = composerFor(parentId);
+    const people = form && typists.get(form);
+    const id = Number(String(author).replace(/^u:/, ""));
+    if (!people?.has(id)) return;
+    clearTimeout(people.get(id).timer);
+    people.delete(id);
+    renderTyping(form);
+  }
+
   function handleEvent(event, socket) {
     if (event.type === "resync") {
       location.reload();
       return;
+    }
+    if (event.type === "typing") {
+      showTyping(event);
+      return;
+    }
+    if (event.type === "message" && event.activity?.includes(Number(app?.dataset.me)) && location.pathname !== "/activity") {
+      const activity = document.querySelector('a[data-nav-link][href="/activity"]');
+      if (activity) activity.dataset.unread = "";
     }
     if (event.type === "reactions") {
       replaceReactions(event.message_id, event.html);
@@ -169,6 +218,7 @@
     }
     if (event.type !== "message") return;
     const here = app && app.dataset.channel === String(event.channel_id);
+    if (here) stopTyping(event.author, event.parent_id);
     if (!here) {
       const link = document.querySelector(`[data-channel-link="${event.channel_id}"]`);
       if (link && link.dataset.muted === undefined && event.author !== `u:${app?.dataset.me}`) link.dataset.unread = "";
@@ -191,9 +241,11 @@
 
   // Live updates. After a dropped connection the page reloads to catch up
   // on anything it missed; drafts survive in session storage.
+  let liveSocket = null;
   function connect(attempt = 0) {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(`${protocol}//${location.host}/ws`);
+    liveSocket = socket;
     let opened = false;
     const sendVisibility = () => {
       if (socket.readyState === WebSocket.OPEN) {
@@ -431,9 +483,16 @@
     };
     resize();
 
+    let typingSent = 0;
     textarea.addEventListener("input", () => {
       resize();
       sessionStorage.setItem(draftKey, textarea.value);
+      const text = textarea.value.trim();
+      if (text && !text.startsWith("/") && Date.now() - typingSent > 3000 && liveSocket?.readyState === WebSocket.OPEN) {
+        typingSent = Date.now();
+        const parent = form.elements.parent_id?.value;
+        liveSocket.send(JSON.stringify({ type: "typing", channel_id: Number(app.dataset.channel), parent_id: parent ? Number(parent) : null }));
+      }
     });
     const showFiles = () => {
       fileList.replaceChildren(
@@ -667,7 +726,7 @@
   const messageMenu = document.createElement("div");
   messageMenu.id = "message-menu";
   messageMenu.setAttribute("popover", "");
-  messageMenu.className = "m-0 w-56 flex-col rounded-xl border border-line bg-white py-1 text-sm shadow-xl dark:border-night-line dark:bg-night-2 dark:text-haint-2";
+  messageMenu.className = "m-0 w-56 rounded-xl border border-line bg-white py-1 text-sm shadow-xl dark:border-night-line dark:bg-night-2 dark:text-haint-2";
   document.body.append(messageMenu);
 
   const post = (url, fields = {}) =>
@@ -797,6 +856,145 @@
       }
     });
   }
+
+  // Keyboard shortcuts: Cmd/Ctrl+K jumps anywhere, Alt+Up/Down moves
+  // between channels (with Shift, unread ones), Escape closes a thread,
+  // and Cmd/Ctrl+/ lists them all.
+  function popoverPanel(id, className) {
+    const panel = document.createElement("div");
+    panel.id = id;
+    panel.setAttribute("popover", "");
+    panel.className = className;
+    document.body.append(panel);
+    return panel;
+  }
+  const switcher = popoverPanel(
+    "switcher",
+    "mx-auto mt-[12vh] w-[32rem] max-w-[92vw] overflow-hidden rounded-xl border border-line bg-white shadow-2xl dark:border-night-line dark:bg-night-2 dark:text-haint-2",
+  );
+  function openSwitcher() {
+    if (!switcher.showPopover) return;
+    const places = [...document.querySelectorAll("nav a[data-channel-link], nav a[data-nav-link]")].map((link) => ({
+      label: link.textContent.trim(),
+      href: link.getAttribute("href"),
+      unread: link.dataset.unread !== undefined,
+    }));
+    places.push({ label: "Browse channels", href: "/channels/browse" }, { label: "People", href: "/people" });
+    const input = document.createElement("input");
+    input.type = "search";
+    input.placeholder = "Jump to a channel, person or page";
+    input.setAttribute("aria-label", input.placeholder);
+    input.className = "w-full border-b border-line bg-transparent px-4 py-3 outline-hidden dark:border-night-line";
+    const list = document.createElement("ul");
+    list.className = "max-h-80 overflow-y-auto py-1";
+    list.setAttribute("role", "listbox");
+    let matches = [];
+    let chosen = 0;
+    const render = () => {
+      const query = input.value.trim().toLowerCase();
+      matches = places.filter((place) => place.label.toLowerCase().includes(query)).slice(0, 12);
+      if (query) matches.push({ label: `Search messages for “${input.value.trim()}”`, href: `/search?q=${encodeURIComponent(input.value.trim())}` });
+      chosen = Math.min(chosen, Math.max(0, matches.length - 1));
+      list.replaceChildren(
+        ...matches.map((place, index) => {
+          const item = document.createElement("li");
+          item.setAttribute("role", "option");
+          item.setAttribute("aria-selected", index === chosen ? "true" : "false");
+          item.className = "cursor-pointer px-4 py-1.5 aria-selected:bg-haint-2 dark:aria-selected:bg-floor-2";
+          item.textContent = place.label;
+          if (place.unread) item.classList.add("font-bold");
+          item.addEventListener("mousedown", (event) => {
+            event.preventDefault();
+            location.href = place.href;
+          });
+          return item;
+        }),
+      );
+    };
+    input.addEventListener("input", () => {
+      chosen = 0;
+      render();
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        chosen = (chosen + (event.key === "ArrowDown" ? 1 : matches.length - 1)) % Math.max(1, matches.length);
+        render();
+      } else if (event.key === "Enter" && matches[chosen]) {
+        event.preventDefault();
+        location.href = matches[chosen].href;
+      }
+    });
+    switcher.replaceChildren(input, list);
+    render();
+    switcher.showPopover();
+    input.focus();
+  }
+
+  const shortcutHelp = popoverPanel(
+    "shortcuts",
+    "mx-auto mt-[12vh] w-[28rem] max-w-[92vw] rounded-xl border border-line bg-white p-5 shadow-2xl dark:border-night-line dark:bg-night-2 dark:text-haint-2",
+  );
+  function openShortcuts() {
+    if (!shortcutHelp.showPopover) return;
+    const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
+    const rows = [
+      [`${mod} K`, "Jump to a channel, person or page"],
+      ["Alt ↑ / ↓", "Previous or next channel"],
+      ["Alt Shift ↑ / ↓", "Previous or next unread channel"],
+      ["↑", "Edit your last message (in an empty composer)"],
+      ["Enter / Shift Enter", "Send / new line"],
+      ["Escape", "Close the thread"],
+      [`${mod} /`, "Show these shortcuts"],
+    ];
+    const heading = document.createElement("h2");
+    heading.className = "mb-3 text-lg font-bold";
+    heading.textContent = "Keyboard shortcuts";
+    const table = document.createElement("dl");
+    table.className = "grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm";
+    for (const [keys, what] of rows) {
+      const term = document.createElement("dt");
+      term.className = "font-mono font-semibold";
+      term.textContent = keys;
+      const description = document.createElement("dd");
+      description.textContent = what;
+      table.append(term, description);
+    }
+    shortcutHelp.replaceChildren(heading, table);
+    shortcutHelp.showPopover();
+  }
+
+  function moveChannel(step, unreadOnly) {
+    const links = [...document.querySelectorAll("nav a[data-channel-link]")];
+    if (links.length === 0) return;
+    const current = links.findIndex((link) => link.getAttribute("aria-current") === "page");
+    for (let offset = 1; offset <= links.length; offset += 1) {
+      const index = (current + step * offset + links.length * offset) % links.length;
+      const link = links[index];
+      if (!unreadOnly || link.dataset.unread !== undefined) {
+        location.href = link.getAttribute("href");
+        return;
+      }
+    }
+  }
+
+  document.addEventListener("keydown", (event) => {
+    const mod = event.metaKey || event.ctrlKey;
+    const key = event.key.toLowerCase();
+    if (mod && key === "k") {
+      event.preventDefault();
+      openSwitcher();
+    } else if (mod && key === "/") {
+      event.preventDefault();
+      openShortcuts();
+    } else if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      event.preventDefault();
+      moveChannel(event.key === "ArrowUp" ? -1 : 1, event.shiftKey);
+    } else if (event.key === "Escape" && app?.dataset.thread && !document.querySelector(":popover-open") && !event.target.closest?.("form[data-edit]")) {
+      const textarea = event.target.closest?.("form[data-composer]")?.querySelector("textarea");
+      if (!textarea?.value) location.href = `/c/${app.dataset.channel}`;
+    }
+  });
 
   function base64UrlToBytes(text) {
     const base64 = (text + "===".slice((text.length + 3) % 4)).replace(/-/g, "+").replace(/_/g, "/");

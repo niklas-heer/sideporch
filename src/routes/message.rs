@@ -33,6 +33,7 @@ pub fn router() -> Router<AppState> {
         .route("/c/{channel_id}/m/{message_id}/save", post(save))
         .route("/c/{channel_id}/pins", get(pins))
         .route("/saved", get(saved))
+        .route("/activity", get(activity))
 }
 
 /// Where a message is shown: its thread, or the page of channel history
@@ -271,5 +272,30 @@ async fn saved(user: CurrentUser, State(state): State<AppState>) -> AppResult<Ma
         &shell,
         &saved,
         &Render::for_user(&ctx, user.id).with_saved(&ids),
+    ))
+}
+
+async fn activity(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
+    let user_id = user.id;
+    let (items, sidebar, ctx) = state
+        .db
+        .call(move |conn| {
+            let items = store::activity(conn, user_id)?;
+            Ok((
+                items,
+                store::sidebar(conn, user_id)?,
+                store::render_context(conn)?,
+            ))
+        })
+        .await?;
+    let shell = Shell {
+        user: &user,
+        sidebar: &sidebar,
+        current: None,
+    };
+    Ok(views::messages::activity_page(
+        &shell,
+        &items,
+        &Render::for_user(&ctx, user.id),
     ))
 }

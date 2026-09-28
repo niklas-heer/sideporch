@@ -41,6 +41,8 @@ pub struct SidebarItem {
 pub struct Sidebar {
     pub channels: Vec<SidebarItem>,
     pub direct: Vec<SidebarItem>,
+    /// Whether there are mentions or replies the person hasn't seen.
+    pub activity: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -737,7 +739,17 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
             })
         })?
         .collect::<Result<_, _>>()?;
-    Ok(Sidebar { channels, direct })
+    let activity = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM activity a JOIN users u ON u.id = a.user_id
+         WHERE a.user_id = ?1 AND a.message_id > u.activity_seen_id)",
+        [user_id],
+        |row| row.get(0),
+    )?;
+    Ok(Sidebar {
+        channels,
+        direct,
+        activity,
+    })
 }
 
 /// The channel to open after signing in: `general` if it exists.
@@ -1785,27 +1797,48 @@ pub fn push_subscriptions(conn: &Connection, user_ids: &[i64]) -> AppResult<Vec<
     Ok(subscriptions.collect::<Result<_, _>>()?)
 }
 
-/// Who should be notified about a new message: the other members of a
-/// direct conversation, people in the thread, and anyone `@mentioned`.
-pub fn notification_targets(
+/// Who hears about a new message.
+#[derive(Debug, Default)]
+pub struct Recipients {
+    /// Push notifications: the other members of a direct conversation,
+    /// people in the thread, and anyone mentioned.
+    pub notify: Vec<i64>,
+    /// People mentioned by name, or by `@channel` and `@here`.
+    pub mentioned: Vec<i64>,
+    /// People who took part in the thread, for their Activity page.
+    pub thread: Vec<i64>,
+}
+
+/// Works out who hears about `message`. Only people who can read the
+/// channel are included, and never the sender.
+pub fn recipients(
     conn: &Connection,
     message: &Message,
     sender: Option<i64>,
-) -> AppResult<Vec<i64>> {
+) -> AppResult<Recipients> {
     let members = audience(conn, message.channel_id)?;
-    let public = members.is_none();
-    let mut targets: Vec<i64> = members.unwrap_or_default();
+    let readers: Option<std::collections::HashSet<i64>> = members
+        .as_ref()
+        .map(|members| members.iter().copied().collect());
+    let direct = members.is_some()
+        && conn.query_row(
+            "SELECT kind = 'dm' FROM channels WHERE id = ?1",
+            [message.channel_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+    let mut thread = Vec::new();
     if let Some(parent) = message.parent_id {
         let mut statement = conn.prepare(
-            "SELECT user_id FROM messages WHERE (id = ?1 OR parent_id = ?1) AND user_id IS NOT NULL",
+            "SELECT DISTINCT user_id FROM messages WHERE (id = ?1 OR parent_id = ?1) AND user_id IS NOT NULL",
         )?;
         for user in statement.query_map([parent], |row| row.get::<_, i64>(0))? {
-            targets.push(user?);
+            thread.push(user?);
         }
     }
     let text = message.body.to_lowercase();
     let everyone = mentions(&text, "channel") || mentions(&text, "here");
-    // Muted and left channels only notify people mentioned by name.
+    let mut mentioned = Vec::new();
+    // Muted and left channels only reach people mentioned by name.
     let mut statement = conn.prepare(
         "SELECT u.id, lower(u.username), COALESCE(p.muted OR p.hidden, 0) FROM users u
          LEFT JOIN channel_prefs p ON p.user_id = u.id AND p.channel_id = ?1
@@ -1819,22 +1852,104 @@ pub fn notification_targets(
         ))
     })? {
         let (id, username, quiet) = user?;
-        if (everyone && !quiet) || mentions(&text, &username) {
-            targets.push(id);
+        if (everyone && !quiet && !direct) || mentions(&text, &username) {
+            mentioned.push(id);
         }
     }
-    targets.sort_unstable();
-    targets.dedup();
-    targets.retain(|id| Some(*id) != sender);
-    // Only people who can read the channel hear about it.
-    if !public {
-        let readers: std::collections::HashSet<i64> = audience(conn, message.channel_id)?
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
-        targets.retain(|id| readers.contains(id));
+    let keep = |ids: &mut Vec<i64>| {
+        ids.sort_unstable();
+        ids.dedup();
+        ids.retain(|id| {
+            Some(*id) != sender && readers.as_ref().is_none_or(|readers| readers.contains(id))
+        });
+    };
+    keep(&mut thread);
+    keep(&mut mentioned);
+    let mut notify: Vec<i64> = if direct {
+        members.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    notify.extend(&thread);
+    notify.extend(&mentioned);
+    keep(&mut notify);
+    Ok(Recipients {
+        notify,
+        mentioned,
+        thread,
+    })
+}
+
+/// Adds a new message to the Activity pages of the people it concerns.
+pub fn record_activity(
+    conn: &Connection,
+    message_id: i64,
+    recipients: &Recipients,
+) -> AppResult<()> {
+    for (users, reason) in [
+        (&recipients.thread, "reply"),
+        (&recipients.mentioned, "mention"),
+    ] {
+        for user in users {
+            conn.execute(
+                "INSERT INTO activity (user_id, message_id, reason) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (user_id, message_id) DO UPDATE SET reason = excluded.reason",
+                params![user, message_id, reason],
+            )?;
+        }
     }
-    Ok(targets)
+    Ok(())
+}
+
+/// One entry on someone's Activity page.
+pub struct ActivityItem {
+    pub located: Located,
+    pub mention: bool,
+    pub new: bool,
+}
+
+/// Recent mentions and thread replies for `user_id`, newest first. Marks
+/// them seen.
+pub fn activity(conn: &Connection, user_id: i64) -> AppResult<Vec<ActivityItem>> {
+    let seen: i64 = conn.query_row(
+        "SELECT activity_seen_id FROM users WHERE id = ?1",
+        [user_id],
+        |row| row.get(0),
+    )?;
+    let mut statement = conn.prepare(
+        &format!(
+            "{MESSAGE_SELECT} JOIN activity a ON a.message_id = m.id
+         WHERE a.user_id = ?1 ORDER BY m.id DESC LIMIT 100"
+        )
+        .replace(
+            "FROM messages m LEFT JOIN",
+            ", a.reason = 'mention' FROM messages m LEFT JOIN",
+        ),
+    )?;
+    let rows = statement
+        .query_map([user_id], |row| {
+            Ok((message_from_row(row)?, row.get::<_, bool>(MESSAGE_COLUMNS)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let (mut messages, reasons): (Vec<Message>, Vec<bool>) = rows.into_iter().unzip();
+    hydrate(conn, &mut messages)?;
+    let mut items = Vec::new();
+    for (message, mention) in messages.into_iter().zip(reasons) {
+        let new = message.id > seen;
+        if let Some(located) = locate(conn, user_id, message)? {
+            items.push(ActivityItem {
+                located,
+                mention,
+                new,
+            });
+        }
+    }
+    conn.execute(
+        "UPDATE users SET activity_seen_id = MAX(activity_seen_id,
+             COALESCE((SELECT MAX(message_id) FROM activity WHERE user_id = ?1), 0)) WHERE id = ?1",
+        [user_id],
+    )?;
+    Ok(items)
 }
 
 /// Whether lowercase `text` contains `@name` as a whole word.

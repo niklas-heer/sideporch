@@ -6,7 +6,7 @@ use maud::{Markup, html};
 use super::{Render, Shell, channel_label, message_item, panel_page};
 use crate::{
     icons::{self, icon},
-    store::{Author, Channel, ChannelKind, Located, Message},
+    store::{ActivityItem, Author, Channel, ChannelKind, Located, Message},
 };
 
 /// Where a list entry came from, linking to it in place.
@@ -122,6 +122,35 @@ pub fn saved_page(shell: &Shell<'_>, saved: &[Located], render: &Render<'_>) -> 
                         li class="list-none" {
                             (located_heading(item))
                             ol { (message_item(&item.message, false, false, render)) }
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+pub fn activity_page(shell: &Shell<'_>, items: &[ActivityItem], render: &Render<'_>) -> Markup {
+    panel_page(
+        "Activity",
+        shell,
+        &html! { "Activity" },
+        &html! {
+            @if items.is_empty() {
+                p class="text-muted dark:text-haint" {
+                    "When someone mentions you or replies in a thread you're part of, it shows up here."
+                }
+            } @else {
+                ol class="-mx-5 space-y-4" {
+                    @for item in items {
+                        li class="list-none" data-new[item.new] {
+                            p class="mb-0.5 flex items-center gap-2 px-5 text-xs font-semibold uppercase tracking-wide text-muted dark:text-haint" {
+                                @if item.mention { (icon(icons::AT, "h-3.5 w-3.5")) "Mentioned you" }
+                                @else { (icon(icons::ARROW_BEND_UP_LEFT, "h-3.5 w-3.5")) "Replied in a thread" }
+                                @if item.new { span class="rounded bg-lamp px-1.5 text-floor" { "New" } }
+                            }
+                            (located_heading(&item.located))
+                            ol { (message_item(&item.located.message, false, false, render)) }
                         }
                     }
                 }

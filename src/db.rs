@@ -280,6 +280,17 @@ CREATE TABLE channel_prefs (
     PRIMARY KEY (user_id, channel_id)
 );
 ",
+    r"
+-- Mentions and thread replies for each person's Activity page.
+CREATE TABLE activity (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL CHECK (reason IN ('mention', 'reply')),
+    PRIMARY KEY (user_id, message_id)
+);
+CREATE INDEX activity_by_message ON activity (message_id);
+ALTER TABLE users ADD COLUMN activity_seen_id INTEGER NOT NULL DEFAULT 0;
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on

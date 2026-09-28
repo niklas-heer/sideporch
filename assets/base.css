@@ -108,7 +108,7 @@
 
 /* Pickers are popovers that app.js places next to what opened them. A
    display utility on them must not show them while they are closed. */
-#emoji-picker, #gif-picker { position: fixed; inset: auto; }
+#emoji-picker, #gif-picker, #message-menu { position: fixed; inset: auto; }
 [popover]:not(:popover-open) { display: none; }
 
 /* The automation editor (editor.js): a textarea over a highlighted copy. */

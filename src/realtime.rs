@@ -33,6 +33,8 @@ pub enum Event {
         created_at: i64,
         html: String,
         reply_count: Option<i64>,
+        /// People for whom this lands on their Activity page.
+        activity: Vec<i64>,
     },
     /// A message changed: edited, pinned, deleted with replies left, or
     /// its preview or poll updated. `html` replaces the message.
@@ -49,6 +51,13 @@ pub enum Event {
         id: i64,
         parent_id: Option<i64>,
         reply_count: Option<i64>,
+    },
+    /// Someone is writing in a channel or, with `parent_id`, a thread.
+    Typing {
+        channel_id: i64,
+        parent_id: Option<i64>,
+        user_id: i64,
+        name: String,
     },
     /// A message's reactions changed. `html` replaces its reaction bar.
     Reactions {
@@ -122,9 +131,21 @@ impl Hub {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMessage {
-    Read { channel_id: i64, message_id: i64 },
-    Visibility { visible: bool },
+    Read {
+        channel_id: i64,
+        message_id: i64,
+    },
+    Visibility {
+        visible: bool,
+    },
+    Typing {
+        channel_id: i64,
+        parent_id: Option<i64>,
+    },
 }
+
+/// The shortest gap between two typing notices from one connection.
+const TYPING_INTERVAL: Duration = Duration::from_secs(2);
 
 pub async fn connect(
     ws: WebSocketUpgrade,
@@ -139,6 +160,7 @@ async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
     let (mut sink, mut stream) = socket.split();
     let mut keepalive = tokio::time::interval(Duration::from_secs(25));
     let mut visible = false;
+    let mut last_typing: Option<tokio::time::Instant> = None;
     loop {
         tokio::select! {
             event = events.recv() => match event {
@@ -165,6 +187,13 @@ async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
                         state.hub.set_visible(user_id, visible, now);
                         visible = now;
                     }
+                    Ok(ClientMessage::Typing { channel_id, parent_id }) => {
+                        let now = tokio::time::Instant::now();
+                        if last_typing.is_none_or(|last| now.duration_since(last) >= TYPING_INTERVAL) {
+                            last_typing = Some(now);
+                            announce_typing(&state, user_id, channel_id, parent_id).await;
+                        }
+                    }
                     Err(_) => {}
                 },
                 Some(Ok(WsMessage::Close(_)) | Err(_)) | None => break,
@@ -178,6 +207,31 @@ async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
         }
     }
     state.hub.set_visible(user_id, visible, false);
+}
+
+/// Tells the channel's readers that `user_id` is writing.
+async fn announce_typing(state: &AppState, user_id: i64, channel_id: i64, parent_id: Option<i64>) {
+    let found = state
+        .db
+        .call(move |conn| {
+            let Some(channel) = store::channel_for(conn, channel_id, user_id)? else {
+                return Ok(None);
+            };
+            let name = store::user(conn, user_id)?.map(|user| user.display_name);
+            Ok(name.map(|name| (channel.id, name, store::audience(conn, channel_id))))
+        })
+        .await;
+    if let Ok(Some((channel_id, name, Ok(audience)))) = found {
+        state.hub.publish(
+            audience,
+            &Event::Typing {
+                channel_id,
+                parent_id,
+                user_id,
+                name,
+            },
+        );
+    }
 }
 
 async fn mark_read(state: &AppState, user_id: i64, channel_id: i64, message_id: i64) {

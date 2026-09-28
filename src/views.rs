@@ -302,6 +302,7 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
             }
             div class="flex-1 overflow-y-auto px-3 pb-4" {
                 ul class="mb-4 space-y-0.5" data-sidebar-nav {
+                    (nav_link("/activity", icons::AT, "Activity", shell.sidebar.activity))
                     (nav_link("/saved", icons::BOOKMARK_SIMPLE, "Saved", false))
                 }
                 div class="mb-1 mt-2 flex items-center justify-between px-3 text-sm text-haint" {
@@ -607,6 +608,7 @@ fn composer(action: &str, parent: Option<i64>, label: &str) -> Markup {
                 }
             }
             p class="mt-1 hidden px-1 text-xs text-red-700 dark:text-red-300" data-composer-error role="alert" {}
+            p class="mt-0.5 h-4 truncate px-1 text-xs text-muted dark:text-haint" data-typing aria-live="polite" {}
         }
     }
 }

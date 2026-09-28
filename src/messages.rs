@@ -41,7 +41,7 @@ struct Posted {
     reply_count: Option<i64>,
     audience: Option<Vec<i64>>,
     ctx: markup::Context,
-    notify: Vec<i64>,
+    recipients: store::Recipients,
     automation_event: Option<MessageEvent>,
 }
 
@@ -113,17 +113,33 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
                 (Sender::Automation { .. }, _) | (_, Some(_)) => None,
                 _ => Some(MessageEvent::new(conn, &message)?),
             };
+            let recipients = store::recipients(conn, &message, user_id)?;
+            store::record_activity(conn, message.id, &recipients)?;
             Ok(Posted {
                 reply_count,
                 audience,
                 ctx: store::render_context(conn)?,
-                notify: store::notification_targets(conn, &message, user_id)?,
+                recipients,
                 automation_event,
                 message,
             })
         })
         .await?;
 
+    deliver(state, &posted);
+    let Posted {
+        message,
+        automation_event,
+        ..
+    } = posted;
+    if let Some(event) = automation_event {
+        state.automations.event(Event::Message(event));
+    }
+    Ok(message)
+}
+
+/// Shows a new message live and sends its push notifications.
+fn deliver(state: &AppState, posted: &Posted) {
     let html = views::message_item(
         &posted.message,
         false,
@@ -132,7 +148,7 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
     )
     .into_string();
     state.hub.publish(
-        posted.audience,
+        posted.audience.clone(),
         &realtime::Event::Message {
             channel_id: posted.message.channel_id,
             id: posted.message.id,
@@ -141,13 +157,16 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
             created_at: posted.message.created_at,
             html,
             reply_count: posted.reply_count,
+            activity: posted
+                .recipients
+                .mentioned
+                .iter()
+                .chain(&posted.recipients.thread)
+                .copied()
+                .collect(),
         },
     );
-    push::notify(state, &posted.message, posted.notify);
-    if let Some(event) = posted.automation_event {
-        state.automations.event(Event::Message(event));
-    }
-    Ok(posted.message)
+    push::notify(state, &posted.message, posted.recipients.notify.clone());
 }
 
 /// Shows the current state of a message to everyone who can see it.

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use common::{Browser, admin, between, home_channel, invite, last_message_id, start};
 use reqwest::StatusCode;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// Posts a form the way app.js does, in the background.
 async fn fetch_post(browser: &Browser, path: &str, form: &[(&str, &str)]) -> reqwest::Response {
@@ -497,4 +497,66 @@ async fn public_channels_can_be_left_rejoined_and_muted() {
     fetch_post(&member, &format!("/c/{noisy}/mute"), &[]).await;
     let home = member.page("/home").await;
     assert!(between(&home, &format!("data-channel-link=\"{noisy}\""), ">").contains("data-unread"));
+}
+
+#[tokio::test]
+async fn activity_collects_mentions_and_replies() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    assert!(member.page("/activity").await.contains("shows up here"));
+
+    member.send(general, "Anyone seen the ladder?", None).await;
+    let question = last_message_id(&member.page(&format!("/c/{general}")).await);
+    let mut live = member.live().await;
+    admin.send(general, "In the shed", Some(question)).await;
+    let event = next_of(&mut live, "message").await;
+    assert_eq!(event["activity"], json!([member.user_id().await]));
+    admin.send(general, "Thanks @mo!", None).await;
+
+    let home = member.page("/home").await;
+    assert!(between(&home, "href=\"/activity\"", ">").contains("data-unread"));
+    let activity = member.page("/activity").await;
+    assert!(activity.contains("Mentioned you") && activity.contains("Thanks"));
+    assert!(activity.contains("Replied in a thread") && activity.contains("In the shed"));
+    assert!(activity.contains("data-new"));
+    // Seen now.
+    assert!(!member.page("/activity").await.contains("data-new"));
+    assert!(
+        !between(&member.page("/home").await, "href=\"/activity\"", ">").contains("data-unread")
+    );
+    // Your own messages never land there.
+    assert!(!admin.page("/activity").await.contains("Thanks"));
+}
+
+#[tokio::test]
+async fn typing_shows_to_readers() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    let mut writer = admin.live().await;
+    let mut reader = member.live().await;
+    writer
+        .send(&json!({ "type": "typing", "channel_id": general, "parent_id": null }))
+        .await;
+    let typing = next_of(&mut reader, "typing").await;
+    assert_eq!(typing["name"], "Ada Admin");
+    assert_eq!(typing["channel_id"], general);
+    // Nobody hears about channels they can't read.
+    let secret = create_channel(&admin, "secret", true).await;
+    writer
+        .send(&json!({ "type": "typing", "channel_id": secret, "parent_id": null }))
+        .await;
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    writer
+        .send(&json!({ "type": "typing", "channel_id": secret, "parent_id": null }))
+        .await;
+    assert!(
+        reader
+            .next_event(Duration::from_millis(500))
+            .await
+            .is_none()
+    );
 }
