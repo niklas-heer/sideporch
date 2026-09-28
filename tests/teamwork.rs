@@ -758,3 +758,92 @@ async fn previews_never_reach_private_addresses() {
             .contains("Porch Building Guide")
     );
 }
+
+#[tokio::test]
+async fn backups_download_schedule_and_restore() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    admin.send(general, "Remember the porch paint", None).await;
+    admin
+        .upload(general, "", &[("colors.txt", b"sage green")])
+        .await;
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    assert_eq!(
+        member.get("/admin/backups/download").await.status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let download = admin.get("/admin/backups/download?key=on").await;
+    assert_eq!(download.status(), StatusCode::OK);
+    assert!(
+        download.headers()["content-disposition"]
+            .to_str()
+            .unwrap()
+            .contains("sideporch-")
+    );
+    let archive = download.bytes().await.unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let file = scratch.path().join("backup.tar.gz");
+    std::fs::write(&file, &archive).unwrap();
+    // Downloads leave nothing behind in the data directory.
+    assert!(
+        std::fs::read_dir(server.data_dir())
+            .unwrap()
+            .flatten()
+            .all(|entry| !entry.file_name().to_string_lossy().starts_with(".download"))
+    );
+
+    // Restoring refuses a directory with a database, then fills an empty one.
+    assert!(sideporch::restore(&file, server.data_dir(), false).is_err());
+    let restored = scratch.path().join("data");
+    assert!(sideporch::restore(&file, &restored, false).unwrap() >= 3);
+    assert!(restored.join("secret.key").exists());
+    let copy = common::start_with(|config| config.data_dir = restored.clone()).await;
+    let mut ada = Browser::anonymous(&copy);
+    ada.submit(
+        "/login",
+        &[("username", "ada"), ("password", "correct horse")],
+    )
+    .await;
+    let page = ada.page(&format!("/c/{general}")).await;
+    assert!(page.contains("Remember the porch paint"));
+    let file_id = between(&page, "/files/", "\"").to_owned();
+    assert_eq!(
+        ada.get(&format!("/files/{file_id}"))
+            .await
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        b"sage green"
+    );
+
+    // Scheduled backups keep the newest few.
+    let saved = admin
+        .post(
+            "/admin/backups",
+            &[("every_hours", "24"), ("keep", "1"), ("dir", "backups")],
+        )
+        .await;
+    assert_eq!(saved.status(), StatusCode::SEE_OTHER);
+    admin.post("/admin/backups/run", &[]).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    admin.post("/admin/backups/run", &[]).await;
+    let stored: Vec<_> = std::fs::read_dir(server.data_dir().join("backups"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert_eq!(stored.len(), 1);
+    let page = admin.page("/admin/backups").await;
+    let name = between(&page, "/admin/backups/files/", "\"").to_owned();
+    let stored = admin.get(&format!("/admin/backups/files/{name}")).await;
+    assert_eq!(stored.status(), StatusCode::OK);
+    assert_eq!(
+        admin
+            .get("/admin/backups/files/..%2Fsideporch.db")
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}

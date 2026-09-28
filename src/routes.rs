@@ -28,6 +28,7 @@ use crate::{
 mod account;
 mod admin;
 mod automation;
+mod backups;
 mod channels;
 mod gifs;
 mod later;
@@ -101,6 +102,7 @@ pub fn router(state: AppState) -> Router {
         .merge(message::router())
         .merge(channels::router())
         .merge(later::router())
+        .merge(backups::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),

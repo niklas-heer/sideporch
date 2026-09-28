@@ -15,8 +15,8 @@ use crate::{
 /// Tabs across the admin pages.
 fn tabs(current: &str) -> Markup {
     html! {
-        nav class="mb-6 flex gap-2" aria-label="Admin" {
-            @for (href, label) in [("/admin/system", "System"), ("/admin/gifs", "GIFs"), ("/admin/previews", "Link previews"), ("/people", "People"), ("/automations", "Automations")] {
+        nav class="mb-6 flex flex-wrap gap-2" aria-label="Admin" {
+            @for (href, label) in [("/admin/system", "System"), ("/admin/backups", "Backups"), ("/admin/gifs", "GIFs"), ("/admin/previews", "Link previews"), ("/people", "People"), ("/automations", "Automations")] {
                 a href=(href) aria-current=[(href == current).then_some("page")]
                     class="rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-screen aria-[current=page]:bg-haint-2 aria-[current=page]:text-floor dark:hover:bg-night-2 dark:aria-[current=page]:bg-floor-2 dark:aria-[current=page]:text-haint-2" {
                     (label)
@@ -296,6 +296,104 @@ pub fn previews_page(shell: &Shell<'_>, enabled: bool, saved: bool) -> Markup {
                 }
                 button type="submit" class="btn" { "Save" }
             }
+        },
+    )
+}
+
+pub struct BackupsView<'a> {
+    pub settings: &'a crate::backup::Settings,
+    pub status: &'a crate::backup::Status,
+    pub stored: &'a [crate::backup::Stored],
+    pub dir: &'a std::path::Path,
+    pub error: Option<&'a str>,
+}
+
+fn backup_schedule(view: &BackupsView<'_>) -> Markup {
+    let settings = view.settings;
+    html! {
+        form method="post" action="/admin/backups" class="max-w-lg space-y-4" {
+            div {
+                label for="backup-every" class="field-label" { "Back up" }
+                select id="backup-every" name="every_hours" class="field" {
+                    @for (hours, label) in crate::backup::INTERVALS {
+                        option value=(hours) selected[*hours == settings.every_hours] { (label) }
+                    }
+                }
+            }
+            div {
+                label for="backup-keep" class="field-label" { "Keep the newest" }
+                input id="backup-keep" name="keep" type="number" min="1" max="100" value=(settings.keep) class="field";
+            }
+            div {
+                label for="backup-dir" class="field-label" { "Directory" }
+                input id="backup-dir" name="dir" value=(settings.dir) class="field font-mono text-sm";
+                p class="mt-1 text-sm text-muted dark:text-haint" {
+                    "On the server; relative to the data directory. Now: " code { (view.dir.display()) }
+                    ". Better on another disk or volume, such as a Docker volume mounted at /backups."
+                }
+            }
+            label class="flex gap-3" {
+                input type="checkbox" name="include_key" value="on" checked[settings.include_key] class="mt-1";
+                span {
+                    span class="block font-semibold" { "Include the secret key" }
+                    span class="block text-sm text-muted dark:text-haint" { "Without it, restoring needs the same secret.key or SIDEPORCH_SECRET_KEY, or secrets must be entered again." }
+                }
+            }
+            button type="submit" class="btn" { "Save schedule" }
+        }
+    }
+}
+
+pub fn backups_page(shell: &Shell<'_>, view: &BackupsView<'_>) -> Markup {
+    let status = view.status;
+    panel_page(
+        "Backups",
+        shell,
+        &html! { "Backups" },
+        &html! {
+            (tabs("/admin/backups"))
+            (form_error(view.error))
+            (super::section("Download a backup", "One archive with the database, every stored file and, if you want, the secret key. The server keeps running while it is made.", &html! {
+                form method="get" action="/admin/backups/download" class="flex flex-wrap items-center gap-4" {
+                    label class="flex items-center gap-2" {
+                        input type="checkbox" name="key" value="on" checked;
+                        "Include the secret key"
+                    }
+                    button type="submit" class="btn" { (icon(icons::DOWNLOAD_SIMPLE, "h-5 w-5")) "Download backup" }
+                }
+            }))
+            (super::section("Scheduled backups", "Sideporch writes backups to a directory on the server and keeps the newest few.", &backup_schedule(view)))
+            (super::section("Stored backups", "", &html! {
+                @if let Some(at) = status.at {
+                    p class="mb-3 text-sm" {
+                        "Last run " (super::timestamp_date(at)) ": "
+                        @if let Some(error) = &status.error { span class="text-red-700 dark:text-red-300" { (error) } }
+                        @else { (status.file.as_deref().unwrap_or("done")) }
+                    }
+                }
+                form method="post" action="/admin/backups/run" class="mb-4" {
+                    button type="submit" class="btn-quiet" { "Back up now" }
+                }
+                @if view.stored.is_empty() {
+                    p class="text-muted dark:text-haint" { "None yet." }
+                } @else {
+                    ul {
+                        @for stored in view.stored {
+                            li class="flex items-center gap-3 border-b border-line py-2 last:border-b-0 dark:border-night-line" {
+                                a href={ "/admin/backups/files/" (stored.name) } class="min-w-0 flex-1 truncate font-mono text-sm underline" { (stored.name) }
+                                span class="text-sm text-muted dark:text-haint" { (system::bytes(stored.bytes)) }
+                            }
+                        }
+                    }
+                }
+            }))
+            (super::section("Restoring", "", &html! {
+                p class="max-w-xl" {
+                    "Stop Sideporch, then unpack a backup into an empty data directory with "
+                    code { "sideporch restore sideporch-….tar.gz --data /path/to/data" }
+                    ", and start it again. With Docker, run the same command in a one-off container that mounts the data volume."
+                }
+            }))
         },
     )
 }

@@ -80,7 +80,15 @@ Put Sideporch behind a reverse proxy such as Caddy for HTTPS. The proxy must pas
 
 ### Back up and move
 
-Everything lives in the data directory: the SQLite database `sideporch.db`, uploaded files and pictures in `files/` (named by their SHA-256, so they never change once written), and `secret.key`, which decrypts stored secrets. Stop Sideporch and copy the directory. To back up while it runs, copy the database with `sqlite3 sideporch-data/sideporch.db ".backup backup.db"` and then the rest of the directory, for example with rsync or restic; files are only ever added, so copying them after the database is safe. [Litestream](https://litestream.io) can replicate the database continuously; back up `files/` and `secret.key` alongside it.
+Everything lives in the data directory: the SQLite database `sideporch.db`, uploaded files and pictures in `files/` (named by their SHA-256, so they never change once written), and `secret.key`, which decrypts stored secrets.
+
+The simplest way is **Admin → Backups**: download one archive with all of it while Sideporch keeps running, or let Sideporch write backups on a schedule to a directory (ideally another disk or a mounted volume) and keep the newest few. To restore, stop Sideporch and unpack an archive into an empty data directory:
+
+```sh
+sideporch restore sideporch-20260928-101500.tar.gz --data /path/to/data
+```
+
+You can also stop Sideporch and copy the directory. To back up while it runs, copy the database with `sqlite3 sideporch-data/sideporch.db ".backup backup.db"` and then the rest of the directory, for example with rsync or restic; files are only ever added, so copying them after the database is safe. [Litestream](https://litestream.io) can replicate the database continuously; back up `files/` and `secret.key` alongside it.
 
 Sideporch 0.1 and 0.2 kept uploads inside the database. Newer versions move them to `files/` on the first start and then compact the database.
 

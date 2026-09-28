@@ -7,6 +7,7 @@ mod ai;
 mod assets;
 mod auth;
 mod automations;
+mod backup;
 mod blobs;
 mod db;
 mod emoji;
@@ -38,8 +39,8 @@ use std::{
 use axum::Router;
 use sha2::{Digest, Sha256};
 
-pub use crate::error::AppError as Error;
 use crate::{ai::Ai, automations::Automations, db::Db, push::Push, realtime::Hub, secrets::Vault};
+pub use crate::{backup::restore, error::AppError as Error};
 
 /// Where Sideporch keeps its data and how people reach it.
 #[derive(Debug, Clone)]
@@ -197,6 +198,7 @@ impl Sideporch {
         };
         state.automations.serve(state.clone());
         later::start(state.clone());
+        backup::start(state.clone());
         state.automations.reload(&state).await?;
         Ok(Self { state })
     }

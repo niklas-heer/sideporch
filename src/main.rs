@@ -39,6 +39,17 @@ enum Command {
     /// its user can read. With Docker: `docker exec <container> /sideporch setup-link`.
     /// It is only secret when the server runs with `--require-setup-link`.
     SetupLink,
+    /// Unpack a backup from Admin → Backups into the data directory.
+    ///
+    /// Stop the server first. The data directory must not hold a database
+    /// yet, unless you pass --force to replace it.
+    Restore {
+        /// The backup archive, a `sideporch-….tar.gz` file.
+        archive: PathBuf,
+        /// Replace the database that is already there.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -49,8 +60,24 @@ async fn main() -> ExitCode {
         )
         .init();
     let args = Args::parse();
-    if matches!(args.command, Some(Command::SetupLink)) {
-        return print_setup_link(&args.data);
+    match &args.command {
+        Some(Command::SetupLink) => return print_setup_link(&args.data),
+        Some(Command::Restore { archive, force }) => {
+            return match sideporch::restore(archive, &args.data, *force) {
+                Ok(count) => {
+                    println!(
+                        "Restored {count} files into {}. Start Sideporch with this data directory.",
+                        args.data.display()
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("Could not restore: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        None => {}
     }
     match run(args).await {
         Ok(()) => ExitCode::SUCCESS,
