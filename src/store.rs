@@ -197,6 +197,11 @@ pub struct Message {
     pub reply_count: i64,
     pub files: Vec<FileRef>,
     pub reactions: Vec<Reaction>,
+    pub edited_at: Option<i64>,
+    /// Set when a message with replies was deleted; its thread stays.
+    pub deleted: bool,
+    /// Who pinned it, if it is pinned.
+    pub pinned_by: Option<String>,
 }
 
 /// A GIF from a GIF service. Its media stays at the service's URLs, as the
@@ -512,8 +517,14 @@ pub fn home_channel(conn: &Connection) -> AppResult<Option<i64>> {
 const MESSAGE_SELECT: &str = "SELECT m.id, m.channel_id, m.parent_id, m.user_id, u.display_name,
         m.bot_name, m.bot_icon_url, m.body, m.attachments, m.created_at, m.webhook_id IS NOT NULL,
         u.avatar_file_id, COALESCE(u.status_emoji, ''), m.gif,
-        (SELECT COUNT(*) FROM messages r WHERE r.parent_id = m.id)
+        (SELECT COUNT(*) FROM messages r WHERE r.parent_id = m.id),
+        m.edited_at, m.deleted_at IS NOT NULL,
+        CASE WHEN m.pinned_at IS NULL THEN NULL
+             ELSE COALESCE((SELECT p.display_name FROM users p WHERE p.id = m.pinned_by), 'Someone') END
     FROM messages m LEFT JOIN users u ON u.id = m.user_id";
+
+/// How many columns [`MESSAGE_SELECT`] reads; queries add theirs after.
+const MESSAGE_COLUMNS: usize = 18;
 
 fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
     let user_id: Option<i64> = row.get(3)?;
@@ -550,6 +561,9 @@ fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
         reply_count: row.get(14)?,
         files: Vec::new(),
         reactions: Vec::new(),
+        edited_at: row.get(15)?,
+        deleted: row.get(16)?,
+        pinned_by: row.get(17)?,
     })
 }
 
@@ -760,6 +774,205 @@ pub fn latest_message_id(conn: &Connection, channel_id: i64) -> AppResult<Option
         [channel_id],
         |row| row.get(0),
     )?)
+}
+
+/// Rewrites a message's search entry from what it holds now.
+fn reindex(conn: &Connection, id: i64) -> AppResult<()> {
+    conn.execute("DELETE FROM messages_fts WHERE rowid = ?1", [id])?;
+    let Some(message) = message(conn, id)? else {
+        return Ok(());
+    };
+    if message.deleted {
+        return Ok(());
+    }
+    let mut searchable = vec![message.body.clone()];
+    searchable.extend(message.files.iter().map(|file| file.name.clone()));
+    for attachment in &message.attachments {
+        searchable.extend(attachment.searchable_text());
+    }
+    if let Some(gif) = &message.gif {
+        searchable.push(gif.title.clone());
+    }
+    conn.execute(
+        "INSERT INTO messages_fts (rowid, content) VALUES (?1, ?2)",
+        params![id, searchable.join("\n")],
+    )?;
+    Ok(())
+}
+
+/// The message if `user_id` may read its channel.
+pub fn readable_message(
+    conn: &Connection,
+    user_id: i64,
+    channel_id: i64,
+    message_id: i64,
+) -> AppResult<Option<Message>> {
+    if channel_for(conn, channel_id, user_id)?.is_none() {
+        return Ok(None);
+    }
+    Ok(message(conn, message_id)?.filter(|message| message.channel_id == channel_id))
+}
+
+/// Replaces a message's text and marks it edited.
+pub fn edit_message(conn: &Connection, id: i64, body: &str, now: i64) -> AppResult<()> {
+    conn.execute(
+        "UPDATE messages SET body = ?1, edited_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
+        params![body, now, id],
+    )?;
+    reindex(conn, id)
+}
+
+/// Deletes a message with its files and reactions. A message that starts a
+/// thread with replies stays as a placeholder, so the thread does too.
+pub fn delete_message(conn: &Connection, id: i64, now: i64) -> AppResult<()> {
+    // Files only this message uses go with it.
+    conn.execute(
+        "DELETE FROM files WHERE id IN (
+             SELECT mf.file_id FROM message_files mf WHERE mf.message_id = ?1
+             AND NOT EXISTS (SELECT 1 FROM message_files o WHERE o.file_id = mf.file_id AND o.message_id != ?1))",
+        [id],
+    )?;
+    let has_replies: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM messages WHERE parent_id = ?1)",
+        [id],
+        |row| row.get(0),
+    )?;
+    if has_replies {
+        conn.execute(
+            "UPDATE messages SET body = '', attachments = NULL, gif = NULL, deleted_at = ?1,
+                 pinned_at = NULL, pinned_by = NULL WHERE id = ?2",
+            params![now, id],
+        )?;
+        conn.execute("DELETE FROM message_files WHERE message_id = ?1", [id])?;
+        conn.execute("DELETE FROM reactions WHERE message_id = ?1", [id])?;
+        conn.execute(
+            "DELETE FROM automation_reactions WHERE message_id = ?1",
+            [id],
+        )?;
+        conn.execute("DELETE FROM saved_messages WHERE message_id = ?1", [id])?;
+        conn.execute("DELETE FROM messages_fts WHERE rowid = ?1", [id])?;
+    } else {
+        let parent: Option<i64> = conn.query_row(
+            "SELECT parent_id FROM messages WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )?;
+        conn.execute("DELETE FROM messages WHERE id = ?1", [id])?;
+        // A placeholder whose last reply is gone has nothing left to show.
+        conn.execute(
+            "DELETE FROM messages WHERE id = ?1 AND deleted_at IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.parent_id = ?1)",
+            [parent],
+        )?;
+    }
+    Ok(())
+}
+
+/// Pins or unpins a message. Returns whether it is pinned now.
+pub fn toggle_pin(conn: &Connection, id: i64, user_id: i64, now: i64) -> AppResult<bool> {
+    let pinned: bool = conn.query_row(
+        "SELECT pinned_at IS NOT NULL FROM messages WHERE id = ?1",
+        [id],
+        |row| row.get(0),
+    )?;
+    if pinned {
+        conn.execute(
+            "UPDATE messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ?1",
+            [id],
+        )?;
+    } else {
+        conn.execute(
+            "UPDATE messages SET pinned_at = ?1, pinned_by = ?2 WHERE id = ?3 AND deleted_at IS NULL",
+            params![now, user_id, id],
+        )?;
+    }
+    Ok(!pinned)
+}
+
+/// A channel's pinned messages, most recently pinned first.
+pub fn pinned_messages(conn: &Connection, channel_id: i64) -> AppResult<Vec<Message>> {
+    let mut statement = conn.prepare(&format!(
+        "{MESSAGE_SELECT} WHERE m.channel_id = ?1 AND m.pinned_at IS NOT NULL ORDER BY m.pinned_at DESC"
+    ))?;
+    let mut messages = statement
+        .query_map([channel_id], message_from_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    hydrate(conn, &mut messages)?;
+    Ok(messages)
+}
+
+pub fn pinned_count(conn: &Connection, channel_id: i64) -> AppResult<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE channel_id = ?1 AND pinned_at IS NOT NULL",
+        [channel_id],
+        |row| row.get(0),
+    )?)
+}
+
+/// Saves a message for later, or forgets it. Returns whether it is saved now.
+pub fn toggle_saved(conn: &Connection, user_id: i64, message_id: i64, now: i64) -> AppResult<bool> {
+    let removed = conn.execute(
+        "DELETE FROM saved_messages WHERE user_id = ?1 AND message_id = ?2",
+        params![user_id, message_id],
+    )?;
+    if removed == 0 {
+        conn.execute(
+            "INSERT INTO saved_messages (user_id, message_id, created_at) VALUES (?1, ?2, ?3)",
+            params![user_id, message_id, now],
+        )?;
+    }
+    Ok(removed == 0)
+}
+
+/// The ids among `messages` that `user_id` saved.
+pub fn saved_ids(
+    conn: &Connection,
+    user_id: i64,
+    messages: &[&Message],
+) -> AppResult<std::collections::HashSet<i64>> {
+    let ids = serde_json::to_string(&messages.iter().map(|m| m.id).collect::<Vec<_>>())
+        .map_err(crate::error::AppError::internal)?;
+    let mut statement = conn.prepare(
+        "SELECT message_id FROM saved_messages WHERE user_id = ?1
+         AND message_id IN (SELECT value FROM json_each(?2))",
+    )?;
+    let rows = statement.query_map(params![user_id, ids], |row| row.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// A message with where it was posted, for lists across channels.
+pub struct Located {
+    pub message: Message,
+    pub channel: String,
+    pub is_direct: bool,
+}
+
+/// Where a message lives, as the reader sees it: `#name` or a person.
+fn locate(conn: &Connection, user_id: i64, message: Message) -> AppResult<Option<Located>> {
+    Ok(
+        channel_for(conn, message.channel_id, user_id)?.map(|channel| Located {
+            is_direct: channel.kind == ChannelKind::Direct,
+            channel: channel.name,
+            message,
+        }),
+    )
+}
+
+/// What `user_id` saved, newest first, in channels they can still read.
+pub fn saved_messages(conn: &Connection, user_id: i64) -> AppResult<Vec<Located>> {
+    let mut statement = conn.prepare(&format!(
+        "{MESSAGE_SELECT} JOIN saved_messages s ON s.message_id = m.id
+         WHERE s.user_id = ?1 ORDER BY s.created_at DESC LIMIT 200"
+    ))?;
+    let mut messages = statement
+        .query_map([user_id], message_from_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    hydrate(conn, &mut messages)?;
+    let mut located = Vec::new();
+    for message in messages {
+        located.extend(locate(conn, user_id, message)?);
+    }
+    Ok(located)
 }
 
 // Invites
@@ -1207,19 +1420,19 @@ pub fn search(
                SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = ?2))
          ORDER BY m.id DESC LIMIT ?3"
     ).replace(
-        "(SELECT COUNT(*) FROM messages r WHERE r.parent_id = m.id)",
-        "(SELECT COUNT(*) FROM messages r WHERE r.parent_id = m.id),
-         snippet(messages_fts, 0, char(1), char(2), '…', 16), c.kind,
+        "FROM messages m LEFT JOIN",
+        ", snippet(messages_fts, 0, char(1), char(2), '…', 16), c.kind,
          COALESCE(c.name, (SELECT u2.display_name FROM channel_members o JOIN users u2 ON u2.id = o.user_id
-                           WHERE o.channel_id = c.id AND o.user_id != ?2), 'yourself')",
+                           WHERE o.channel_id = c.id AND o.user_id != ?2), 'yourself')
+         FROM messages m LEFT JOIN",
     ))?;
     let hits = statement.query_map(params![query, user_id, limit], |row| {
-        let kind: String = row.get(16)?;
+        let kind: String = row.get(MESSAGE_COLUMNS.saturating_add(1))?;
         Ok(SearchHit {
             message: message_from_row(row)?,
-            snippet: row.get(15)?,
+            snippet: row.get(MESSAGE_COLUMNS)?,
             is_direct: kind == "dm",
-            channel: row.get(17)?,
+            channel: row.get(MESSAGE_COLUMNS.saturating_add(2))?,
         })
     })?;
     Ok(hits.collect::<Result<_, _>>()?)

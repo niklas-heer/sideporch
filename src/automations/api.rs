@@ -90,7 +90,7 @@ pub const FUNCTIONS: &[Function] = &[
             optional("handler", Kind::Function),
         ],
         snippet: "on(\"message\", { channel = \"$0\" }, function(msg)\n  \nend)",
-        doc: "Calls `handler(event)` when `event` happens: `\"message\"` (new messages in public channels), `\"reaction_added\"`, `\"reaction_removed\"`, `\"reaction\"` (both), `\"member_joined\"` or `\"channel_created\"`. An optional filter table between them narrows it down: `channel` (name), `pattern` (a Lua pattern the message text must match), `emoji`, `user` (username) and `thread` (`true` for replies in threads, `false` for the rest). Posts and reactions from automations never trigger handlers. The event table's `event` field names the event.",
+        doc: "Calls `handler(event)` when `event` happens: `\"message\"` (new messages in public channels), `\"message_changed\"` (edited; the table has the new text), `\"message_deleted\"` (the table has what it said), `\"reaction_added\"`, `\"reaction_removed\"`, `\"reaction\"` (both), `\"member_joined\"` or `\"channel_created\"`. An optional filter table between them narrows it down: `channel` (name), `pattern` (a Lua pattern the message text must match), `emoji`, `user` (username) and `thread` (`true` for replies in threads, `false` for the rest). Posts and reactions from automations never trigger handlers. The event table's `event` field names the event.",
         must_use: false,
     },
     Function {

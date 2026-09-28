@@ -150,6 +150,150 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
     Ok(posted.message)
 }
 
+/// Shows the current state of a message to everyone who can see it.
+pub async fn refresh(state: &AppState, message_id: i64) -> AppResult<()> {
+    let found = state
+        .db
+        .call(move |conn| {
+            let Some(message) = store::message(conn, message_id)? else {
+                return Ok(None);
+            };
+            let audience = store::audience(conn, message.channel_id)?;
+            Ok(Some((message, audience, store::render_context(conn)?)))
+        })
+        .await?;
+    if let Some((message, audience, ctx)) = found {
+        publish_changed(state, audience, &message, &ctx);
+    }
+    Ok(())
+}
+
+fn publish_changed(
+    state: &AppState,
+    audience: Option<Vec<i64>>,
+    message: &Message,
+    ctx: &markup::Context,
+) {
+    let html = views::message_item(
+        message,
+        false,
+        message.parent_id.is_none(),
+        &views::Render::shared(ctx),
+    )
+    .into_string();
+    state.hub.publish(
+        audience,
+        &realtime::Event::MessageChanged {
+            channel_id: message.channel_id,
+            id: message.id,
+            parent_id: message.parent_id,
+            html,
+        },
+    );
+}
+
+/// Who may change a message: its author edits it; its author or an admin
+/// deletes it.
+pub enum Change {
+    Edit(String),
+    Delete,
+}
+
+/// Edits or deletes a message after checking the user may, shows the
+/// change live, and tells automations about public channels.
+pub async fn change(
+    state: &AppState,
+    user: &crate::auth::CurrentUser,
+    channel_id: i64,
+    message_id: i64,
+    change: Change,
+) -> AppResult<()> {
+    let user_id = user.id;
+    let is_admin = user.is_admin;
+    let now = now_ms();
+    let deleting = matches!(change, Change::Delete);
+    let (before, after, audience, ctx, reply_count) = state
+        .db
+        .call(move |conn| {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let message = store::readable_message(&tx, user_id, channel_id, message_id)?
+                .filter(|message| !message.deleted)
+                .ok_or(AppError::NotFound)?;
+            let own = matches!(message.author, store::Author::User { id, .. } if id == user_id);
+            match &change {
+                Change::Edit(body) => {
+                    if !own {
+                        return Err(AppError::Forbidden);
+                    }
+                    store::edit_message(&tx, message_id, body, now)?;
+                }
+                Change::Delete => {
+                    if !own && !is_admin {
+                        return Err(AppError::Forbidden);
+                    }
+                    store::delete_message(&tx, message_id, now)?;
+                }
+            }
+            tx.commit()?;
+            let after = store::message(conn, message_id)?;
+            let reply_count = match message.parent_id {
+                Some(parent) => store::message(conn, parent)?.map(|parent| parent.reply_count),
+                None => None,
+            };
+            let audience = store::audience(conn, channel_id)?;
+            let before = if audience.is_none() {
+                Some(MessageEvent::new(conn, &message)?)
+            } else {
+                None
+            };
+            Ok((
+                (message, before),
+                after,
+                audience,
+                store::render_context(conn)?,
+                reply_count,
+            ))
+        })
+        .await?;
+    let (message, event) = before;
+    if let Some(after) = &after {
+        publish_changed(state, audience, after, &ctx);
+    } else {
+        {
+            state.hub.publish(
+                audience.clone(),
+                &realtime::Event::MessageDeleted {
+                    channel_id,
+                    id: message_id,
+                    parent_id: message.parent_id,
+                    reply_count: message.parent_id.map(|_| reply_count.unwrap_or(0)),
+                },
+            );
+            // A deleted thread start goes once its last reply does.
+            if let (Some(parent), None) = (message.parent_id, reply_count) {
+                state.hub.publish(
+                    audience,
+                    &realtime::Event::MessageDeleted {
+                        channel_id,
+                        id: parent,
+                        parent_id: None,
+                        reply_count: None,
+                    },
+                );
+            }
+        }
+    }
+    if let Some(mut event) = event {
+        if deleting {
+            state.automations.event(Event::MessageDeleted(event));
+        } else if let Some(after) = after {
+            event.text = after.body;
+            state.automations.event(Event::MessageChanged(event));
+        }
+    }
+    Ok(())
+}
+
 /// Adds or removes the user's `emoji` reaction, shows the change live, and
 /// tells automations about reactions in public channels.
 pub async fn toggle_reaction(
@@ -165,7 +309,7 @@ pub async fn toggle_reaction(
         .call(move |conn| {
             store::channel_for(conn, channel_id, user_id)?.ok_or(AppError::NotFound)?;
             let message = store::message(conn, message_id)?
-                .filter(|message| message.channel_id == channel_id)
+                .filter(|message| message.channel_id == channel_id && !message.deleted)
                 .ok_or(AppError::NotFound)?;
             let ctx = store::render_context(conn)?;
             if !ctx.has_emoji(&emoji) {

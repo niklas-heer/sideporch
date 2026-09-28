@@ -1363,7 +1363,9 @@ fn channel_table(lua: &Lua, event: &ChannelEvent) -> mlua::Result<Table> {
 
 fn event_table(lua: &Lua, event: &Event) -> mlua::Result<Table> {
     let table = match event {
-        Event::Message(message) => message_table(lua, message)?,
+        Event::Message(message)
+        | Event::MessageChanged(message)
+        | Event::MessageDeleted(message) => message_table(lua, message)?,
         Event::Reaction(reaction) => reaction_table(lua, reaction)?,
         Event::MemberJoined(member) => member_table(lua, member)?,
         Event::ChannelCreated(channel) => channel_table(lua, channel)?,

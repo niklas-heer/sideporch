@@ -34,6 +34,22 @@ pub enum Event {
         html: String,
         reply_count: Option<i64>,
     },
+    /// A message changed: edited, pinned, deleted with replies left, or
+    /// its preview or poll updated. `html` replaces the message.
+    MessageChanged {
+        channel_id: i64,
+        id: i64,
+        parent_id: Option<i64>,
+        html: String,
+    },
+    /// A message is gone. `reply_count` is the parent's new count for a
+    /// deleted reply.
+    MessageDeleted {
+        channel_id: i64,
+        id: i64,
+        parent_id: Option<i64>,
+        reply_count: Option<i64>,
+    },
     /// A message's reactions changed. `html` replaces its reaction bar.
     Reactions {
         channel_id: i64,

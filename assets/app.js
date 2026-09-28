@@ -97,6 +97,59 @@
     return count === 1 ? "1 reply" : `${count} replies`;
   }
 
+  function updateReplyCount(parentId, count) {
+    if (count === null || count === undefined) return;
+    if (app.dataset.thread === String(parentId)) {
+      const label = document.getElementById("thread-count");
+      if (label) label.textContent = replyLabel(count);
+    }
+    const link = document.querySelector(`[data-reply-count="${parentId}"]`);
+    if (!link) return;
+    link.classList.toggle("hidden", count === 0);
+    link.classList.toggle("inline-flex", count > 0);
+    const label = link.querySelector("span");
+    if (label) label.textContent = replyLabel(count);
+  }
+
+  // Every copy of a message on the page: the channel list and, for the
+  // first message of an open thread, the thread panel.
+  function messageCopies(id) {
+    return [...document.querySelectorAll(`li[id="m${id}"]`)];
+  }
+
+  function replaceMessage(id, html) {
+    for (const current of messageCopies(id)) {
+      // Leave a message alone while someone edits it here.
+      if (current.querySelector("form[data-edit]")) continue;
+      const template = document.createElement("template");
+      template.innerHTML = html.trim();
+      const next = template.content.firstElementChild;
+      if (!next) return;
+      if (current.dataset.compact !== undefined) next.dataset.compact = "";
+      // Saved is personal, and live updates are rendered for everyone.
+      if (current.dataset.saved !== undefined) next.dataset.saved = "";
+      if (current.closest("aside") && !current.closest("#replies")) next.querySelector("[data-reply-count]")?.remove();
+      localizeTimes(next);
+      markOwnReactions(next);
+      drawDiagrams(next);
+      current.replaceWith(next);
+    }
+  }
+
+  function removeMessage(event) {
+    if (app.dataset.thread === String(event.id)) {
+      location.href = `/c/${event.channel_id}`;
+      return;
+    }
+    for (const current of messageCopies(event.id)) {
+      const next = current.nextElementSibling;
+      // The next message loses its shared header if it relied on this one.
+      if (next?.dataset.compact !== undefined && current.dataset.compact === undefined) delete next.dataset.compact;
+      current.remove();
+    }
+    if (event.parent_id !== null) updateReplyCount(event.parent_id, event.reply_count);
+  }
+
   function handleEvent(event, socket) {
     if (event.type === "resync") {
       location.reload();
@@ -104,6 +157,14 @@
     }
     if (event.type === "reactions") {
       replaceReactions(event.message_id, event.html);
+      return;
+    }
+    if (event.type === "message_changed") {
+      replaceMessage(event.id, event.html);
+      return;
+    }
+    if (event.type === "message_deleted") {
+      removeMessage(event);
       return;
     }
     if (event.type !== "message") return;
@@ -120,16 +181,8 @@
       if (app.dataset.thread === String(event.parent_id)) {
         const replies = document.getElementById("replies");
         if (replies) appendMessage(replies, event.html, document.getElementById("thread-scroller"));
-        const count = document.getElementById("thread-count");
-        if (count && event.reply_count !== null) count.textContent = replyLabel(event.reply_count);
       }
-      const link = document.querySelector(`[data-reply-count="${event.parent_id}"]`);
-      if (link && event.reply_count !== null) {
-        link.classList.remove("hidden");
-        link.classList.add("inline-flex");
-        const label = link.querySelector("span");
-        if (label) label.textContent = replyLabel(event.reply_count);
-      }
+      updateReplyCount(event.parent_id, event.reply_count);
     }
     if (document.visibilityState === "visible" && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "read", channel_id: event.channel_id, message_id: event.id }));
@@ -428,6 +481,16 @@
     const suggestions = setupCommandSuggestions(form, textarea);
     textarea.addEventListener("keydown", (event) => {
       if (suggestions.handleKey(event)) return;
+      // Up in an empty composer edits your last message here.
+      if (event.key === "ArrowUp" && !textarea.value && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) {
+        const list = document.getElementById(form.elements.parent_id ? "replies" : "messages");
+        const mine = [...(list?.querySelectorAll(`li[data-user="${app?.dataset.me}"]:not([data-deleted])`) ?? [])].pop();
+        if (mine) {
+          event.preventDefault();
+          startEdit(mine);
+          return;
+        }
+      }
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         form.requestSubmit();
@@ -599,6 +662,142 @@
     });
   }
 
+  // A message's menu: edit, pin, save, copy a link and delete, in place.
+  // Without JavaScript the same link opens a page with these actions.
+  const messageMenu = document.createElement("div");
+  messageMenu.id = "message-menu";
+  messageMenu.setAttribute("popover", "");
+  messageMenu.className = "m-0 w-56 flex-col rounded-xl border border-line bg-white py-1 text-sm shadow-xl dark:border-night-line dark:bg-night-2 dark:text-haint-2";
+  document.body.append(messageMenu);
+
+  const post = (url, fields = {}) =>
+    fetch(url, { method: "POST", headers: { "x-sideporch-fetch": "1" }, body: new URLSearchParams(fields) });
+
+  function openMessageMenu(trigger, extraEntries = []) {
+    const item = trigger.closest("li[data-message-id]");
+    if (!item || !messageMenu.showPopover) return false;
+    const base = `/c/${item.dataset.channelId}/m/${item.dataset.messageId}`;
+    const mine = item.dataset.user === app?.dataset.me;
+    const admin = app?.dataset.admin !== undefined;
+    const deleted = item.dataset.deleted !== undefined;
+    const entries = [];
+    if (mine && !deleted) entries.push(["Edit message", () => startEdit(item)]);
+    if (!deleted) {
+      entries.push([item.dataset.pinned !== undefined ? "Unpin" : "Pin to channel", () => post(`${base}/pin`)]);
+      entries.push([
+        item.dataset.saved !== undefined ? "Remove from saved" : "Save for later",
+        async () => {
+          const response = await post(`${base}/save`);
+          if (!response.ok) return;
+          const { saved } = await response.json();
+          for (const copy of messageCopies(item.dataset.messageId)) {
+            if (saved) copy.dataset.saved = "";
+            else delete copy.dataset.saved;
+          }
+        },
+      ]);
+    }
+    entries.push(...extraEntries.map((entry) => entry(item, base)).filter(Boolean));
+    entries.push(["Copy link", () => navigator.clipboard?.writeText(`${location.origin}${base}`)]);
+    if ((mine || admin) && !deleted) {
+      entries.push([
+        "Delete message",
+        async () => {
+          if (confirm("Delete this message? This can't be undone.")) await post(`${base}/delete`);
+        },
+        "text-red-700 dark:text-red-300",
+      ]);
+    }
+    messageMenu.replaceChildren(
+      ...entries.map(([label, run, tone = ""]) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `block w-full px-3 py-1.5 text-left hover:bg-screen dark:hover:bg-night ${tone}`;
+        button.textContent = label;
+        button.addEventListener("click", () => {
+          messageMenu.hidePopover();
+          run();
+        });
+        return button;
+      }),
+    );
+    messageMenu.showPopover();
+    const box = trigger.getBoundingClientRect();
+    messageMenu.style.top = `${Math.max(8, Math.min(box.bottom + 4, innerHeight - messageMenu.offsetHeight - 8))}px`;
+    messageMenu.style.left = `${Math.max(8, Math.min(box.right - messageMenu.offsetWidth, innerWidth - messageMenu.offsetWidth - 8))}px`;
+    messageMenu.querySelector("button")?.focus();
+    return true;
+  }
+  const menuExtras = [];
+  document.addEventListener("click", (event) => {
+    const trigger = event.target.closest("a[data-actions]");
+    if (trigger && openMessageMenu(trigger, menuExtras)) event.preventDefault();
+  });
+
+  // Edits a message in place: Enter saves, Escape cancels.
+  async function startEdit(item) {
+    if (item.querySelector("form[data-edit]")) return;
+    const base = `/c/${item.dataset.channelId}/m/${item.dataset.messageId}`;
+    const response = await fetch(`${base}/source`);
+    if (!response.ok) return;
+    const { body } = await response.json();
+    const content = item.querySelector("[data-body]");
+    const form = document.createElement("form");
+    form.dataset.edit = "";
+    form.className = "my-1";
+    const textarea = document.createElement("textarea");
+    textarea.className = "field min-h-20 text-sm";
+    textarea.value = body;
+    textarea.setAttribute("aria-label", "Edit message");
+    const row = document.createElement("div");
+    row.className = "mt-1 flex items-center gap-2 text-xs text-muted dark:text-haint";
+    const hint = document.createElement("span");
+    hint.textContent = "Enter to save, Escape to cancel";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn-quiet ml-auto px-2 py-1 text-xs";
+    cancel.textContent = "Cancel";
+    const save = document.createElement("button");
+    save.type = "submit";
+    save.className = "btn px-2 py-1 text-xs";
+    save.textContent = "Save";
+    row.append(hint, cancel, save);
+    form.append(textarea, row);
+    const close = () => {
+      form.remove();
+      if (content) content.hidden = false;
+    };
+    if (content) {
+      content.hidden = true;
+      content.after(form);
+    } else {
+      item.querySelector(".min-w-0.flex-1")?.append(form);
+    }
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    cancel.addEventListener("click", close);
+    textarea.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+      } else if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!textarea.value.trim()) return;
+      const answer = await post(`${base}/edit`, { body: textarea.value });
+      if (answer.ok) {
+        close();
+      } else {
+        hint.textContent = (await answer.text()).slice(0, 200) || "Couldn't save. Try again.";
+        hint.className = "text-red-700 dark:text-red-300";
+      }
+    });
+  }
+
   function base64UrlToBytes(text) {
     const base64 = (text + "===".slice((text.length + 3) % 4)).replace(/-/g, "+").replace(/_/g, "/");
     return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
@@ -649,6 +848,9 @@
     }
   }
 
+  for (const link of document.querySelectorAll("a[data-nav-link]")) {
+    if (link.pathname === location.pathname) link.setAttribute("aria-current", "page");
+  }
   localizeTimes(document);
   markOwnReactions(document);
   drawDiagrams(document);

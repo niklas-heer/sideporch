@@ -19,6 +19,7 @@ pub mod admin;
 pub mod automations;
 pub mod emoji;
 pub mod gifs;
+pub mod messages;
 pub mod profile;
 pub mod search;
 pub mod settings;
@@ -29,18 +30,35 @@ pub mod settings;
 pub struct Render<'a> {
     pub ctx: &'a Context,
     pub viewer: Option<i64>,
+    /// Messages the viewer saved for later.
+    pub saved: Option<&'a std::collections::HashSet<i64>>,
 }
 
 impl<'a> Render<'a> {
     pub const fn shared(ctx: &'a Context) -> Self {
-        Self { ctx, viewer: None }
+        Self {
+            ctx,
+            viewer: None,
+            saved: None,
+        }
     }
 
     pub const fn for_user(ctx: &'a Context, viewer: i64) -> Self {
         Self {
             ctx,
             viewer: Some(viewer),
+            saved: None,
         }
+    }
+
+    #[must_use]
+    pub const fn with_saved(mut self, saved: &'a std::collections::HashSet<i64>) -> Self {
+        self.saved = Some(saved);
+        self
+    }
+
+    fn is_saved(&self, id: i64) -> bool {
+        self.saved.is_some_and(|saved| saved.contains(&id))
     }
 
     /// Slack-style text, as webhooks send it.
@@ -240,6 +258,21 @@ fn sidebar_link(item: &SidebarItem, current: Option<i64>, svg: &str) -> Markup {
     }
 }
 
+/// A link to one of the personal pages at the top of the sidebar. app.js
+/// marks the open one.
+fn nav_link(href: &str, svg: &str, label: &str, badge: bool) -> Markup {
+    html! {
+        li {
+            a href=(href) data-nav-link data-unread[badge]
+                class="group flex items-center gap-2 rounded-lg px-3 py-1.5 text-haint-2 hover:bg-floor-2 aria-[current=page]:bg-floor-3 aria-[current=page]:text-white data-[unread]:font-bold data-[unread]:text-white" {
+                (icon(svg, "h-4 w-4 shrink-0 opacity-70"))
+                span class="truncate" { (label) }
+                span class="ml-auto hidden h-2 w-2 shrink-0 rounded-full bg-lamp group-data-[unread]:block" {}
+            }
+        }
+    }
+}
+
 fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
     let width = if full_width {
         "flex w-full md:w-72"
@@ -260,6 +293,9 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                 }
             }
             div class="flex-1 overflow-y-auto px-3 pb-4" {
+                ul class="mb-4 space-y-0.5" data-sidebar-nav {
+                    (nav_link("/saved", icons::BOOKMARK_SIMPLE, "Saved", false))
+                }
                 div class="mb-1 mt-2 flex items-center justify-between px-3 text-sm text-haint" {
                     h2 class="font-semibold" { "Channels" }
                     a href="/channels/new" class="rounded-md p-1 hover:bg-floor-2 hover:text-white" aria-label="Create a channel" title="Create a channel" {
@@ -326,7 +362,7 @@ const APP_BODY: &str = "bg-white text-ink antialiased dark:bg-night dark:text-ha
 
 fn app_page(title: &str, shell: &Shell<'_>, data: &PageData, main: &Markup) -> Markup {
     let page = html! {
-        div id="app" data-me=(shell.user.id) data-channel=[data.channel] data-thread=[data.thread] class="flex h-dvh overflow-hidden" {
+        div id="app" data-me=(shell.user.id) data-admin[shell.user.is_admin] data-channel=[data.channel] data-thread=[data.thread] class="flex h-dvh overflow-hidden" {
             (sidebar(shell, false))
             (main)
         }
@@ -380,6 +416,8 @@ pub struct ChannelView<'a> {
     pub favorites: &'a [String],
     /// Where the GIF picker searches.
     pub gifs: &'a crate::gifs::Settings,
+    /// How many messages are pinned in the channel.
+    pub pins: i64,
 }
 
 pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
@@ -408,8 +446,13 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
                         (channel.topic)
                     }
                 }
+                a href={ "/c/" (channel.id) "/pins" } class="ml-auto flex items-center gap-1 rounded-lg p-2 text-sm text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night-2"
+                    aria-label={ "Pinned messages: " (view.pins) } title="Pinned messages" {
+                    (icon(icons::PUSH_PIN, "h-5 w-5"))
+                    @if view.pins > 0 { span { (view.pins) } }
+                }
                 @if channel.kind == ChannelKind::Public {
-                    a href={ "/c/" (channel.id) "/settings" } class="ml-auto rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night-2"
+                    a href={ "/c/" (channel.id) "/settings" } class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night-2"
                         aria-label="Channel settings" title="Channel settings and webhooks" {
                         (icon(icons::GEAR_SIX, "h-5 w-5"))
                     }
@@ -569,14 +612,25 @@ pub fn message_item(
         Author::Removed => ("Former member", false),
     };
     let thread_href = format!("/c/{}/t/{}", message.channel_id, message.id);
+    let user_id = match &message.author {
+        Author::User { id, .. } => Some(*id),
+        _ => None,
+    };
     html! {
         li id={ "m" (message.id) } data-message-id=(message.id) data-author=(author_key(&message.author))
+            data-channel-id=(message.channel_id) data-user=[user_id] data-pinned[message.pinned_by.is_some()]
+            data-saved[render.is_saved(message.id)] data-deleted[message.deleted]
             data-created=(message.created_at) data-compact[compact]
-            class="group relative flex gap-3 px-5 py-1 hover:bg-screen data-[compact]:py-0.5 dark:hover:bg-night-2" {
+            class="group relative flex gap-3 px-5 py-1 hover:bg-screen data-[compact]:py-0.5 data-[pinned]:bg-amber-50 dark:hover:bg-night-2 dark:data-[pinned]:bg-floor/40" {
             div class="w-9 shrink-0 pt-0.5" {
                 div class="group-data-[compact]:hidden" { (avatar(&message.author, render.ctx)) }
             }
             div class="min-w-0 flex-1" {
+                @if let Some(pinner) = &message.pinned_by {
+                    p class="mb-0.5 flex items-center gap-1 text-xs font-semibold text-amber-800 dark:text-lamp" {
+                        (icon(icons::PUSH_PIN, "h-3.5 w-3.5")) "Pinned by " (pinner)
+                    }
+                }
                 div class="flex items-baseline gap-2 group-data-[compact]:hidden" {
                     @if let Author::User { id, status_emoji, .. } = &message.author {
                         a href={ "/people/" (id) } class="font-bold hover:underline" { (name) }
@@ -591,8 +645,13 @@ pub fn message_item(
                     }
                     (timestamp(message.created_at))
                 }
-                @if !message.body.is_empty() {
-                    div class="rich" { (render.body(message)) }
+                @if message.deleted {
+                    p class="italic text-muted dark:text-haint" { "This message was deleted." }
+                } @else if !message.body.is_empty() {
+                    div class="rich" data-body { (render.body(message)) }
+                }
+                @if let Some(edited) = message.edited_at {
+                    span class="text-xs text-muted dark:text-haint" title={ "Edited " (jiff::Timestamp::from_millisecond(edited).unwrap_or_default().strftime("%Y-%m-%d %H:%M UTC")) } { "(edited)" }
                 }
                 @if let Some(gif) = &message.gif {
                     (gif_card(gif))
@@ -624,6 +683,10 @@ pub fn message_item(
                     a href=(thread_href) aria-label="Reply in thread" title="Reply in thread" class="p-1.5 hover:bg-screen hover:text-ink dark:hover:bg-night" {
                         (icon(icons::ARROW_BEND_UP_LEFT, "h-4 w-4"))
                     }
+                }
+                a href={ "/c/" (message.channel_id) "/m/" (message.id) "/actions" } data-actions=(message.id)
+                    aria-label="More actions" title="More actions" class="p-1.5 hover:bg-screen hover:text-ink dark:hover:bg-night" {
+                    (icon(icons::DOTS_THREE, "h-4 w-4"))
                 }
             }
         }

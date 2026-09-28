@@ -13,6 +13,8 @@ use crate::{
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     Message,
+    MessageChanged,
+    MessageDeleted,
     ReactionAdded,
     ReactionRemoved,
     MemberJoined,
@@ -20,8 +22,10 @@ pub enum EventKind {
 }
 
 impl EventKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Message,
+        Self::MessageChanged,
+        Self::MessageDeleted,
         Self::ReactionAdded,
         Self::ReactionRemoved,
         Self::MemberJoined,
@@ -31,6 +35,8 @@ impl EventKind {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Message => "message",
+            Self::MessageChanged => "message_changed",
+            Self::MessageDeleted => "message_deleted",
             Self::ReactionAdded => "reaction_added",
             Self::ReactionRemoved => "reaction_removed",
             Self::MemberJoined => "member_joined",
@@ -125,6 +131,10 @@ pub struct ChannelEvent {
 #[derive(Debug, Clone)]
 pub enum Event {
     Message(MessageEvent),
+    /// Someone edited a message; the event holds the new text.
+    MessageChanged(MessageEvent),
+    /// Someone deleted a message; the event holds what it said.
+    MessageDeleted(MessageEvent),
     Reaction(ReactionEvent),
     MemberJoined(MemberEvent),
     ChannelCreated(ChannelEvent),
@@ -134,6 +144,8 @@ impl Event {
     pub const fn kind(&self) -> EventKind {
         match self {
             Self::Message(_) => EventKind::Message,
+            Self::MessageChanged(_) => EventKind::MessageChanged,
+            Self::MessageDeleted(_) => EventKind::MessageDeleted,
             Self::Reaction(event) if event.added => EventKind::ReactionAdded,
             Self::Reaction(_) => EventKind::ReactionRemoved,
             Self::MemberJoined(_) => EventKind::MemberJoined,
@@ -144,7 +156,9 @@ impl Event {
     /// The channel it happened in, without `#`.
     pub fn channel(&self) -> Option<&str> {
         match self {
-            Self::Message(message) => Some(&message.channel),
+            Self::Message(message)
+            | Self::MessageChanged(message)
+            | Self::MessageDeleted(message) => Some(&message.channel),
             Self::Reaction(reaction) => Some(&reaction.message.channel),
             Self::ChannelCreated(channel) => Some(&channel.channel),
             Self::MemberJoined(_) => None,
@@ -154,7 +168,9 @@ impl Event {
     /// The username of whoever caused it.
     pub fn username(&self) -> Option<&str> {
         match self {
-            Self::Message(message) => message.username.as_deref(),
+            Self::Message(message)
+            | Self::MessageChanged(message)
+            | Self::MessageDeleted(message) => message.username.as_deref(),
             Self::Reaction(reaction) => Some(&reaction.username),
             Self::MemberJoined(member) => Some(&member.username),
             Self::ChannelCreated(channel) => Some(&channel.username),
@@ -164,7 +180,9 @@ impl Event {
     /// The text patterns are matched against.
     pub fn text(&self) -> Option<&str> {
         match self {
-            Self::Message(message) => Some(&message.text),
+            Self::Message(message)
+            | Self::MessageChanged(message)
+            | Self::MessageDeleted(message) => Some(&message.text),
             Self::Reaction(reaction) => Some(&reaction.message.text),
             Self::MemberJoined(_) | Self::ChannelCreated(_) => None,
         }
@@ -180,7 +198,9 @@ impl Event {
     /// Whether it concerns a reply in a thread.
     pub const fn in_thread(&self) -> Option<bool> {
         match self {
-            Self::Message(message) => Some(message.thread_id.is_some()),
+            Self::Message(message)
+            | Self::MessageChanged(message)
+            | Self::MessageDeleted(message) => Some(message.thread_id.is_some()),
             Self::Reaction(reaction) => Some(reaction.message.thread_id.is_some()),
             Self::MemberJoined(_) | Self::ChannelCreated(_) => None,
         }

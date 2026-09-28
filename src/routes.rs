@@ -28,17 +28,19 @@ use crate::{
 mod admin;
 mod automation;
 mod gifs;
+mod message;
 mod profile;
 mod settings;
 
 pub use gifs::Posted as GifPosted;
+pub use message::message_href;
 
 pub use automation::{Change, apply_change, restore_version, run_test};
 
 /// Messages shown per page of channel history.
 const PAGE_SIZE: usize = 100;
 const PAGE_FETCH: u32 = 101;
-const MAX_MESSAGE_CHARS: usize = 10_000;
+pub const MAX_MESSAGE_CHARS: usize = 10_000;
 const INVITE_DAYS: i64 = 7;
 
 pub fn router(state: AppState) -> Router {
@@ -92,6 +94,7 @@ pub fn router(state: AppState) -> Router {
         .merge(profile::router())
         .merge(admin::router())
         .merge(gifs::router())
+        .merge(message::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -521,17 +524,27 @@ async fn render_channel(
             let ctx = store::render_context(conn)?;
             let favorites = store::picker_emoji(conn, user_id)?;
             let gifs = crate::gifs::settings(conn, &vault)?;
+            let shown: Vec<&store::Message> = messages
+                .iter()
+                .chain(
+                    thread
+                        .iter()
+                        .flat_map(|(root, replies)| std::iter::once(root).chain(replies)),
+                )
+                .collect();
+            let saved = store::saved_ids(conn, user_id, &shown)?;
+            let pins = store::pinned_count(conn, channel_id)?;
             Ok((
                 channel,
                 messages,
                 older,
                 thread,
                 sidebar,
-                (ctx, favorites, gifs),
+                (ctx, favorites, gifs, saved, pins),
             ))
         })
         .await?;
-    let (ctx, favorites, gifs) = ctx;
+    let (ctx, favorites, gifs, saved, pins) = ctx;
     let shell = Shell {
         user,
         sidebar: &sidebar,
@@ -546,15 +559,16 @@ async fn render_channel(
             thread: thread
                 .as_ref()
                 .map(|(root, replies)| (root, replies.as_slice())),
-            render: &Render::for_user(&ctx, user_id),
+            render: &Render::for_user(&ctx, user_id).with_saved(&saved),
             favorites: &favorites,
             gifs: &gifs,
+            pins,
         },
     ))
 }
 
 /// Browsers running app.js send this header and read `204` as success.
-fn wants_no_content(headers: &HeaderMap) -> bool {
+pub fn wants_no_content(headers: &HeaderMap) -> bool {
     headers.contains_key("x-sideporch-fetch")
 }
 

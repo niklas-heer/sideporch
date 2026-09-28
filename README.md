@@ -18,6 +18,7 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 - Channels anyone can join, direct messages, and threads one level deep.
 - Messages appear live over a WebSocket, with unread markers in the sidebar.
 - GitHub-flavored Markdown: headings, lists and task lists, tables, code blocks, quotes and alerts, links, `@mentions`, `:emoji:` codes, and [Mermaid](https://mermaid.js.org) diagrams in ```` ```mermaid ```` blocks. Webhook posts keep Slack's own formatting.
+- **Edit and delete** your messages (↑ in an empty composer edits your last one), **pin** messages to a channel, and **save** messages for later.
 - **Search** across every channel and conversation you're part of (SQLite full-text search).
 - **Files and images**: attach, paste or drop them into a message; images show inline, other files download. They are stored in the data directory, next to the database.
 - **GIFs** from the team's own library, which anyone can add to, or, if an admin chooses, from [GIPHY](https://giphy.com) or [KLIPY](https://klipy.com) with a free API key.

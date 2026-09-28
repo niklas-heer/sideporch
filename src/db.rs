@@ -242,6 +242,20 @@ CREATE TABLE gif_library (
 );
 CREATE INDEX gif_library_by_file ON gif_library (file_id);
 ",
+    r"
+ALTER TABLE messages ADD COLUMN edited_at INTEGER;
+ALTER TABLE messages ADD COLUMN deleted_at INTEGER;
+ALTER TABLE messages ADD COLUMN pinned_at INTEGER;
+ALTER TABLE messages ADD COLUMN pinned_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX messages_pinned ON messages (channel_id, pinned_at) WHERE pinned_at IS NOT NULL;
+
+CREATE TABLE saved_messages (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, message_id)
+);
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on
