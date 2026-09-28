@@ -38,6 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     css.hash(&mut hasher);
     fs::read_to_string("assets/app.js")?.hash(&mut hasher);
     fs::read_to_string("assets/editor.js")?.hash(&mut hasher);
+    fs::read_to_string("assets/vendor/emoji.tsv")?.hash(&mut hasher);
     println!(
         "cargo::rustc-env=SIDEPORCH_ASSET_VERSION={:x}",
         hasher.finish()

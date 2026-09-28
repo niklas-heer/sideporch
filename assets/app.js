@@ -245,6 +245,92 @@
     };
   }
 
+  // GIF search, shared by every composer on the page.
+  const gifPicker = document.getElementById("gif-picker");
+  let gifForm = null;
+  let gifTimer = 0;
+  async function searchGifs() {
+    const results = gifPicker.querySelector("[data-gif-results]");
+    const status = gifPicker.querySelector("[data-gif-status]");
+    const query = gifPicker.querySelector("[data-gif-search]").value;
+    status.textContent = "Loading…";
+    try {
+      const response = await fetch(`/gifs?q=${encodeURIComponent(query)}`);
+      if (!response.ok) throw new Error(await response.text());
+      const { results: gifs } = await response.json();
+      results.replaceChildren(
+        ...gifs.map((gif) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "overflow-hidden rounded-lg bg-screen hover:ring-2 hover:ring-floor-3 dark:bg-night";
+          button.title = gif.title;
+          const image = document.createElement("img");
+          image.src = gif.preview;
+          image.alt = gif.title;
+          image.loading = "lazy";
+          image.referrerPolicy = "no-referrer";
+          image.className = "h-auto w-full";
+          if (gif.width && gif.height) {
+            image.width = gif.width;
+            image.height = gif.height;
+          }
+          button.append(image);
+          button.addEventListener("click", () => sendGif(gif.id));
+          return button;
+        }),
+      );
+      status.textContent = gifs.length ? "" : "No GIFs found.";
+    } catch {
+      status.textContent = "GIF search is unavailable right now.";
+    }
+  }
+  function openGifs(form, trigger) {
+    if (!gifPicker?.showPopover) return;
+    gifForm = form;
+    gifPicker.showPopover();
+    const box = trigger.getBoundingClientRect();
+    gifPicker.style.left = `${Math.max(8, Math.min(box.left, innerWidth - gifPicker.offsetWidth - 8))}px`;
+    gifPicker.style.top = `${Math.max(8, box.top - gifPicker.offsetHeight - 8)}px`;
+    const search = gifPicker.querySelector("[data-gif-search]");
+    search.focus();
+    if (!gifPicker.dataset.loaded) {
+      gifPicker.dataset.loaded = "1";
+      search.addEventListener("input", () => {
+        clearTimeout(gifTimer);
+        gifTimer = setTimeout(searchGifs, 300);
+      });
+      searchGifs();
+    }
+  }
+  async function sendGif(id) {
+    if (!gifForm) return;
+    gifPicker.hidePopover();
+    const body = new URLSearchParams({ gif: id });
+    const parent = gifForm.elements.parent_id?.value;
+    if (parent) body.set("parent_id", parent);
+    const response = await fetch(gifForm.action, { method: "POST", headers: { "x-sideporch-fetch": "1" }, body });
+    if (!response.ok) {
+      const error = gifForm.querySelector("[data-composer-error]");
+      error.textContent = "The GIF wasn't sent. Try again.";
+      error.classList.remove("hidden");
+    }
+  }
+
+  // Pages marked with data-refresh reload their content every few seconds.
+  const refreshing = document.querySelector("[data-refresh]");
+  if (refreshing) {
+    setInterval(async () => {
+      if (document.visibilityState !== "visible") return;
+      const response = await fetch(location.href).catch(() => null);
+      if (!response?.ok) return;
+      const next = new DOMParser().parseFromString(await response.text(), "text/html").getElementById(refreshing.id);
+      if (next) {
+        refreshing.innerHTML = next.innerHTML;
+        localizeTimes(refreshing);
+      }
+    }, Number(refreshing.dataset.refresh) * 1000);
+  }
+
   function setupComposer(form) {
     const textarea = form.querySelector("textarea");
     const button = form.querySelector("button[type=submit]");
@@ -268,8 +354,15 @@
       fileList.replaceChildren(
         ...[...fileInput.files].map((file) => {
           const item = document.createElement("li");
-          item.className = "rounded-md bg-screen px-2 py-0.5 dark:bg-night-2";
-          item.textContent = file.name;
+          item.className = "flex items-center gap-1.5 rounded-md bg-screen px-2 py-0.5 dark:bg-night-2";
+          if (file.type.startsWith("image/")) {
+            const preview = document.createElement("img");
+            preview.src = URL.createObjectURL(file);
+            preview.alt = "";
+            preview.className = "h-8 w-8 rounded object-cover";
+            item.append(preview);
+          }
+          item.append(file.name);
           return item;
         }),
       );
@@ -277,6 +370,28 @@
       fileList.classList.toggle("flex", fileInput.files.length > 0);
     };
     fileInput?.addEventListener("change", showFiles);
+
+    // Pasted or dropped files join the attachments.
+    const addFiles = (files) => {
+      if (!fileInput || files.length === 0) return false;
+      const transfer = new DataTransfer();
+      for (const file of [...fileInput.files, ...files]) transfer.items.add(file);
+      fileInput.files = transfer.files;
+      showFiles();
+      return true;
+    };
+    textarea.addEventListener("paste", (event) => {
+      const files = [...(event.clipboardData?.files ?? [])];
+      if (addFiles(files)) event.preventDefault();
+    });
+    form.addEventListener("dragover", (event) => {
+      if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+    });
+    form.addEventListener("drop", (event) => {
+      const files = [...(event.dataTransfer?.files ?? [])];
+      if (addFiles(files)) event.preventDefault();
+    });
+    form.querySelector("[data-gif-button]")?.addEventListener("click", (event) => openGifs(form, event.currentTarget));
 
     const suggestions = setupCommandSuggestions(form, textarea);
     textarea.addEventListener("keydown", (event) => {
@@ -352,12 +467,92 @@
 
     const picker = document.getElementById("emoji-picker");
     if (!picker || !picker.showPopover) return;
+    const search = picker.querySelector("[data-emoji-search]");
+    const scroll = picker.querySelector("[data-emoji-scroll]");
+    const empty = picker.querySelector("[data-emoji-empty]");
+    let catalog = null;
+
+    // All standard emoji, loaded once, the first time the picker opens.
+    const loadCatalog = () => {
+      catalog ||= fetch(`/assets/emoji.json?v=${document.documentElement.dataset.assets || ""}`)
+        .then((response) => response.json())
+        .then(({ categories }) => {
+          const holder = picker.querySelector("[data-emoji-catalog]");
+          const tabs = picker.querySelector("[data-emoji-tabs]");
+          for (const [index, category] of categories.entries()) {
+            const section = document.createElement("section");
+            section.dataset.pickerSection = "";
+            section.id = `emoji-category-${index}`;
+            const heading = document.createElement("h3");
+            heading.className = "sticky top-0 z-[1] bg-white px-1 py-1 text-xs font-semibold text-muted dark:bg-night-2 dark:text-haint";
+            heading.textContent = category.name;
+            const grid = document.createElement("div");
+            grid.className = "grid grid-cols-8 gap-0.5";
+            for (const [name, glyph, keywords] of category.emoji) {
+              const button = document.createElement("button");
+              button.type = "button";
+              button.dataset.emoji = name;
+              button.dataset.keywords = `${name} ${keywords}`.toLowerCase();
+              button.title = `:${name}:`;
+              button.setAttribute("aria-label", name.replace(/_/g, " "));
+              button.className = "flex h-8 items-center justify-center rounded-md text-xl hover:bg-screen dark:hover:bg-night";
+              button.textContent = glyph;
+              grid.append(button);
+            }
+            section.append(heading, grid);
+            holder.append(section);
+            const tab = document.createElement("button");
+            tab.type = "button";
+            tab.title = category.name;
+            tab.setAttribute("aria-label", category.name);
+            tab.className = "rounded-md px-1 hover:bg-screen dark:hover:bg-night";
+            tab.textContent = category.emoji[0]?.[1] ?? "•";
+            tab.addEventListener("click", () => {
+              search.value = "";
+              filter();
+              section.scrollIntoView({ block: "start" });
+            });
+            tabs.append(tab);
+          }
+        })
+        .catch((error) => console.warn("sideporch: emoji unavailable", error));
+      return catalog;
+    };
+
+    const filter = () => {
+      const query = search.value.trim().toLowerCase().replace(/^:|:$/g, "");
+      let shown = 0;
+      for (const section of picker.querySelectorAll("[data-picker-section]")) {
+        let visible = 0;
+        for (const button of section.querySelectorAll("[data-emoji]")) {
+          const match = !query || (button.dataset.keywords || button.dataset.emoji).includes(query);
+          button.hidden = !match;
+          if (match) visible += 1;
+        }
+        section.hidden = visible === 0;
+        shown += visible;
+      }
+      empty.hidden = shown > 0;
+    };
+    search.addEventListener("input", filter);
+    search.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      const first = [...picker.querySelectorAll("[data-emoji]")].find((button) => !button.hidden && !button.closest("[hidden]"));
+      first?.click();
+    });
+
     document.addEventListener("click", (event) => {
       const trigger = event.target.closest("a[data-react]");
       if (!trigger) return;
       event.preventDefault();
       picker.dataset.message = trigger.dataset.react;
+      search.value = "";
+      filter();
+      scroll.scrollTop = 0;
       picker.showPopover();
+      loadCatalog().then(filter);
+      search.focus();
       const box = trigger.getBoundingClientRect();
       const top = Math.min(box.bottom + 6, innerHeight - picker.offsetHeight - 8);
       const left = Math.max(8, Math.min(box.right - picker.offsetWidth, innerWidth - picker.offsetWidth - 8));
@@ -428,6 +623,9 @@
   setupCopyButtons();
   setupReactions();
   setupPush().catch((error) => console.warn("sideporch: notifications unavailable", error));
+  if (app?.dataset.gifs !== undefined) {
+    for (const button of document.querySelectorAll("[data-gif-button]")) button.hidden = false;
+  }
   document.querySelectorAll("form[data-composer]").forEach(setupComposer);
   scrollToEnd(document.getElementById("scroller"));
   scrollToEnd(document.getElementById("thread-scroller"));

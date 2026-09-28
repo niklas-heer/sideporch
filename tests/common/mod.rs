@@ -14,19 +14,25 @@ use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest, http::H
 pub struct Server {
     pub base: String,
     setup_path: Option<String>,
-    _data: TempDir,
+    data: TempDir,
 }
 
 pub async fn start() -> Server {
+    start_with(|_| {}).await
+}
+
+/// Starts a server after `configure` adjusts its settings.
+pub async fn start_with(configure: impl FnOnce(&mut Config)) -> Server {
     let data = tempfile::tempdir().unwrap();
-    let app = Sideporch::open(Config {
+    let mut config = Config {
         data_dir: data.path().to_owned(),
         public_url: None,
         require_setup_link: false,
+        gif_api_base: None,
         allow_insecure_push: true,
-    })
-    .await
-    .unwrap();
+    };
+    configure(&mut config);
+    let app = Sideporch::open(config).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let setup_path = app.setup_path();
@@ -35,7 +41,14 @@ pub async fn start() -> Server {
     Server {
         base,
         setup_path,
-        _data: data,
+        data,
+    }
+}
+
+impl Server {
+    /// The data directory, to check what landed on disk.
+    pub fn data_dir(&self) -> &std::path::Path {
+        self.data.path()
     }
 }
 

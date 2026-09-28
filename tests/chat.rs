@@ -378,6 +378,7 @@ async fn a_required_setup_link_is_kept_private_and_removed_after_use() {
         data_dir: data.path().to_owned(),
         public_url: None,
         require_setup_link: true,
+        gif_api_base: None,
         allow_insecure_push: true,
     })
     .await

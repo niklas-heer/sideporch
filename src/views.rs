@@ -9,13 +9,16 @@ use crate::{
     icons::{self, icon},
     markup::{self, Context},
     store::{
-        Author, Channel, ChannelKind, FileRef, Invite, Message, Sidebar, SidebarItem, User, Webhook,
+        Author, Channel, ChannelKind, FileRef, Gif, Invite, Message, Sidebar, SidebarItem, User,
+        Webhook,
     },
     webhook::Attachment,
 };
 
+pub mod admin;
 pub mod automations;
 pub mod emoji;
+pub mod profile;
 pub mod search;
 pub mod settings;
 
@@ -62,7 +65,7 @@ const GROUP_WINDOW_MS: i64 = 5 * 60 * 1000;
 fn document(title: &str, body_class: &str, content: &Markup) -> Markup {
     html! {
         (DOCTYPE)
-        html lang="en" {
+        html lang="en" data-assets=(ASSET_VERSION) {
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover";
@@ -286,9 +289,15 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                 a href="/emoji" class="rounded-lg p-2 hover:bg-floor-2 hover:text-white" aria-label="Custom emoji" title="Custom emoji" {
                     (icon(icons::SMILEY, "h-5 w-5"))
                 }
+                a href="/settings/profile" class="rounded-lg p-2 hover:bg-floor-2 hover:text-white" aria-label="Your profile" title="Your profile" {
+                    (icon(icons::USER_CIRCLE, "h-5 w-5"))
+                }
                 @if shell.user.is_admin {
                     a href="/automations" class="rounded-lg p-2 hover:bg-floor-2 hover:text-white" aria-label="Automations" title="Automations" {
                         (icon(icons::LIGHTNING, "h-5 w-5"))
+                    }
+                    a href="/admin/system" class="rounded-lg p-2 hover:bg-floor-2 hover:text-white" aria-label="System" title="System and GIFs" {
+                        (icon(icons::GAUGE, "h-5 w-5"))
                     }
                 }
                 button type="button" data-push-toggle hidden aria-pressed="false"
@@ -317,7 +326,7 @@ const APP_BODY: &str = "bg-white text-ink antialiased dark:bg-night dark:text-ha
 fn app_page(title: &str, shell: &Shell<'_>, data: &PageData, main: &Markup) -> Markup {
     let page = html! {
         div id="app" data-me=(shell.user.id) data-channel=[data.channel] data-thread=[data.thread]
-            class="flex h-dvh overflow-hidden" {
+            data-gifs[shell.sidebar.gifs] class="flex h-dvh overflow-hidden" {
             (sidebar(shell, false))
             (main)
         }
@@ -367,6 +376,8 @@ pub struct ChannelView<'a> {
     pub older: Option<i64>,
     pub thread: Option<(&'a Message, &'a [Message])>,
     pub render: &'a Render<'a>,
+    /// Emoji names the reaction picker shows first.
+    pub favorites: &'a [String],
 }
 
 pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
@@ -428,7 +439,8 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
         &html! {
             (main)
             @if let Some(thread) = thread { (thread) }
-            (emoji_picker(view.render.ctx))
+            (emoji_picker(view.render.ctx, view.favorites))
+            (gif_picker())
         },
     )
 }
@@ -499,9 +511,13 @@ fn composer(action: &str, parent: Option<i64>, label: &str) -> Markup {
             }
             ul data-file-list class="mb-1.5 hidden flex-wrap gap-1.5 px-1 text-sm" {}
             div class="flex items-end gap-1 rounded-xl border border-line bg-white py-1.5 pl-1.5 pr-1.5 focus-within:border-floor-3 dark:border-night-line dark:bg-night-2" {
-                label class="cursor-pointer rounded-lg p-2 text-muted hover:bg-screen hover:text-ink focus-within:bg-screen dark:text-haint dark:hover:bg-night" title="Attach files" {
+                label class="cursor-pointer rounded-lg p-2 text-muted hover:bg-screen hover:text-ink focus-within:bg-screen dark:text-haint dark:hover:bg-night" title="Attach files or images (you can also paste or drop them)" {
                     input type="file" name="files" multiple class="sr-only" aria-label="Attach files";
                     (icon(icons::PAPERCLIP, "h-5 w-5"))
+                }
+                button type="button" data-gif-button hidden title="Send a GIF" aria-label="Send a GIF"
+                    class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night" {
+                    (icon(icons::GIF, "h-5 w-5"))
                 }
                 textarea name="body" rows="1" maxlength="10000" aria-label=(label) placeholder=(label)
                     class="max-h-48 min-h-6 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-hidden placeholder:text-muted" {}
@@ -560,7 +576,14 @@ pub fn message_item(
             }
             div class="min-w-0 flex-1" {
                 div class="flex items-baseline gap-2 group-data-[compact]:hidden" {
-                    span class="font-bold" { (name) }
+                    @if let Author::User { id, status_emoji, .. } = &message.author {
+                        a href={ "/people/" (id) } class="font-bold hover:underline" { (name) }
+                        @if !status_emoji.is_empty() {
+                            span class="text-sm" { (PreEscaped(markup::render(status_emoji, render.ctx))) }
+                        }
+                    } @else {
+                        span class="font-bold" { (name) }
+                    }
                     @if is_bot {
                         span class="rounded bg-haint-2 px-1.5 text-xs font-semibold text-floor dark:bg-floor-2 dark:text-haint-2" { "Bot" }
                     }
@@ -568,6 +591,9 @@ pub fn message_item(
                 }
                 @if !message.body.is_empty() {
                     div class="rich" { (render.body(message)) }
+                }
+                @if let Some(gif) = &message.gif {
+                    (gif_card(gif))
                 }
                 @for attachment in &message.attachments {
                     (attachment_card(attachment, render))
@@ -602,12 +628,36 @@ pub fn message_item(
     }
 }
 
+/// A GIF, shown from its service's URL with the attribution it asks for.
+fn gif_card(gif: &Gif) -> Markup {
+    html! {
+        figure class="mt-1.5 inline-block max-w-full" {
+            img src=(gif.url) alt=(gif.title) title=(gif.title) width=(gif.width) height=(gif.height)
+                loading="lazy" referrerpolicy="no-referrer"
+                class="block h-auto max-h-64 w-auto max-w-full rounded-lg bg-screen dark:bg-night-2";
+            figcaption class="mt-0.5 text-xs text-muted dark:text-haint" {
+                @if gif.provider == "giphy" { "via GIPHY" } @else { "GIF" }
+            }
+        }
+    }
+}
+
 pub fn timestamp(created_at: i64) -> Markup {
     let when = jiff::Timestamp::from_millisecond(created_at).unwrap_or_default();
     html! {
         time datetime=(when.to_string()) class="text-xs text-muted dark:text-haint" {
             (when.strftime("%H:%M UTC").to_string())
         }
+    }
+}
+
+/// A person as a message author, for their avatar.
+pub fn user_author(user: &User) -> Author {
+    Author::User {
+        id: user.id,
+        display_name: user.display_name.clone(),
+        avatar: user.avatar_file_id,
+        status_emoji: user.status_emoji.clone(),
     }
 }
 
@@ -623,7 +673,15 @@ const AVATAR_TONES: [&str; 6] = [
 fn avatar(author: &Author, ctx: &Context) -> Markup {
     let base = "flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg font-bold";
     match author {
-        Author::User { id, display_name } => {
+        Author::User {
+            avatar: Some(file_id),
+            ..
+        } => html! {
+            img src={ "/files/" (file_id) } alt="" loading="lazy" class={ (base) " bg-screen object-cover dark:bg-night-2" };
+        },
+        Author::User {
+            id, display_name, ..
+        } => {
             let tone = usize::try_from(id.rem_euclid(6))
                 .ok()
                 .and_then(|index| AVATAR_TONES.get(index))
@@ -753,48 +811,102 @@ pub fn reactions_bar(message: &Message, render: &Render<'_>) -> Markup {
     }
 }
 
-fn emoji_choices(ctx: &Context) -> Vec<(String, String)> {
-    markup::BUILTIN_EMOJI
-        .iter()
-        .take(markup::PICKER_SIZE)
-        .map(|(name, _)| (*name).to_owned())
-        .chain(ctx.custom_emoji.keys().cloned())
-        .filter_map(|name| ctx.emoji_html(&name).map(|html| (name, html)))
+/// Names with their rendered emoji, skipping unknown names.
+fn emoji_buttons<'a>(ctx: &Context, names: impl Iterator<Item = &'a str>) -> Vec<(String, String)> {
+    names
+        .filter_map(|name| ctx.emoji_html(name).map(|html| (name.to_owned(), html)))
         .collect()
 }
 
-/// One shared picker per page, opened next to a message by app.js.
-fn emoji_picker(ctx: &Context) -> Markup {
+fn picker_section(title: &str, choices: &[(String, String)], submit: bool) -> Markup {
     html! {
-        div id="emoji-picker" popover
-            class="m-0 w-72 rounded-xl border border-line bg-white p-2 shadow-xl dark:border-night-line dark:bg-night-2 dark:text-haint-2" {
-            div class="grid grid-cols-8 gap-0.5" {
-                @for (name, html) in emoji_choices(ctx) {
-                    button type="button" data-emoji=(name) title={ ":" (name) ":" } aria-label=(name)
-                        class="flex h-8 items-center justify-center rounded-md text-xl hover:bg-screen dark:hover:bg-night" {
-                        (PreEscaped(html))
+        @if !choices.is_empty() {
+            section data-picker-section {
+                h3 class="sticky top-0 z-[1] bg-white px-1 py-1 text-xs font-semibold text-muted dark:bg-night-2 dark:text-haint" { (title) }
+                div class="grid grid-cols-8 gap-0.5" {
+                    @for (name, html) in choices {
+                        button type=(if submit { "submit" } else { "button" }) name=[submit.then_some("emoji")] value=[submit.then_some(name.as_str())]
+                            data-emoji=(name) data-keywords=(name) title={ ":" (name) ":" } aria-label=(name)
+                            class="flex h-8 items-center justify-center rounded-md text-xl hover:bg-screen dark:hover:bg-night" {
+                            (PreEscaped(html))
+                        }
                     }
                 }
             }
-            a href="/emoji" class="mt-2 block px-1 text-xs text-muted underline-offset-2 hover:underline dark:text-haint" { "Add custom emoji" }
+        }
+    }
+}
+
+/// One shared picker per page, opened next to a message by app.js. Your
+/// emoji and custom emoji are rendered here; the full catalog loads when
+/// the picker first opens.
+fn emoji_picker(ctx: &Context, favorites: &[String]) -> Markup {
+    let yours = emoji_buttons(ctx, favorites.iter().map(String::as_str));
+    let custom = emoji_buttons(ctx, ctx.custom_emoji.keys().map(String::as_str));
+    html! {
+        div id="emoji-picker" popover
+            class="m-0 flex max-h-[26rem] w-80 flex-col rounded-xl border border-line bg-white shadow-xl dark:border-night-line dark:bg-night-2 dark:text-haint-2" {
+            div class="border-b border-line p-2 dark:border-night-line" {
+                label for="emoji-search" class="sr-only" { "Search emoji" }
+                input id="emoji-search" type="search" data-emoji-search placeholder="Search emoji" autocomplete="off"
+                    class="field py-1.5 text-sm";
+                nav data-emoji-tabs class="mt-1.5 flex justify-between text-lg" aria-label="Emoji categories" {}
+            }
+            div data-emoji-scroll class="min-h-0 flex-1 overflow-y-auto px-2 pb-2" {
+                (picker_section("Your emoji", &yours, false))
+                (picker_section("Custom", &custom, false))
+                div data-emoji-catalog {}
+                p data-emoji-empty hidden class="px-1 py-6 text-center text-sm text-muted dark:text-haint" { "No emoji found." }
+            }
+            div class="flex justify-between border-t border-line px-3 py-1.5 text-xs dark:border-night-line" {
+                a href="/settings/profile" class="text-muted hover:underline dark:text-haint" { "Choose your favorites" }
+                a href="/emoji" class="text-muted hover:underline dark:text-haint" { "Add custom emoji" }
+            }
+        }
+    }
+}
+
+/// The GIF search popover, opened from a composer by app.js.
+fn gif_picker() -> Markup {
+    html! {
+        div id="gif-picker" popover
+            class="m-0 flex max-h-[28rem] w-96 max-w-[95vw] flex-col rounded-xl border border-line bg-white shadow-xl dark:border-night-line dark:bg-night-2 dark:text-haint-2" {
+            div class="border-b border-line p-2 dark:border-night-line" {
+                label for="gif-search" class="sr-only" { "Search GIFs" }
+                input id="gif-search" type="search" data-gif-search placeholder="Search GIPHY" autocomplete="off" class="field py-1.5 text-sm";
+            }
+            div data-gif-results class="grid min-h-0 flex-1 grid-cols-2 gap-1 overflow-y-auto p-2" {}
+            p data-gif-status class="px-3 py-2 text-sm text-muted empty:hidden dark:text-haint" {}
+            p class="border-t border-line px-3 py-1.5 text-right text-xs font-semibold text-muted dark:border-night-line dark:text-haint" { "Powered by GIPHY" }
         }
     }
 }
 
 /// The reaction picker as a page, for browsers without JavaScript.
-pub fn react_page(shell: &Shell<'_>, channel_id: i64, message_id: i64, ctx: &Context) -> Markup {
+pub fn react_page(
+    shell: &Shell<'_>,
+    channel_id: i64,
+    message_id: i64,
+    ctx: &Context,
+    favorites: &[String],
+) -> Markup {
     let action = format!("/c/{channel_id}/m/{message_id}/reactions");
+    let yours = emoji_buttons(ctx, favorites.iter().map(String::as_str));
+    let custom = emoji_buttons(ctx, ctx.custom_emoji.keys().map(String::as_str));
     panel_page(
         "Add reaction",
         shell,
         &html! { "Add a reaction" },
         &html! {
-            form method="post" action=(action) class="grid max-w-md grid-cols-8 gap-1" {
-                @for (name, html) in emoji_choices(ctx) {
-                    button type="submit" name="emoji" value=(name) title={ ":" (name) ":" } aria-label=(name)
-                        class="flex h-10 items-center justify-center rounded-lg text-2xl hover:bg-screen dark:hover:bg-night-2" {
-                        (PreEscaped(html))
-                    }
+            form method="post" action=(action) class="max-w-md space-y-4" {
+                (picker_section("Your emoji", &yours, true))
+                (picker_section("Custom", &custom, true))
+                @for (category, label) in crate::emoji::CATEGORIES {
+                    @let choices: Vec<(String, String)> = crate::emoji::ALL.iter()
+                        .filter(|emoji| emoji.category == *category)
+                        .map(|emoji| (emoji.name().to_owned(), emoji.glyph.to_owned()))
+                        .collect();
+                    (picker_section(label, &choices, true))
                 }
             }
             a href={ "/c/" (channel_id) } class="btn-quiet mt-6" { "Back to the channel" }
@@ -960,7 +1072,7 @@ pub fn people_page(
                 ul {
                     @for user in users {
                         li class="flex items-center gap-3 border-b border-line py-3 last:border-b-0 dark:border-night-line" {
-                            (avatar(&Author::User { id: user.id, display_name: user.display_name.clone() }, &Context::default()))
+                            (avatar(&user_author(user), &Context::default()))
                             div class="min-w-0 flex-1" {
                                 p class="truncate font-semibold" {
                                     (user.display_name)

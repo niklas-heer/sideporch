@@ -106,8 +106,10 @@
   .rich pre.mermaid:not([data-processed]) { color: #B5C6C2; }
 }
 
-/* The reaction picker is a popover that app.js places next to a message. */
-#emoji-picker { position: fixed; inset: auto; }
+/* Pickers are popovers that app.js places next to what opened them. A
+   display utility on them must not show them while they are closed. */
+#emoji-picker, #gif-picker { position: fixed; inset: auto; }
+[popover]:not(:popover-open) { display: none; }
 
 /* The automation editor (editor.js): a textarea over a highlighted copy. */
 .code-editor.is-enhanced {

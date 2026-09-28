@@ -71,7 +71,9 @@ impl MessageEvent {
             |row| row.get(0),
         )?;
         let (author, username, is_bot) = match &message.author {
-            Author::User { id, display_name } => {
+            Author::User {
+                id, display_name, ..
+            } => {
                 let username: String =
                     conn.query_row("SELECT username FROM users WHERE id = ?1", [id], |row| {
                         row.get(0)

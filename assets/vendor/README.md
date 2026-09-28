@@ -14,3 +14,10 @@ To update, download the new package, check its integrity against
 `npm view mermaid@VERSION dist.integrity`, check that the bundle uses neither
 `eval` nor `new Function` (the page's Content Security Policy forbids them),
 compress it the same way, and update the file name in `src/assets.rs`.
+
+## emoji.tsv
+
+Every standard emoji with its names, category, keywords and description,
+from GitHub's [gemoji](https://github.com/github/gemoji) (MIT, © GitHub,
+Inc.), revision `fadaeaf1f1a9`. It gives `:shortcode:` names and fills the
+reaction picker. Regenerate it with `scripts/update-emoji.sh <revision>`.

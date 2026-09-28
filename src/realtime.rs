@@ -66,6 +66,13 @@ impl Default for Hub {
 }
 
 impl Hub {
+    /// How many people have Sideporch open and visible right now.
+    pub fn online_count(&self) -> usize {
+        self.visible.lock().map_or(0, |visible| {
+            visible.values().filter(|count| **count > 0).count()
+        })
+    }
+
     pub fn is_watching(&self, user_id: i64) -> bool {
         self.visible
             .lock()

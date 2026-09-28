@@ -32,6 +32,8 @@ pub struct SidebarItem {
 pub struct Sidebar {
     pub channels: Vec<SidebarItem>,
     pub direct: Vec<SidebarItem>,
+    /// Whether GIF search is set up, so composers offer it.
+    pub gifs: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -40,12 +42,144 @@ pub struct User {
     pub username: String,
     pub display_name: String,
     pub is_admin: bool,
+    pub avatar_file_id: Option<i64>,
+    pub status_emoji: String,
+    pub status_text: String,
+    pub bio: String,
+    pub links: Vec<ProfileLink>,
+    /// Shortcode names, in the order the person chose.
+    pub favorite_emoji: Vec<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ProfileLink {
+    pub label: String,
+    pub url: String,
+}
+
+const USER_COLUMNS: &str = "id, username, display_name, is_admin, avatar_file_id, status_emoji, \
+     status_text, bio, links, favorite_emoji, created_at";
+
+fn user_from_row(row: &Row<'_>) -> rusqlite::Result<User> {
+    let links: String = row.get(8)?;
+    let favorites: String = row.get(9)?;
+    Ok(User {
+        id: row.get(0)?,
+        username: row.get(1)?,
+        display_name: row.get(2)?,
+        is_admin: row.get(3)?,
+        avatar_file_id: row.get(4)?,
+        status_emoji: row.get(5)?,
+        status_text: row.get(6)?,
+        bio: row.get(7)?,
+        links: serde_json::from_str(&links).unwrap_or_default(),
+        favorite_emoji: favorites
+            .split_whitespace()
+            .map(ToOwned::to_owned)
+            .collect(),
+        created_at: row.get(10)?,
+    })
+}
+
+pub fn user(conn: &Connection, id: i64) -> AppResult<Option<User>> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {USER_COLUMNS} FROM users WHERE id = ?1"),
+            [id],
+            user_from_row,
+        )
+        .optional()?)
+}
+
+/// What someone can change about their profile.
+pub struct ProfileEdit {
+    pub display_name: String,
+    pub status_emoji: String,
+    pub status_text: String,
+    pub bio: String,
+    pub links: Vec<ProfileLink>,
+    pub favorite_emoji: Vec<String>,
+}
+
+pub fn update_profile(conn: &Connection, id: i64, edit: &ProfileEdit) -> AppResult<()> {
+    let links = serde_json::to_string(&edit.links).map_err(crate::error::AppError::internal)?;
+    conn.execute(
+        "UPDATE users SET display_name = ?1, status_emoji = ?2, status_text = ?3, bio = ?4,
+             links = ?5, favorite_emoji = ?6 WHERE id = ?7",
+        params![
+            edit.display_name,
+            edit.status_emoji,
+            edit.status_text,
+            edit.bio,
+            links,
+            edit.favorite_emoji.join(" "),
+            id
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn set_avatar(conn: &Connection, id: i64, file_id: Option<i64>) -> AppResult<()> {
+    conn.execute(
+        "UPDATE users SET avatar_file_id = ?1 WHERE id = ?2",
+        params![file_id, id],
+    )?;
+    Ok(())
+}
+
+/// The emoji the picker shows first for someone: their favorites, or else
+/// the ones they use most, filled up with popular defaults.
+pub fn picker_emoji(conn: &Connection, user_id: i64) -> AppResult<Vec<String>> {
+    const SHOWN: usize = 12;
+    let favorites: String = conn
+        .query_row(
+            "SELECT favorite_emoji FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+    let mut names: Vec<String> = favorites
+        .split_whitespace()
+        .map(ToOwned::to_owned)
+        .collect();
+    if names.is_empty() {
+        names = most_used_emoji(conn, user_id, 12)?;
+        for (name, _) in crate::markup::BUILTIN_EMOJI {
+            if names.len() >= SHOWN {
+                break;
+            }
+            if !names.iter().any(|known| known == name) {
+                names.push((*name).to_owned());
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// The emoji someone reacted with most, most used first.
+pub fn most_used_emoji(conn: &Connection, user_id: i64, limit: u32) -> AppResult<Vec<String>> {
+    let mut statement = conn.prepare(
+        "SELECT emoji FROM reactions WHERE user_id = ?1
+         GROUP BY emoji ORDER BY COUNT(*) DESC, MAX(created_at) DESC LIMIT ?2",
+    )?;
+    let names = statement.query_map(params![user_id, limit], |row| row.get(0))?;
+    Ok(names.collect::<Result<_, _>>()?)
 }
 
 #[derive(Debug, Clone)]
 pub enum Author {
-    User { id: i64, display_name: String },
-    Bot { name: String, icon: Option<String> },
+    User {
+        id: i64,
+        display_name: String,
+        avatar: Option<i64>,
+        status_emoji: String,
+    },
+    Bot {
+        name: String,
+        icon: Option<String>,
+    },
     Removed,
 }
 
@@ -58,11 +192,25 @@ pub struct Message {
     pub body: String,
     /// Written in Slack's mrkdwn by a webhook; everything else is Markdown.
     pub slack_format: bool,
+    /// A GIF from a GIF service, shown from the service's own URL.
+    pub gif: Option<Gif>,
     pub attachments: Vec<Attachment>,
     pub created_at: i64,
     pub reply_count: i64,
     pub files: Vec<FileRef>,
     pub reactions: Vec<Reaction>,
+}
+
+/// A GIF from a GIF service. Its media stays at the service's URLs, as the
+/// service's terms require.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct Gif {
+    pub provider: String,
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// A file attached to a message. The bytes are served from `/files/{id}`.
@@ -101,6 +249,7 @@ pub struct NewMessage<'a> {
     pub body: &'a str,
     pub attachments: &'a [Attachment],
     pub files: &'a [i64],
+    pub gif: Option<&'a Gif>,
     pub created_at: i64,
 }
 
@@ -165,17 +314,10 @@ pub fn login_record(conn: &Connection, username: &str) -> AppResult<Option<(i64,
 }
 
 pub fn users(conn: &Connection) -> AppResult<Vec<User>> {
-    let mut statement = conn.prepare(
-        "SELECT id, username, display_name, is_admin FROM users ORDER BY display_name COLLATE NOCASE",
-    )?;
-    let rows = statement.query_map([], |row| {
-        Ok(User {
-            id: row.get(0)?,
-            username: row.get(1)?,
-            display_name: row.get(2)?,
-            is_admin: row.get(3)?,
-        })
-    })?;
+    let mut statement = conn.prepare(&format!(
+        "SELECT {USER_COLUMNS} FROM users ORDER BY display_name COLLATE NOCASE"
+    ))?;
+    let rows = statement.query_map([], user_from_row)?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
@@ -353,7 +495,11 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
             })
         })?
         .collect::<Result<_, _>>()?;
-    Ok(Sidebar { channels, direct })
+    Ok(Sidebar {
+        channels,
+        direct,
+        gifs: crate::gifs::configured(conn)?,
+    })
 }
 
 /// The channel to open after signing in: `general` if it exists.
@@ -371,6 +517,7 @@ pub fn home_channel(conn: &Connection) -> AppResult<Option<i64>> {
 
 const MESSAGE_SELECT: &str = "SELECT m.id, m.channel_id, m.parent_id, m.user_id, u.display_name,
         m.bot_name, m.bot_icon_url, m.body, m.attachments, m.created_at, m.webhook_id IS NOT NULL,
+        u.avatar_file_id, COALESCE(u.status_emoji, ''), m.gif,
         (SELECT COUNT(*) FROM messages r WHERE r.parent_id = m.id)
     FROM messages m LEFT JOIN users u ON u.id = m.user_id";
 
@@ -379,7 +526,12 @@ fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
     let display_name: Option<String> = row.get(4)?;
     let bot_name: Option<String> = row.get(5)?;
     let author = match (user_id, display_name, bot_name) {
-        (Some(id), Some(display_name), _) => Author::User { id, display_name },
+        (Some(id), Some(display_name), _) => Author::User {
+            id,
+            display_name,
+            avatar: row.get(11)?,
+            status_emoji: row.get(12)?,
+        },
         (_, _, Some(name)) => Author::Bot {
             name,
             icon: row.get(6)?,
@@ -398,7 +550,10 @@ fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
             .unwrap_or_default(),
         created_at: row.get(9)?,
         slack_format: row.get(10)?,
-        reply_count: row.get(11)?,
+        gif: row
+            .get::<_, Option<String>>(13)?
+            .and_then(|json| serde_json::from_str(&json).ok()),
+        reply_count: row.get(14)?,
         files: Vec::new(),
         reactions: Vec::new(),
     })
@@ -548,8 +703,8 @@ pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64>
         Some(serde_json::to_string(new.attachments).map_err(crate::error::AppError::internal)?)
     };
     conn.execute(
-        "INSERT INTO messages (channel_id, parent_id, user_id, webhook_id, automation_id, bot_name, bot_icon_url, body, attachments, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO messages (channel_id, parent_id, user_id, webhook_id, automation_id, bot_name, bot_icon_url, body, attachments, created_at, gif)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             new.channel_id,
             new.parent_id,
@@ -560,7 +715,8 @@ pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64>
             new.bot_icon,
             new.body,
             attachments,
-            new.created_at
+            new.created_at,
+            new.gif.and_then(|gif| serde_json::to_string(gif).ok())
         ],
     )?;
     let id = conn.last_insert_rowid();
@@ -578,6 +734,9 @@ pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64>
     }
     for attachment in new.attachments {
         searchable.extend(attachment.searchable_text());
+    }
+    if let Some(gif) = new.gif {
+        searchable.push(gif.title.clone());
     }
     conn.execute(
         "INSERT INTO messages_fts (rowid, content) VALUES (?1, ?2)",
@@ -720,26 +879,40 @@ pub fn delete_webhook(conn: &Connection, channel_id: i64, webhook_id: i64) -> Ap
 
 // Files
 
+/// A file's metadata, for a file already written with [`crate::blobs`].
+pub struct NewFile<'a> {
+    pub name: &'a str,
+    pub mime: &'a str,
+    pub sha256: &'a str,
+    pub size: usize,
+}
+
 pub fn insert_file(
     conn: &Connection,
-    name: &str,
-    mime: &str,
-    data: &[u8],
+    file: &NewFile<'_>,
     uploaded_by: i64,
     now: i64,
 ) -> AppResult<i64> {
     conn.execute(
-        "INSERT INTO files (name, mime, size, data, uploaded_by, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![name, mime, i64::try_from(data.len()).unwrap_or(i64::MAX), data, uploaded_by, now],
+        "INSERT INTO files (name, mime, size, data, sha256, uploaded_by, created_at)
+         VALUES (?1, ?2, ?3, X'', ?4, ?5, ?6)",
+        params![
+            file.name,
+            file.mime,
+            i64::try_from(file.size).unwrap_or(i64::MAX),
+            file.sha256,
+            uploaded_by,
+            now
+        ],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
-/// A stored file with its bytes.
+/// A stored file. Its bytes are on disk under `sha256`.
 pub struct StoredFile {
     pub name: String,
     pub mime: String,
-    pub data: Vec<u8>,
+    pub sha256: String,
 }
 
 /// Returns the file if `user_id` may see it: they uploaded it, it is a
@@ -751,10 +924,11 @@ pub fn readable_file(
 ) -> AppResult<Option<StoredFile>> {
     Ok(conn
         .query_row(
-            "SELECT f.name, f.mime, f.data FROM files f
-             WHERE f.id = ?1 AND (
+            "SELECT f.name, f.mime, f.sha256 FROM files f
+             WHERE f.id = ?1 AND f.sha256 IS NOT NULL AND (
                  f.uploaded_by = ?2
                  OR EXISTS (SELECT 1 FROM custom_emoji e WHERE e.file_id = f.id)
+                 OR EXISTS (SELECT 1 FROM users u WHERE u.avatar_file_id = f.id)
                  OR EXISTS (
                      SELECT 1 FROM message_files mf
                      JOIN messages m ON m.id = mf.message_id
@@ -766,7 +940,7 @@ pub fn readable_file(
                 Ok(StoredFile {
                     name: row.get(0)?,
                     mime: row.get(1)?,
-                    data: row.get(2)?,
+                    sha256: row.get(2)?,
                 })
             },
         )
@@ -925,15 +1099,46 @@ pub fn search(
                            WHERE o.channel_id = c.id AND o.user_id != ?2), 'yourself')",
     ))?;
     let hits = statement.query_map(params![query, user_id, limit], |row| {
-        let kind: String = row.get(13)?;
+        let kind: String = row.get(16)?;
         Ok(SearchHit {
             message: message_from_row(row)?,
-            snippet: row.get(12)?,
+            snippet: row.get(15)?,
             is_direct: kind == "dm",
-            channel: row.get(14)?,
+            channel: row.get(17)?,
         })
     })?;
     Ok(hits.collect::<Result<_, _>>()?)
+}
+
+/// How much Sideporch holds, for the system page.
+#[derive(Debug, Clone, Default)]
+pub struct Counts {
+    pub users: i64,
+    pub channels: i64,
+    pub messages: i64,
+    pub files: i64,
+    pub reactions: i64,
+    pub automations: i64,
+    pub push_subscriptions: i64,
+}
+
+pub fn counts(conn: &Connection) -> AppResult<Counts> {
+    let count = |table: &str| -> AppResult<i64> {
+        Ok(
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })?,
+        )
+    };
+    Ok(Counts {
+        users: count("users")?,
+        channels: count("channels")?,
+        messages: count("messages")?,
+        files: count("files")?,
+        reactions: count("reactions")?,
+        automations: count("automations")?,
+        push_subscriptions: count("push_subscriptions")?,
+    })
 }
 
 // Settings

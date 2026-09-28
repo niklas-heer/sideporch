@@ -323,8 +323,9 @@ pub fn escape_text(out: &mut String, text: &str) {
     }
 }
 
-/// Built-in shortcodes: the ones monitors and CI systems send, and the ones
-/// people react with. The first [`PICKER_SIZE`] appear in the reaction picker.
+/// Popular shortcodes, in order: the default favorites in the reaction
+/// picker, and names chat tools use that the full set lacks. Every other
+/// standard emoji comes from [`crate::emoji`].
 pub const BUILTIN_EMOJI: &[(&str, &str)] = &[
     ("+1", "👍"),
     ("heart", "❤️"),
@@ -374,12 +375,11 @@ pub const BUILTIN_EMOJI: &[(&str, &str)] = &[
     ("thumbsdown", "👎"),
 ];
 
-pub const PICKER_SIZE: usize = 24;
-
 fn builtin_emoji(name: &str) -> Option<&'static str> {
     BUILTIN_EMOJI
         .iter()
         .find_map(|(shortcode, glyph)| (*shortcode == name).then_some(*glyph))
+        .or_else(|| crate::emoji::lookup(name))
 }
 
 #[cfg(test)]

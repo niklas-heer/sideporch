@@ -1,6 +1,7 @@
 //! File uploads, downloads and custom emoji.
 //!
-//! Files are stored in the database. Only PNG, JPEG, GIF and WebP images,
+//! File contents live on disk ([`crate::blobs`]), their metadata in the
+//! database. Only PNG, JPEG, GIF and WebP images,
 //! recognised by their first bytes rather than the browser's claim, are
 //! shown inline; everything else downloads as an attachment.
 
@@ -72,12 +73,16 @@ pub struct MessageInput {
     pub body: String,
     pub parent_id: Option<i64>,
     pub files: Vec<Upload>,
+    /// A GIF id from the GIF picker.
+    pub gif: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct PlainMessage {
+    #[serde(default)]
     body: String,
     parent_id: Option<i64>,
+    gif: Option<String>,
 }
 
 impl FromRequest<AppState> for MessageInput {
@@ -97,6 +102,7 @@ impl FromRequest<AppState> for MessageInput {
                 body: plain.body,
                 parent_id: plain.parent_id,
                 files: Vec::new(),
+                gif: plain.gif.filter(|gif| !gif.is_empty()),
             });
         }
         let mut form = Multipart::from_request(request, state)
@@ -106,6 +112,7 @@ impl FromRequest<AppState> for MessageInput {
             body: String::new(),
             parent_id: None,
             files: Vec::new(),
+            gif: None,
         };
         while let Some(field) = form.next_field().await.map_err(bad_upload)? {
             match field.name().unwrap_or_default() {
@@ -156,20 +163,50 @@ pub async fn store_uploads(
         return Ok(Vec::new());
     }
     let now = now_ms();
+    let stored = write_blobs(state, uploads).await?;
     state
         .db
         .call(move |conn| {
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let ids = uploads
+            let ids = stored
                 .iter()
-                .map(|upload| {
-                    store::insert_file(&tx, &upload.name, upload.mime(), &upload.data, user_id, now)
+                .map(|(upload, sha256)| {
+                    store::insert_file(
+                        &tx,
+                        &store::NewFile {
+                            name: &upload.name,
+                            mime: upload.mime(),
+                            sha256,
+                            size: upload.data.len(),
+                        },
+                        user_id,
+                        now,
+                    )
                 })
                 .collect::<AppResult<Vec<_>>>()?;
             tx.commit()?;
             Ok(ids)
         })
         .await
+}
+
+/// Writes uploads to disk and pairs each with its hash.
+pub async fn write_blobs(
+    state: &AppState,
+    uploads: Vec<Upload>,
+) -> AppResult<Vec<(Upload, String)>> {
+    let blobs = state.blobs.clone();
+    tokio::task::spawn_blocking(move || {
+        uploads
+            .into_iter()
+            .map(|upload| {
+                let hash = blobs.put(&upload.data)?;
+                Ok((upload, hash))
+            })
+            .collect::<AppResult<Vec<_>>>()
+    })
+    .await
+    .map_err(AppError::internal)?
 }
 
 /// Serves a file to someone who may see it.
@@ -190,7 +227,8 @@ pub async fn download(
         if inline { "inline" } else { "attachment" },
         percent_encode(&file.name)
     );
-    let mut response = (StatusCode::OK, file.data).into_response();
+    let data = state.blobs.read(&file.sha256).await?;
+    let mut response = (StatusCode::OK, data).into_response();
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
@@ -310,6 +348,10 @@ pub async fn add_emoji(
     };
     let user_id = user.id;
     let now = now_ms();
+    let mut written = write_blobs(&state, vec![image]).await?;
+    let (image, sha256) = written
+        .pop()
+        .ok_or_else(|| AppError::internal("the emoji image was not stored"))?;
     let added = state
         .db
         .call(move |conn| {
@@ -318,8 +360,17 @@ pub async fn add_emoji(
             if ctx.has_emoji(&name) {
                 return Ok(false);
             }
-            let file_id =
-                store::insert_file(&tx, &image.name, image.mime(), &image.data, user_id, now)?;
+            let file_id = store::insert_file(
+                &tx,
+                &store::NewFile {
+                    name: &image.name,
+                    mime: image.mime(),
+                    sha256: &sha256,
+                    size: image.data.len(),
+                },
+                user_id,
+                now,
+            )?;
             store::add_custom_emoji(&tx, &name, file_id, user_id, now)?;
             tx.commit()?;
             Ok(true)

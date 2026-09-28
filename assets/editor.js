@@ -777,6 +777,11 @@
     (aiForm?.elements.prompt || aiPanel.querySelector("a"))?.focus();
   });
 
+  // Saved versions and other script listings get the same highlighting.
+  for (const block of document.querySelectorAll("pre[data-lua]")) {
+    block.innerHTML = render(block.textContent, []).replace(/\n $/, "");
+  }
+
   paint();
   lint();
 })();

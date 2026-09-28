@@ -442,7 +442,7 @@ fn history_section(id: Option<i64>, versions: &[AutomationVersion]) -> Markup {
                                     span class="ml-auto rounded bg-haint-2 px-2 text-xs font-semibold text-floor dark:bg-floor-2 dark:text-haint-2" { "Current" }
                                 }
                             }
-                            pre class="mt-2 max-h-80 overflow-auto rounded bg-screen p-2 font-mono text-xs dark:bg-night-2" { (version.source) }
+                            pre data-lua class="code-preview mt-2 max-h-80" { (version.source) }
                             @if let (Some(id), true) = (id, index > 0) {
                                 form method="post" action={ "/automations/" (id) "/versions/" (version.id) "/restore" } class="mt-2" {
                                     button type="submit" class="btn-quiet text-sm" { (icon(icons::ARROW_COUNTER_CLOCKWISE, "h-4 w-4")) "Restore this version" }

@@ -215,6 +215,19 @@ CREATE TABLE secrets (
     updated_at INTEGER NOT NULL
 );
 ",
+    r"
+ALTER TABLE files ADD COLUMN sha256 TEXT;
+CREATE INDEX files_by_sha256 ON files (sha256);
+
+ALTER TABLE users ADD COLUMN avatar_file_id INTEGER REFERENCES files(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN status_emoji TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN status_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN bio TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN links TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE users ADD COLUMN favorite_emoji TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE messages ADD COLUMN gif TEXT;
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on

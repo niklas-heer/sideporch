@@ -33,6 +33,7 @@ pub struct Draft {
     pub body: String,
     pub attachments: Vec<Attachment>,
     pub files: Vec<i64>,
+    pub gif: Option<store::Gif>,
 }
 
 struct Posted {
@@ -91,6 +92,7 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
                     body: &draft.body,
                     attachments: &draft.attachments,
                     files: &draft.files,
+                    gif: draft.gif.as_ref(),
                     created_at: now,
                 },
             )?;

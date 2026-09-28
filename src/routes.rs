@@ -18,6 +18,7 @@ use crate::{
     automations,
     error::{AppError, AppResult},
     files::{self, MessageInput},
+    gifs,
     messages::{self, Draft, Sender},
     now_ms, push, realtime, search,
     store::{self, ChannelKind},
@@ -25,7 +26,9 @@ use crate::{
     webhook,
 };
 
+mod admin;
 mod automation;
+mod profile;
 mod settings;
 
 pub use automation::{Change, apply_change, restore_version, run_test};
@@ -84,6 +87,8 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .merge(automation::router())
         .merge(settings::router())
+        .merge(profile::router())
+        .merge(admin::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -510,9 +515,11 @@ async fn render_channel(
             }
             let sidebar = store::sidebar(conn, user_id)?;
             let ctx = store::render_context(conn)?;
-            Ok((channel, messages, older, thread, sidebar, ctx))
+            let favorites = store::picker_emoji(conn, user_id)?;
+            Ok((channel, messages, older, thread, sidebar, (ctx, favorites)))
         })
         .await?;
+    let (ctx, favorites) = ctx;
     let shell = Shell {
         user,
         sidebar: &sidebar,
@@ -528,6 +535,7 @@ async fn render_channel(
                 .as_ref()
                 .map(|(root, replies)| (root, replies.as_slice())),
             render: &Render::for_user(&ctx, user_id),
+            favorites: &favorites,
         },
     ))
 }
@@ -545,7 +553,7 @@ async fn post_message(
     input: MessageInput,
 ) -> AppResult<Response> {
     let body = input.body.trim().to_owned();
-    if body.is_empty() && input.files.is_empty() {
+    if body.is_empty() && input.files.is_empty() && input.gif.is_none() {
         return Err(AppError::bad_request(
             "Write something or attach a file before sending.",
         ));
@@ -573,6 +581,18 @@ async fn post_message(
             &answers,
         ));
     }
+    let gif = match &input.gif {
+        Some(id) => {
+            let vault = std::sync::Arc::clone(&state.vault);
+            let settings = state
+                .db
+                .call(move |conn| gifs::settings(conn, &vault))
+                .await?
+                .ok_or_else(|| AppError::bad_request("GIF search is not set up here."))?;
+            Some(state.gifs.gif(&settings, id).await?)
+        }
+        None => None,
+    };
     let files = files::store_uploads(&state, user_id, input.files).await?;
     let message = messages::post(
         &state,
@@ -583,6 +603,7 @@ async fn post_message(
             body,
             attachments: Vec::new(),
             files,
+            gif,
         },
     )
     .await?;
@@ -724,15 +745,24 @@ async fn react_page(
             store::message(conn, message_id)?
                 .filter(|message| message.channel_id == channel_id)
                 .ok_or(AppError::NotFound)?;
-            Ok((store::sidebar(conn, user_id)?, store::render_context(conn)?))
+            Ok((
+                store::sidebar(conn, user_id)?,
+                (
+                    store::render_context(conn)?,
+                    store::picker_emoji(conn, user_id)?,
+                ),
+            ))
         })
         .await?;
+    let (ctx, favorites) = ctx;
     let shell = Shell {
         user: &user,
         sidebar: &sidebar,
         current: Some(channel_id),
     };
-    Ok(views::react_page(&shell, channel_id, message_id, &ctx))
+    Ok(views::react_page(
+        &shell, channel_id, message_id, &ctx, &favorites,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -996,6 +1026,7 @@ async fn incoming_webhook(
         body: parsed.text,
         attachments: parsed.attachments,
         files: Vec::new(),
+        gif: None,
     };
     match messages::post(&state, draft).await {
         Ok(_) => (StatusCode::OK, "ok").into_response(),

@@ -8,7 +8,8 @@ Sideporch is a self-hosted team chat shipped as a single Rust binary. See [READM
 - `src/views.rs`: maud templates. `src/markup.rs`: Slack-style message formatting to safe HTML.
 - `src/messages.rs`: the one pipeline every new message takes (store, index, live update, push, automations).
 - `src/webhook.rs`: Slack-compatible webhook parsing. `src/realtime.rs`: WebSocket fan-out and presence.
-- `src/files.rs`: uploads, downloads, custom emoji. `src/search.rs`: FTS5 search. `src/push.rs`: Web Push.
+- `src/files.rs`: uploads, downloads, custom emoji; `src/blobs.rs` keeps file contents on disk by SHA-256. `src/search.rs`: FTS5 search. `src/push.rs`: Web Push.
+- `src/emoji.rs`: every standard emoji from gemoji (`assets/vendor/emoji.tsv`). `src/gifs.rs`: GIPHY search. `src/system.rs`: resource sampling for the admin's system page. `src/routes/profile.rs` and `src/routes/admin.rs`: profiles, the system page and GIF settings.
 - `src/automations.rs`: starts one worker per automation and routes events, webhooks, commands and live runs to them; also dry runs. In `src/automations/`: `worker.rs` (a script's thread), `sandbox.rs` (the Lua state and the `sideporch` API), `events.rs`, `cron.rs`, `http.rs` (outgoing requests with the internal-address guard), `tooling.rs` (lint with selene, format with StyLua), and `api.rs`, the API described once for the linter, editor completions, reference, AI prompt and MCP.
 - `src/secrets.rs`: encrypted secrets and their key. `src/markdown.rs`: GitHub-flavored Markdown for messages (`src/markup.rs` stays for Slack-format webhooks).
 - `src/ai.rs`: AI providers that write scripts. `src/mcp.rs`: the MCP server. `src/routes/automation.rs` and `src/routes/settings.rs`: their pages and endpoints.
@@ -19,7 +20,7 @@ Sideporch is a self-hosted team chat shipped as a single Rust binary. See [READM
 
 Use mise: `mise run check` runs formatting, Clippy with the strict lints in `Cargo.toml`, and all tests. `mise run dev` starts a local server. `mise run ci` runs the same checks in containers through Dagger (`.dagger/main.dang`), which also builds the static binaries and the `FROM scratch` image. Keep Rust, zig and cargo-zigbuild versions aligned across `mise.toml`, `rust-toolchain.toml` and the Dagger module.
 
-Build output grows quickly (a debug build with tests is about 2 GB). Clean up when you are done: `mise run clean-debug` removes debug builds and test binaries, `mise run clean` removes all of `target/` and `dist/`, and `mise run clean-ci` empties only this project's cache in the local Dagger engine.
+Build output grows quickly (a debug build with tests is several GB); `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` keeps it near 1.5 GB. Clean up when you are done: `mise run clean-debug` removes debug builds and test binaries, `mise run clean` removes all of `target/` and `dist/`, and `mise run clean-ci` empties only this project's cache in the local Dagger engine.
 
 Releases: bump `version` in `Cargo.toml`, then push a matching `vX.Y.Z` tag. Linux release binaries must stay fully static; `scripts/package.sh` refuses dynamic ones.
 

@@ -3,10 +3,10 @@ schema_version = 1
 id = "01M3J6PYWVD139NB5BKDX877CJ"
 title = "Store uploaded files inside the SQLite database"
 date = "2026-09-27"
-status = "accepted"
+status = "superseded"
 tags = ["storage", "files"]
 supersedes = []
-superseded_by = []
+superseded_by = ["01M3M94K5F7DPZBDQEZNQJS71W"]
 depends_on = ["01M3HRKXMTMQM93PHABB0VW2BC"]
 related_to = []
 +++

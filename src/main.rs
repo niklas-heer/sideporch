@@ -66,6 +66,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         data_dir: args.data.clone(),
         public_url: args.public_url,
         require_setup_link: args.require_setup_link,
+        gif_api_base: None,
         allow_insecure_push: false,
     })
     .await?;

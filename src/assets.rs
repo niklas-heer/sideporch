@@ -82,6 +82,16 @@ pub fn router() -> Router<AppState> {
             }),
         )
         .route(
+            "/assets/emoji.json",
+            get(|| async {
+                serve(
+                    "application/json",
+                    IMMUTABLE,
+                    crate::emoji::CATALOG.as_bytes(),
+                )
+            }),
+        )
+        .route(
             "/assets/mermaid.js",
             get(|| async {
                 (

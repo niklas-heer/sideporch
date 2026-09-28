@@ -19,8 +19,11 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 - Messages appear live over a WebSocket, with unread markers in the sidebar.
 - GitHub-flavored Markdown: headings, lists and task lists, tables, code blocks, quotes and alerts, links, `@mentions`, `:emoji:` codes, and [Mermaid](https://mermaid.js.org) diagrams in ```` ```mermaid ```` blocks. Webhook posts keep Slack's own formatting.
 - **Search** across every channel and conversation you're part of (SQLite full-text search).
-- **File uploads**: images show inline; other files download. Files live in the same database as everything else.
-- **Reactions** with emoji, and **custom emoji** anyone can add, like Slack's.
+- **Files and images**: attach, paste or drop them into a message; images show inline, other files download. They are stored in the data directory, next to the database.
+- **GIFs** from [GIPHY](https://giphy.com), once an admin adds a free API key.
+- **Reactions** with every standard emoji, in a searchable picker grouped by category, with your favorites or most used emoji first, plus **custom emoji** anyone can add.
+- **Profiles** with a picture, a status, a bio and links.
+- **A system page** for admins: CPU and memory with a short history, database and file sizes, free disk space, and activity.
 - **Push notifications** for direct messages, thread replies and mentions, sent by Sideporch itself through Web Push. On iPhone and iPad, add Sideporch to the home screen first.
 - **Automations**: Lua scripts that react to events, run on cron schedules, answer slash commands and webhooks, call APIs with encrypted secrets, and share code through libraries. They are written in an editor with a linter, formatter, test runs and version history, and AI can write them, from the editor or through MCP.
 - Set up in the browser: the first visitor creates the admin account, then invites everyone else. No email needed.
@@ -73,7 +76,9 @@ Put Sideporch behind a reverse proxy such as Caddy for HTTPS. The proxy must pas
 
 ### Back up and move
 
-Everything, including uploaded files, lives in one SQLite database in the data directory. Stop Sideporch and copy the directory, or copy it live with `sqlite3 sideporch-data/sideporch.db ".backup backup.db"`. [Litestream](https://litestream.io) can replicate it continuously.
+Everything lives in the data directory: the SQLite database `sideporch.db`, uploaded files and pictures in `files/` (named by their SHA-256, so they never change once written), and `secret.key`, which decrypts stored secrets. Stop Sideporch and copy the directory. To back up while it runs, copy the database with `sqlite3 sideporch-data/sideporch.db ".backup backup.db"` and then the rest of the directory, for example with rsync or restic; files are only ever added, so copying them after the database is safe. [Litestream](https://litestream.io) can replicate the database continuously; back up `files/` and `secret.key` alongside it.
+
+Sideporch 0.1 and 0.2 kept uploads inside the database. Newer versions move them to `files/` on the first start and then compact the database.
 
 ## Connect Gatus and other tools
 

@@ -461,6 +461,7 @@ async fn post(
             body: text,
             attachments: Vec::new(),
             files: Vec::new(),
+            gif: None,
         },
     )
     .await

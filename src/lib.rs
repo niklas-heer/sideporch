@@ -7,9 +7,12 @@ mod ai;
 mod assets;
 mod auth;
 mod automations;
+mod blobs;
 mod db;
+mod emoji;
 mod error;
 mod files;
+mod gifs;
 mod icons;
 mod markdown;
 mod markup;
@@ -21,6 +24,7 @@ mod routes;
 mod search;
 mod secrets;
 mod store;
+mod system;
 mod views;
 mod webhook;
 
@@ -47,6 +51,9 @@ pub struct Config {
     /// default the first person to open Sideporch creates it; lock setup
     /// when the server is reachable by others before you set it up.
     pub require_setup_link: bool,
+    /// Where the GIPHY API lives; tests point it at a local fake.
+    #[doc(hidden)]
+    pub gif_api_base: Option<String>,
     /// Accept plain-HTTP push endpoints. Browsers only use HTTPS ones; this
     /// exists so tests can run a local push service.
     #[doc(hidden)]
@@ -60,6 +67,10 @@ pub(crate) struct AppState {
     push: Arc<Push>,
     ai: Arc<Ai>,
     vault: Arc<Vault>,
+    blobs: blobs::Blobs,
+    gifs: Arc<gifs::Gifs>,
+    monitor: Arc<system::Monitor>,
+    data_dir: PathBuf,
     automations: Automations,
     public_url: Option<String>,
     secure_cookies: bool,
@@ -116,6 +127,19 @@ impl Sideporch {
         std::fs::create_dir_all(&config.data_dir).map_err(Error::internal)?;
         let db_path = config.data_dir.join("sideporch.db");
         let db = Db::open(&db_path)?;
+        let blobs = blobs::Blobs::open(&config.data_dir)?;
+        let store_blobs = blobs.clone();
+        let (moved, removed) = db
+            .call(move |conn| {
+                Ok((
+                    store_blobs.migrate(conn)?,
+                    store_blobs.collect_garbage(conn)?,
+                ))
+            })
+            .await?;
+        if moved > 0 || removed > 0 {
+            tracing::info!(moved, removed, "tidied file storage in the data directory");
+        }
         let now = now_ms();
         let public_url = config
             .public_url
@@ -149,6 +173,10 @@ impl Sideporch {
             push: Arc::new(push),
             ai: Arc::new(Ai::new()?),
             vault: Arc::new(Vault::open(&config.data_dir)?),
+            blobs,
+            gifs: Arc::new(gifs::Gifs::new(config.gif_api_base.clone())?),
+            monitor: system::Monitor::start(),
+            data_dir: config.data_dir.clone(),
             automations: Automations::start(&db_path),
             secure_cookies: public_url
                 .as_deref()
