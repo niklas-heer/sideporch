@@ -31,6 +31,10 @@ pub fn router() -> Router<AppState> {
         .route("/c/{channel_id}/m/{message_id}/delete", post(delete))
         .route("/c/{channel_id}/m/{message_id}/pin", post(pin))
         .route("/c/{channel_id}/m/{message_id}/save", post(save))
+        .route(
+            "/c/{channel_id}/m/{message_id}/preview/remove",
+            post(remove_preview),
+        )
         .route("/c/{channel_id}/pins", get(pins))
         .route("/saved", get(saved))
         .route("/activity", get(activity))
@@ -215,6 +219,30 @@ async fn save(
         &headers,
         &message_href(&message),
         json!({ "saved": saved }),
+    ))
+}
+
+/// The author or an admin hides a message's link preview.
+async fn remove_preview(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path((channel_id, message_id)): Path<(i64, i64)>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    let message = readable(&state, &user, channel_id, message_id).await?;
+    let own = matches!(message.author, store::Author::User { id, .. } if id == user.id);
+    if !own && !user.is_admin {
+        return Err(AppError::Forbidden);
+    }
+    state
+        .db
+        .call(move |conn| store::set_preview(conn, message_id, None))
+        .await?;
+    messages::refresh(&state, message_id).await?;
+    Ok(done(
+        &headers,
+        &message_href(&message),
+        serde_json::Value::Null,
     ))
 }
 

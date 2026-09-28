@@ -19,6 +19,7 @@ mod markdown;
 mod markup;
 mod mcp;
 mod messages;
+mod previews;
 mod push;
 mod realtime;
 mod routes;
@@ -59,6 +60,9 @@ pub struct Config {
     /// exists so tests can run a local push service.
     #[doc(hidden)]
     pub allow_insecure_push: bool,
+    /// Let link previews reach private addresses; tests serve pages locally.
+    #[doc(hidden)]
+    pub allow_private_link_previews: bool,
 }
 
 #[derive(Clone)]
@@ -71,6 +75,8 @@ pub(crate) struct AppState {
     blobs: blobs::Blobs,
     gifs: Arc<gifs::Gifs>,
     monitor: Arc<system::Monitor>,
+    /// Fetches link previews, guarded like automations' requests.
+    links: Arc<automations::http::Http>,
     data_dir: PathBuf,
     automations: Automations,
     public_url: Option<String>,
@@ -177,6 +183,9 @@ impl Sideporch {
             blobs,
             gifs: Arc::new(gifs::Gifs::new(config.gif_api_base.clone())?),
             monitor: system::Monitor::start(),
+            links: Arc::new(automations::http::Http::new(
+                config.allow_private_link_previews,
+            )?),
             data_dir: config.data_dir.clone(),
             automations: Automations::start(&db_path),
             secure_cookies: public_url

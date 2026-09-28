@@ -30,6 +30,7 @@ pub async fn start_with(configure: impl FnOnce(&mut Config)) -> Server {
         require_setup_link: false,
         gif_api_base: None,
         allow_insecure_push: true,
+        allow_private_link_previews: false,
     };
     configure(&mut config);
     let app = Sideporch::open(config).await.unwrap();

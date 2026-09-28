@@ -700,6 +700,9 @@ pub fn message_item(
                 @if let Some(gif) = &message.gif {
                     (gif_card(gif))
                 }
+                @if let Some(preview) = &message.preview {
+                    (preview_card(preview))
+                }
                 @for attachment in &message.attachments {
                     (attachment_card(attachment, render))
                 }
@@ -752,6 +755,30 @@ fn gif_card(gif: &Gif) -> Markup {
                 class="block h-auto max-h-64 w-auto max-w-full rounded-lg bg-screen dark:bg-night-2";
             @if let Some(credit) = credit {
                 figcaption class="mt-0.5 text-xs text-muted dark:text-haint" { (credit) }
+            }
+        }
+    }
+}
+
+/// What a message's first link shows. The image loads from the linked
+/// site, without a referrer.
+fn preview_card(preview: &crate::store::LinkPreview) -> Markup {
+    html! {
+        div data-preview class="mt-1.5 flex max-w-xl gap-3 rounded-r-lg border-l-4 border-haint bg-screen px-4 py-2.5 dark:border-floor-3 dark:bg-night-2" {
+            div class="min-w-0 flex-1" {
+                @if let Some(site) = &preview.site {
+                    p class="text-xs font-semibold text-muted dark:text-haint" { (site) }
+                }
+                a href=(preview.url) target="_blank" rel="noopener noreferrer nofollow" class="font-bold text-floor-3 hover:underline dark:text-haint-2" {
+                    (preview.title)
+                }
+                @if let Some(description) = &preview.description {
+                    p class="mt-0.5 line-clamp-3 text-sm" { (description) }
+                }
+            }
+            @if let Some(image) = &preview.image {
+                img src=(image) alt="" loading="lazy" referrerpolicy="no-referrer"
+                    class="h-20 w-20 shrink-0 rounded-md bg-white object-cover dark:bg-night";
             }
         }
     }

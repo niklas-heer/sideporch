@@ -137,6 +137,10 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
         automation_event,
         ..
     } = posted;
+    // People's links get previews; bots and webhooks format their own.
+    if matches!(message.author, store::Author::User { .. }) && message.body.contains("http") {
+        crate::previews::attach(state, &state.links, message.id, &message.body);
+    }
     if let Some(event) = automation_event {
         state.automations.event(Event::Message(event));
     }
@@ -311,6 +315,7 @@ pub async fn change(
         if deleting {
             state.automations.event(Event::MessageDeleted(event));
         } else if let Some(after) = after {
+            crate::previews::attach(state, &state.links, after.id, &after.body);
             event.text = after.body;
             state.automations.event(Event::MessageChanged(event));
         }

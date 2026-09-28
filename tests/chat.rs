@@ -380,6 +380,7 @@ async fn a_required_setup_link_is_kept_private_and_removed_after_use() {
         require_setup_link: true,
         gif_api_base: None,
         allow_insecure_push: true,
+        allow_private_link_previews: false,
     })
     .await
     .unwrap();

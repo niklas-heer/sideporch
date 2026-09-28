@@ -216,6 +216,18 @@ pub struct Message {
     pub deleted: bool,
     /// Who pinned it, if it is pinned.
     pub pinned_by: Option<String>,
+    /// What its first link shows.
+    pub preview: Option<LinkPreview>,
+}
+
+/// The title, description and image of a linked page.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct LinkPreview {
+    pub url: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub image: Option<String>,
+    pub site: Option<String>,
 }
 
 /// A GIF from a GIF service. Its media stays at the service's URLs, as the
@@ -772,11 +784,12 @@ const MESSAGE_SELECT: &str = "SELECT m.id, m.channel_id, m.parent_id, m.user_id,
         (SELECT COUNT(*) FROM messages r WHERE r.parent_id = m.id),
         m.edited_at, m.deleted_at IS NOT NULL,
         CASE WHEN m.pinned_at IS NULL THEN NULL
-             ELSE COALESCE((SELECT p.display_name FROM users p WHERE p.id = m.pinned_by), 'Someone') END
+             ELSE COALESCE((SELECT p.display_name FROM users p WHERE p.id = m.pinned_by), 'Someone') END,
+        m.preview
     FROM messages m LEFT JOIN users u ON u.id = m.user_id";
 
 /// How many columns [`MESSAGE_SELECT`] reads; queries add theirs after.
-const MESSAGE_COLUMNS: usize = 18;
+const MESSAGE_COLUMNS: usize = 19;
 
 fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
     let user_id: Option<i64> = row.get(3)?;
@@ -816,6 +829,9 @@ fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
         edited_at: row.get(15)?,
         deleted: row.get(16)?,
         pinned_by: row.get(17)?,
+        preview: row
+            .get::<_, Option<String>>(18)?
+            .and_then(|json| serde_json::from_str(&json).ok()),
     })
 }
 
@@ -1091,7 +1107,7 @@ pub fn delete_message(conn: &Connection, id: i64, now: i64) -> AppResult<()> {
     )?;
     if has_replies {
         conn.execute(
-            "UPDATE messages SET body = '', attachments = NULL, gif = NULL, deleted_at = ?1,
+            "UPDATE messages SET body = '', attachments = NULL, gif = NULL, preview = NULL, deleted_at = ?1,
                  pinned_at = NULL, pinned_by = NULL WHERE id = ?2",
             params![now, id],
         )?;
@@ -1118,6 +1134,18 @@ pub fn delete_message(conn: &Connection, id: i64, now: i64) -> AppResult<()> {
         )?;
     }
     Ok(())
+}
+
+/// Stores a message's link preview. Returns whether it changed.
+pub fn set_preview(conn: &Connection, id: i64, preview: Option<&LinkPreview>) -> AppResult<bool> {
+    let json = preview
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(crate::error::AppError::internal)?;
+    Ok(conn.execute(
+        "UPDATE messages SET preview = ?1 WHERE id = ?2 AND preview IS NOT ?1 AND deleted_at IS NULL",
+        params![json, id],
+    )? > 0)
 }
 
 /// Pins or unpins a message. Returns whether it is pinned now.

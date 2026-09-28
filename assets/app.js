@@ -812,6 +812,10 @@
   const menuExtras = [
     (item, base) => (item.dataset.deleted === undefined ? ["Remind me in 1 hour", () => remindAbout(base, "in 1 hour")] : null),
     (item, base) => (item.dataset.deleted === undefined ? ["Remind me tomorrow", () => remindAbout(base, "tomorrow")] : null),
+    (item, base) =>
+      item.querySelector("[data-preview]") && (item.dataset.user === app?.dataset.me || app?.dataset.admin !== undefined)
+        ? ["Remove preview", () => post(`${base}/preview/remove`)]
+        : null,
   ];
 
   // Send later: presets and a date and time, from the clock next to Send.

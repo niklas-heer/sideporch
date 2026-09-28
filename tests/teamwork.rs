@@ -666,3 +666,95 @@ async fn reminders_and_scheduled_messages_arrive_later() {
     let scheduled = admin.page("/scheduled").await;
     assert!(!scheduled.contains("stretch") && scheduled.contains("See the message"));
 }
+
+/// A local web page with Open Graph tags, behind a redirect.
+async fn fake_site() -> String {
+    use axum::{
+        Router,
+        response::{Html, Redirect},
+        routing::get,
+    };
+    let app = Router::new()
+        .route("/old", get(|| async { Redirect::permanent("/guide") }))
+        .route(
+            "/guide",
+            get(|| async {
+                Html(
+                    r#"<html><head><title>Fallback</title>
+                    <meta property="og:title" content="Porch Building Guide">
+                    <meta property="og:description" content="Everything about porches.">
+                    <meta property="og:image" content="https://images.example/porch.png">
+                    <meta property="og:site_name" content="Porch Weekly"></head></html>"#,
+                )
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    base
+}
+
+#[tokio::test]
+async fn links_get_previews_unless_turned_off() {
+    let site = fake_site().await;
+    let server = common::start_with(|config| config.allow_private_link_previews = true).await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let mut live = admin.live().await;
+    admin
+        .send(
+            general,
+            &format!("Read this: {site}/old, then `{site}/code`"),
+            None,
+        )
+        .await;
+    next_of(&mut live, "message").await;
+    let changed = next_of(&mut live, "message_changed").await;
+    let html = changed["html"].as_str().unwrap();
+    assert!(
+        html.contains("Porch Building Guide") && html.contains("Porch Weekly"),
+        "{html}"
+    );
+    assert!(
+        html.contains("https://images.example/porch.png") && html.contains(&format!("{site}/old"))
+    );
+
+    // Authors remove previews.
+    let id = changed["id"].as_i64().unwrap();
+    fetch_post(&admin, &format!("/c/{general}/m/{id}/preview/remove"), &[]).await;
+    assert!(
+        !admin
+            .page(&format!("/c/{general}"))
+            .await
+            .contains("Porch Building Guide")
+    );
+
+    // Admins turn them off.
+    admin.post("/admin/previews", &[]).await;
+    assert!(!admin.page("/admin/previews").await.contains("checked"));
+    admin
+        .send(general, &format!("Again: {site}/guide"), None)
+        .await;
+    next_of(&mut live, "message").await;
+    assert!(live.next_event(Duration::from_millis(800)).await.is_none());
+}
+
+#[tokio::test]
+async fn previews_never_reach_private_addresses() {
+    let site = fake_site().await;
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let mut live = admin.live().await;
+    admin
+        .send(general, &format!("Internal: {site}/guide"), None)
+        .await;
+    next_of(&mut live, "message").await;
+    assert!(live.next_event(Duration::from_millis(800)).await.is_none());
+    assert!(
+        !admin
+            .page(&format!("/c/{general}"))
+            .await
+            .contains("Porch Building Guide")
+    );
+}

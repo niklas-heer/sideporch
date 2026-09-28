@@ -68,6 +68,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         require_setup_link: args.require_setup_link,
         gif_api_base: None,
         allow_insecure_push: false,
+        allow_private_link_previews: false,
     })
     .await?;
     let listener = tokio::net::TcpListener::bind(args.listen).await?;

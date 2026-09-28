@@ -16,7 +16,7 @@ use crate::{
 fn tabs(current: &str) -> Markup {
     html! {
         nav class="mb-6 flex gap-2" aria-label="Admin" {
-            @for (href, label) in [("/admin/system", "System"), ("/admin/gifs", "GIFs"), ("/people", "People"), ("/automations", "Automations")] {
+            @for (href, label) in [("/admin/system", "System"), ("/admin/gifs", "GIFs"), ("/admin/previews", "Link previews"), ("/people", "People"), ("/automations", "Automations")] {
                 a href=(href) aria-current=[(href == current).then_some("page")]
                     class="rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-screen aria-[current=page]:bg-haint-2 aria-[current=page]:text-floor dark:hover:bg-night-2 dark:aria-[current=page]:bg-floor-2 dark:aria-[current=page]:text-haint-2" {
                     (label)
@@ -264,6 +264,37 @@ pub fn gifs_page(
                     p class="mt-1 text-sm text-muted dark:text-haint" { "For GIPHY and KLIPY searches." }
                 }
                 button type="submit" class="btn" { (icon(icons::GIF, "h-5 w-5")) "Save" }
+            }
+        },
+    )
+}
+
+pub fn previews_page(shell: &Shell<'_>, enabled: bool, saved: bool) -> Markup {
+    panel_page(
+        "Link previews",
+        shell,
+        &html! { "Link previews" },
+        &html! {
+            (tabs("/admin/previews"))
+            p class="mb-5 max-w-xl text-muted dark:text-haint" {
+                "When someone shares a link, Sideporch fetches the page and shows its title, description and image under the message. "
+                "Requests never reach private or internal addresses. Images load from the linked site. "
+                "Authors and admins can remove a preview from a message."
+            }
+            @if saved {
+                p role="status" class="mb-4 rounded-lg border border-line bg-haint-2 px-3 py-2 text-sm text-floor dark:border-night-line dark:bg-floor-2 dark:text-haint-2" {
+                    "Saved."
+                }
+            }
+            form method="post" action="/admin/previews" class="max-w-lg space-y-4" {
+                label class="flex gap-3" {
+                    input type="checkbox" name="enabled" value="on" checked[enabled] class="mt-1";
+                    span {
+                        span class="block font-semibold" { "Show link previews" }
+                        span class="block text-sm text-muted dark:text-haint" { "Off: links stay plain, and Sideporch never fetches them." }
+                    }
+                }
+                button type="submit" class="btn" { "Save" }
             }
         },
     )

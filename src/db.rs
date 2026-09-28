@@ -316,6 +316,9 @@ CREATE TABLE scheduled_messages (
 );
 CREATE INDEX scheduled_messages_due ON scheduled_messages (send_at);
 ",
+    r"
+ALTER TABLE messages ADD COLUMN preview TEXT;
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on

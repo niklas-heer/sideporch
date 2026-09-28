@@ -58,6 +58,11 @@ pub fn actions_page(shell: &Shell<'_>, message: &Message, render: &Render<'_>) -
                         }
                     }
                 }
+                @if message.preview.is_some() && (own || shell.user.is_admin) {
+                    form method="post" action={ (base) "/preview/remove" } {
+                        button type="submit" class="btn-quiet" { (icon(icons::X, "h-4 w-4")) "Remove preview" }
+                    }
+                }
                 @if can_delete {
                     form method="post" action={ (base) "/delete" } {
                         button type="submit" class="btn-quiet text-red-700 dark:text-red-300" {

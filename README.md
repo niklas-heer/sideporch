@@ -21,6 +21,7 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 - **Edit and delete** your messages (↑ in an empty composer edits your last one), **pin** messages to a channel, and **save** messages for later.
 - **Activity**: mentions and replies in your threads, in one place. See who is typing, and move around with the keyboard: ⌘K (Ctrl+K) jumps anywhere, Alt+↑/↓ switches channels, ⌘/ lists every shortcut.
 - **Reminders and scheduled messages**: `/remind me tomorrow to water the plants`, “Remind me” on any message, and a clock next to Send to send a message later, all in your own time zone.
+- **Link previews** with the title, description and image of the first link in a message, fetched safely by the server; admins can turn them off.
 - **Search** across every channel and conversation you're part of (SQLite full-text search).
 - **Files and images**: attach, paste or drop them into a message; images show inline, other files download. They are stored in the data directory, next to the database.
 - **GIFs** from the team's own library, which anyone can add to, or, if an admin chooses, from [GIPHY](https://giphy.com) or [KLIPY](https://klipy.com) with a free API key.
