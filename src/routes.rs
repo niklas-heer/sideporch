@@ -30,6 +30,7 @@ mod admin;
 mod automation;
 mod channels;
 mod gifs;
+mod later;
 mod message;
 mod profile;
 mod settings;
@@ -99,6 +100,7 @@ pub fn router(state: AppState) -> Router {
         .merge(gifs::router())
         .merge(message::router())
         .merge(channels::router())
+        .merge(later::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -600,6 +602,21 @@ async fn post_message(
         .call(move |conn| store::channel_for(conn, channel_id, user_id))
         .await?
         .ok_or(AppError::NotFound)?;
+    if let Some(send_at) = &input.send_at {
+        if !input.files.is_empty() || input.gif.is_some() {
+            return Err(AppError::bad_request(
+                "Only text can be scheduled. Send files and GIFs right away.",
+            ));
+        }
+        let notice =
+            later::schedule(&state, user_id, channel_id, input.parent_id, body, send_at).await?;
+        return Ok(command_answer(
+            &headers,
+            channel_id,
+            input.parent_id,
+            &[notice],
+        ));
+    }
     if input.files.is_empty()
         && let Some((name, text)) = automations::CommandCall::parse(&body)
         && let Some(answers) =
@@ -658,12 +675,27 @@ async fn run_command(
     text: String,
 ) -> AppResult<Option<Vec<String>>> {
     let commands = state.automations.commands();
-    if name == "help" && !commands.iter().any(|command| command.name == "help") {
+    let registered = |wanted: &str| commands.iter().any(|command| command.name == wanted);
+    if name == "remind" && !registered("remind") {
+        return Ok(Some(vec![
+            crate::later::remind_command(state, user.id, &text).await?,
+        ]));
+    }
+    if name == "help" && !registered("help") {
         let mut help = String::from("**Commands**\n");
+        for (name, usage, description) in BUILT_IN_COMMANDS {
+            if !registered(name) {
+                let usage = if usage.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {usage}")
+                };
+                // Writing to a String cannot fail.
+                let _ = writeln!(help, "- `/{name}{usage}`: {description}");
+            }
+        }
         if commands.is_empty() {
-            help.push_str(
-                "There are none yet. Admins add them in automations with `sideporch.command`.",
-            );
+            help.push_str("\nAdmins add more in automations with `sideporch.command`.");
         }
         for command in &commands {
             let usage = if command.usage.is_empty() {
@@ -740,6 +772,12 @@ fn command_answer(
     Redirect::to(&target).into_response()
 }
 
+/// Commands Sideporch answers itself unless an automation takes the name.
+const BUILT_IN_COMMANDS: &[(&str, &str, &str)] = &[
+    ("help", "", "List the commands"),
+    ("remind", "me <when> to <what>", "Remind yourself later"),
+];
+
 /// Slash commands for the composer's suggestions.
 async fn commands(_: CurrentUser, State(state): State<AppState>) -> axum::Json<serde_json::Value> {
     let mut list: Vec<serde_json::Value> = state
@@ -754,10 +792,12 @@ async fn commands(_: CurrentUser, State(state): State<AppState>) -> axum::Json<s
             })
         })
         .collect();
-    if !list.iter().any(|command| command["name"] == "help") {
-        list.push(
-            serde_json::json!({ "name": "help", "usage": "", "description": "List the commands" }),
-        );
+    for (name, usage, description) in BUILT_IN_COMMANDS {
+        if !list.iter().any(|command| command["name"] == *name) {
+            list.push(
+                serde_json::json!({ "name": name, "usage": usage, "description": description }),
+            );
+        }
     }
     axum::Json(serde_json::Value::Array(list))
 }

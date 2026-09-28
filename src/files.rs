@@ -150,6 +150,9 @@ pub struct MessageInput {
     pub files: Vec<Upload>,
     /// A GIF from the GIF picker.
     pub gif: Option<crate::routes::GifPosted>,
+    /// When to send the message instead of now, in words or as a local
+    /// date and time.
+    pub send_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -162,6 +165,7 @@ struct PlainMessage {
     gif_title: Option<String>,
     gif_width: Option<u32>,
     gif_height: Option<u32>,
+    send_at: Option<String>,
 }
 
 impl FromRequest<AppState> for MessageInput {
@@ -191,6 +195,7 @@ impl FromRequest<AppState> for MessageInput {
                         width: plain.gif_width,
                         height: plain.gif_height,
                     }),
+                send_at: plain.send_at.filter(|when| !when.trim().is_empty()),
             });
         }
         let mut form = Multipart::from_request(request, state)
@@ -201,10 +206,15 @@ impl FromRequest<AppState> for MessageInput {
             parent_id: None,
             files: Vec::new(),
             gif: None,
+            send_at: None,
         };
         while let Some(field) = form.next_field().await.map_err(bad_upload)? {
             match field.name().unwrap_or_default() {
                 "body" => input.body = field.text().await.map_err(bad_upload)?,
+                "send_at" => {
+                    let when = field.text().await.map_err(bad_upload)?;
+                    input.send_at = Some(when).filter(|when| !when.trim().is_empty());
+                }
                 "parent_id" => {
                     let text = field.text().await.map_err(bad_upload)?;
                     input.parent_id = text.trim().parse().ok();

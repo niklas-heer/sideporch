@@ -291,6 +291,31 @@ CREATE TABLE activity (
 CREATE INDEX activity_by_message ON activity (message_id);
 ALTER TABLE users ADD COLUMN activity_seen_id INTEGER NOT NULL DEFAULT 0;
 ",
+    r"
+-- The browser reports each person's time zone, for reading `at 3pm`.
+ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC';
+
+CREATE TABLE reminders (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+    remind_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX reminders_due ON reminders (remind_at);
+
+CREATE TABLE scheduled_messages (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    parent_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    send_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX scheduled_messages_due ON scheduled_messages (send_at);
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on

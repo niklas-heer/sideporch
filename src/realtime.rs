@@ -142,6 +142,10 @@ enum ClientMessage {
         channel_id: i64,
         parent_id: Option<i64>,
     },
+    /// The browser's time zone, such as `Europe/Berlin`.
+    Timezone {
+        name: String,
+    },
 }
 
 /// The shortest gap between two typing notices from one connection.
@@ -187,6 +191,7 @@ async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
                         state.hub.set_visible(user_id, visible, now);
                         visible = now;
                     }
+                    Ok(ClientMessage::Timezone { name }) => save_timezone(&state, user_id, name).await,
                     Ok(ClientMessage::Typing { channel_id, parent_id }) => {
                         let now = tokio::time::Instant::now();
                         if last_typing.is_none_or(|last| now.duration_since(last) >= TYPING_INTERVAL) {
@@ -231,6 +236,19 @@ async fn announce_typing(state: &AppState, user_id: i64, channel_id: i64, parent
                 name,
             },
         );
+    }
+}
+
+async fn save_timezone(state: &AppState, user_id: i64, name: String) {
+    let Ok(name) = crate::later::valid_zone(&name) else {
+        return;
+    };
+    let saved = state
+        .db
+        .call(move |conn| store::set_user_timezone(conn, user_id, &name))
+        .await;
+    if let Err(error) = saved {
+        tracing::warn!(?error, "could not save a time zone");
     }
 }
 

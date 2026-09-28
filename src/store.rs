@@ -1227,6 +1227,187 @@ pub fn saved_messages(conn: &Connection, user_id: i64) -> AppResult<Vec<Located>
     Ok(located)
 }
 
+// Reminders and scheduled messages
+
+pub fn user_timezone(conn: &Connection, user_id: i64) -> AppResult<String> {
+    Ok(conn
+        .query_row(
+            "SELECT timezone FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| "UTC".to_owned()))
+}
+
+pub fn set_user_timezone(conn: &Connection, user_id: i64, name: &str) -> AppResult<()> {
+    conn.execute(
+        "UPDATE users SET timezone = ?1 WHERE id = ?2 AND timezone != ?1",
+        params![name, user_id],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub struct Reminder {
+    pub id: i64,
+    pub user_id: i64,
+    pub text: String,
+    /// A link to the message it is about.
+    pub link: Option<String>,
+    pub remind_at: i64,
+}
+
+pub fn add_reminder(
+    conn: &Connection,
+    user_id: i64,
+    text: &str,
+    message_id: Option<i64>,
+    remind_at: i64,
+    now: i64,
+) -> AppResult<i64> {
+    conn.execute(
+        "INSERT INTO reminders (user_id, text, message_id, remind_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![user_id, text, message_id, remind_at, now],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+const REMINDER_SELECT: &str = "SELECT r.id, r.user_id, r.text,
+        CASE WHEN m.id IS NULL THEN NULL ELSE '/c/' || m.channel_id || '/m/' || m.id END, r.remind_at
+    FROM reminders r LEFT JOIN messages m ON m.id = r.message_id";
+
+fn reminder_from_row(row: &Row<'_>) -> rusqlite::Result<Reminder> {
+    Ok(Reminder {
+        id: row.get(0)?,
+        user_id: row.get(1)?,
+        text: row.get(2)?,
+        link: row.get(3)?,
+        remind_at: row.get(4)?,
+    })
+}
+
+pub fn reminders(conn: &Connection, user_id: i64) -> AppResult<Vec<Reminder>> {
+    let mut statement = conn.prepare(&format!(
+        "{REMINDER_SELECT} WHERE r.user_id = ?1 ORDER BY r.remind_at"
+    ))?;
+    let rows = statement.query_map([user_id], reminder_from_row)?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+pub fn delete_reminder(conn: &Connection, user_id: i64, id: i64) -> AppResult<()> {
+    conn.execute(
+        "DELETE FROM reminders WHERE id = ?1 AND user_id = ?2",
+        params![id, user_id],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub struct Scheduled {
+    pub id: i64,
+    pub user_id: i64,
+    pub channel_id: i64,
+    pub parent_id: Option<i64>,
+    pub body: String,
+    pub send_at: i64,
+}
+
+pub struct NewScheduled<'a> {
+    pub user_id: i64,
+    pub channel_id: i64,
+    pub parent_id: Option<i64>,
+    pub body: &'a str,
+    pub send_at: i64,
+}
+
+pub fn add_scheduled(conn: &Connection, new: &NewScheduled<'_>, now: i64) -> AppResult<i64> {
+    conn.execute(
+        "INSERT INTO scheduled_messages (user_id, channel_id, parent_id, body, send_at, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            new.user_id,
+            new.channel_id,
+            new.parent_id,
+            new.body,
+            new.send_at,
+            now
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+const SCHEDULED_SELECT: &str =
+    "SELECT id, user_id, channel_id, parent_id, body, send_at FROM scheduled_messages";
+
+fn scheduled_from_row(row: &Row<'_>) -> rusqlite::Result<Scheduled> {
+    Ok(Scheduled {
+        id: row.get(0)?,
+        user_id: row.get(1)?,
+        channel_id: row.get(2)?,
+        parent_id: row.get(3)?,
+        body: row.get(4)?,
+        send_at: row.get(5)?,
+    })
+}
+
+/// Someone's scheduled messages with where they go, soonest first.
+pub fn scheduled_messages(conn: &Connection, user_id: i64) -> AppResult<Vec<(Scheduled, Channel)>> {
+    let mut statement = conn.prepare(&format!(
+        "{SCHEDULED_SELECT} WHERE user_id = ?1 ORDER BY send_at"
+    ))?;
+    let rows = statement
+        .query_map([user_id], scheduled_from_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut located = Vec::new();
+    for scheduled in rows {
+        if let Some(channel) = channel_for(conn, scheduled.channel_id, user_id)? {
+            located.push((scheduled, channel));
+        }
+    }
+    Ok(located)
+}
+
+pub fn delete_scheduled(conn: &Connection, user_id: i64, id: i64) -> AppResult<()> {
+    conn.execute(
+        "DELETE FROM scheduled_messages WHERE id = ?1 AND user_id = ?2",
+        params![id, user_id],
+    )?;
+    Ok(())
+}
+
+/// Makes a scheduled message due now.
+pub fn send_scheduled_now(conn: &Connection, user_id: i64, id: i64, now: i64) -> AppResult<()> {
+    conn.execute(
+        "UPDATE scheduled_messages SET send_at = ?1 WHERE id = ?2 AND user_id = ?3",
+        params![now, id, user_id],
+    )?;
+    Ok(())
+}
+
+/// Removes and returns every reminder and scheduled message that is due.
+pub fn take_due(conn: &mut Connection, now: i64) -> AppResult<(Vec<Reminder>, Vec<Scheduled>)> {
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let reminders = {
+        let mut statement = tx.prepare(&format!(
+            "{REMINDER_SELECT} WHERE r.remind_at <= ?1 ORDER BY r.remind_at"
+        ))?;
+        let rows = statement.query_map([now], reminder_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    let scheduled = {
+        let mut statement = tx.prepare(&format!(
+            "{SCHEDULED_SELECT} WHERE send_at <= ?1 ORDER BY send_at, id"
+        ))?;
+        let rows = statement.query_map([now], scheduled_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    tx.execute("DELETE FROM reminders WHERE remind_at <= ?1", [now])?;
+    tx.execute("DELETE FROM scheduled_messages WHERE send_at <= ?1", [now])?;
+    tx.commit()?;
+    Ok((reminders, scheduled))
+}
+
 // Invites
 
 pub fn create_invite(

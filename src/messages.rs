@@ -24,6 +24,8 @@ pub enum Sender {
         id: i64,
         name: String,
     },
+    /// Sideporch itself, such as for reminders.
+    System(String),
 }
 
 pub struct Draft {
@@ -70,6 +72,9 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
                 }
                 Sender::Automation { id, name } => {
                     (None, None, Some(*id), Some(name.as_str()), None)
+                }
+                Sender::System(name) => {
+                    (None, None, None, Some(name.as_str()), Some(":alarm_clock:"))
                 }
             };
             if let Some(user_id) = user_id {

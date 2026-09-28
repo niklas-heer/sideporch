@@ -560,3 +560,109 @@ async fn typing_shows_to_readers() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn reminders_and_scheduled_messages_arrive_later() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let mut live = admin.live().await;
+    live.send(&json!({ "type": "timezone", "name": "Europe/Berlin" }))
+        .await;
+
+    // /remind answers privately and lists the reminder.
+    let answer: Value = admin
+        .type_message(general, "/remind me in 5 minutes to stretch")
+        .await
+        .json()
+        .await
+        .unwrap();
+    let notice = answer["ephemeral"][0].as_str().unwrap();
+    assert!(
+        notice.contains("remind you on") && notice.contains("stretch"),
+        "{notice}"
+    );
+    let unclear: Value = admin
+        .type_message(general, "/remind me to do it someday")
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        unclear["ephemeral"][0]
+            .as_str()
+            .unwrap()
+            .contains("tell when"),
+        "{unclear}"
+    );
+    let scheduled = admin.page("/scheduled").await;
+    assert!(scheduled.contains("stretch"));
+
+    // A message scheduled for later waits, and Send now delivers it.
+    let queued: Value = fetch_post(
+        &admin,
+        &format!("/c/{general}/messages"),
+        &[
+            ("body", "Good morning, porch"),
+            ("send_at", "tomorrow at 8:00"),
+        ],
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert!(
+        queued["ephemeral"][0]
+            .as_str()
+            .unwrap()
+            .contains("Scheduled for")
+    );
+    assert!(
+        !admin
+            .page(&format!("/c/{general}"))
+            .await
+            .contains("Good morning, porch")
+    );
+    let scheduled = admin.page("/scheduled").await;
+    assert!(scheduled.contains("Good morning, porch") && scheduled.contains("08:00"));
+    let id = between(&scheduled, "/scheduled/", "/send");
+    admin.post(&format!("/scheduled/{id}/send"), &[]).await;
+    assert!(
+        admin
+            .page(&format!("/c/{general}"))
+            .await
+            .contains("Good morning, porch")
+    );
+    assert_eq!(
+        fetch_post(
+            &admin,
+            &format!("/c/{general}/messages"),
+            &[("body", "Too late"), ("send_at", "2020-01-01 09:00")],
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // Reminding about a message, then cancelling one.
+    let message = last_message_id(&admin.page(&format!("/c/{general}")).await);
+    let answer: Value = fetch_post(
+        &admin,
+        &format!("/c/{general}/m/{message}/remind"),
+        &[("when", "in 1 hour")],
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert!(answer["at"].as_str().is_some());
+    let scheduled = admin.page("/scheduled").await;
+    assert!(scheduled.contains("See the message"));
+    let reminder = between(&scheduled, "/reminders/", "/cancel");
+    admin
+        .post(&format!("/reminders/{reminder}/cancel"), &[])
+        .await;
+    // The soonest one, to stretch, is first.
+    let scheduled = admin.page("/scheduled").await;
+    assert!(!scheduled.contains("stretch") && scheduled.contains("See the message"));
+}

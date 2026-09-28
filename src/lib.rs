@@ -14,6 +14,7 @@ mod error;
 mod files;
 mod gifs;
 mod icons;
+mod later;
 mod markdown;
 mod markup;
 mod mcp;
@@ -186,6 +187,7 @@ impl Sideporch {
             setup_file: setup_link_file(&config.data_dir),
         };
         state.automations.serve(state.clone());
+        later::start(state.clone());
         state.automations.reload(&state).await?;
         Ok(Self { state })
     }

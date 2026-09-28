@@ -256,6 +256,9 @@
       opened = true;
       if (attempt > 0) location.reload();
       sendVisibility();
+      // Reminders and scheduled messages read times in this zone.
+      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (zone) socket.send(JSON.stringify({ type: "timezone", name: zone }));
     });
     document.addEventListener("visibilitychange", sendVisibility);
     socket.addEventListener("message", (message) => {
@@ -536,6 +539,11 @@
       if (addFiles(files)) event.preventDefault();
     });
     form.querySelector("[data-gif-button]")?.addEventListener("click", (event) => openGifs(form, event.currentTarget));
+    const scheduleButton = form.querySelector("[data-schedule-button]");
+    if (scheduleButton) {
+      scheduleButton.hidden = false;
+      scheduleButton.addEventListener("click", (event) => openSchedule(form, event.currentTarget));
+    }
 
     const suggestions = setupCommandSuggestions(form, textarea);
     textarea.addEventListener("keydown", (event) => {
@@ -787,7 +795,87 @@
     messageMenu.querySelector("button")?.focus();
     return true;
   }
-  const menuExtras = [];
+  function toast(text) {
+    const note = document.createElement("p");
+    note.setAttribute("role", "status");
+    note.className = "fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-floor px-4 py-2 text-sm text-white shadow-xl";
+    note.textContent = text;
+    document.body.append(note);
+    setTimeout(() => note.remove(), 4000);
+  }
+  async function remindAbout(base, when) {
+    const response = await post(`${base}/remind`, { when });
+    if (!response.ok) return toast("That reminder didn't work. Try again.");
+    const { at } = await response.json();
+    toast(`I'll remind you ${at}, in your notes to self.`);
+  }
+  const menuExtras = [
+    (item, base) => (item.dataset.deleted === undefined ? ["Remind me in 1 hour", () => remindAbout(base, "in 1 hour")] : null),
+    (item, base) => (item.dataset.deleted === undefined ? ["Remind me tomorrow", () => remindAbout(base, "tomorrow")] : null),
+  ];
+
+  // Send later: presets and a date and time, from the clock next to Send.
+  const schedulePicker = document.createElement("div");
+  schedulePicker.id = "schedule-picker";
+  schedulePicker.setAttribute("popover", "");
+  schedulePicker.className = "m-0 w-64 rounded-xl border border-line bg-white p-2 text-sm shadow-xl dark:border-night-line dark:bg-night-2 dark:text-haint-2";
+  document.body.append(schedulePicker);
+  function openSchedule(form, trigger) {
+    if (!schedulePicker.showPopover) return;
+    const textarea = form.querySelector("textarea");
+    const error = form.querySelector("[data-composer-error]");
+    const send = (when) => {
+      schedulePicker.hidePopover();
+      if (!textarea.value.trim()) {
+        error.textContent = "Write the message first, then pick when to send it.";
+        error.classList.remove("hidden");
+        return;
+      }
+      const field = document.createElement("input");
+      field.type = "hidden";
+      field.name = "send_at";
+      field.value = when;
+      form.append(field);
+      form.requestSubmit();
+      field.remove();
+    };
+    const heading = document.createElement("p");
+    heading.className = "px-2 pb-1 pt-1 text-xs font-semibold text-muted dark:text-haint";
+    heading.textContent = "Send later";
+    const presets = [
+      ["In 1 hour", "in 1 hour"],
+      ["Tomorrow at 9:00", "tomorrow at 9:00"],
+      ["Monday at 9:00", "monday at 9:00"],
+    ].map(([label, when]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "block w-full rounded-lg px-2 py-1.5 text-left hover:bg-screen dark:hover:bg-night";
+      button.textContent = label;
+      button.addEventListener("click", () => send(when));
+      return button;
+    });
+    const custom = document.createElement("form");
+    custom.className = "mt-1 flex gap-1 border-t border-line px-1 pt-2 dark:border-night-line";
+    const input = document.createElement("input");
+    input.type = "datetime-local";
+    input.required = true;
+    input.className = "field min-w-0 flex-1 py-1 text-sm";
+    input.setAttribute("aria-label", "Date and time");
+    const pick = document.createElement("button");
+    pick.type = "submit";
+    pick.className = "btn px-2 py-1 text-xs";
+    pick.textContent = "Schedule";
+    custom.append(input, pick);
+    custom.addEventListener("submit", (event) => {
+      event.preventDefault();
+      send(input.value);
+    });
+    schedulePicker.replaceChildren(heading, ...presets, custom);
+    schedulePicker.showPopover();
+    const box = trigger.getBoundingClientRect();
+    schedulePicker.style.left = `${Math.max(8, Math.min(box.right - schedulePicker.offsetWidth, innerWidth - schedulePicker.offsetWidth - 8))}px`;
+    schedulePicker.style.bottom = `${Math.max(8, innerHeight - box.top + 8)}px`;
+  }
   document.addEventListener("click", (event) => {
     const trigger = event.target.closest("a[data-actions]");
     if (trigger && openMessageMenu(trigger, menuExtras)) event.preventDefault();

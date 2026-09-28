@@ -21,6 +21,7 @@ pub mod channels;
 pub use channels::{ChannelSettings, channel_settings_page};
 pub mod emoji;
 pub mod gifs;
+pub mod later;
 pub mod messages;
 pub mod profile;
 pub mod search;
@@ -304,6 +305,7 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                 ul class="mb-4 space-y-0.5" data-sidebar-nav {
                     (nav_link("/activity", icons::AT, "Activity", shell.sidebar.activity))
                     (nav_link("/saved", icons::BOOKMARK_SIMPLE, "Saved", false))
+                    (nav_link("/scheduled", icons::CLOCK, "Scheduled", false))
                 }
                 div class="mb-1 mt-2 flex items-center justify-between px-3 text-sm text-haint" {
                     h2 class="font-semibold" { a href="/channels/browse" class="hover:text-white hover:underline" title="Browse all channels" { "Channels" } }
@@ -603,6 +605,10 @@ fn composer(action: &str, parent: Option<i64>, label: &str) -> Markup {
                 }
                 textarea name="body" rows="1" maxlength="10000" aria-label=(label) placeholder=(label)
                     class="max-h-48 min-h-6 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-hidden placeholder:text-muted" {}
+                button type="button" data-schedule-button hidden title="Send later" aria-label="Send later"
+                    class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night" {
+                    (icon(icons::CLOCK, "h-5 w-5"))
+                }
                 button type="submit" class="btn px-3" aria-label="Send" title="Send (Enter)" {
                     (icon(icons::PAPER_PLANE_RIGHT, "h-5 w-5"))
                 }
