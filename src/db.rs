@@ -159,6 +159,51 @@ CREATE TABLE automation_data (
 
 ALTER TABLE messages ADD COLUMN automation_id INTEGER REFERENCES automations(id) ON DELETE SET NULL;
 ",
+    r"
+ALTER TABLE automations ADD COLUMN hook_token TEXT;
+UPDATE automations SET hook_token = lower(hex(randomblob(20)));
+CREATE UNIQUE INDEX automations_by_hook_token ON automations (hook_token);
+
+CREATE TABLE automation_versions (
+    id INTEGER PRIMARY KEY,
+    automation_id INTEGER NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    saved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    saved_with TEXT NOT NULL,
+    saved_at INTEGER NOT NULL
+);
+CREATE INDEX automation_versions_by_automation ON automation_versions (automation_id, id);
+INSERT INTO automation_versions (automation_id, source, saved_by, saved_with, saved_at)
+    SELECT id, source, created_by, 'editor', updated_at FROM automations;
+
+CREATE TABLE automation_runs (
+    id INTEGER PRIMARY KEY,
+    automation_id INTEGER NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+    trigger TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    duration_us INTEGER NOT NULL,
+    output TEXT NOT NULL,
+    error TEXT
+);
+CREATE INDEX automation_runs_by_automation ON automation_runs (automation_id, id);
+
+CREATE TABLE automation_reactions (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    automation_id INTEGER NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+    emoji TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (message_id, automation_id, emoji)
+);
+
+CREATE TABLE api_tokens (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    token_hash BLOB NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER
+);
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on

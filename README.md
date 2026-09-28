@@ -22,7 +22,7 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 - **File uploads**: images show inline; other files download. Files live in the same database as everything else.
 - **Reactions** with emoji, and **custom emoji** anyone can add, like Slack's.
 - **Push notifications** for direct messages, thread replies and mentions, sent by Sideporch itself through Web Push. On iPhone and iPad, add Sideporch to the home screen first.
-- **Automations**: admins write small Lua scripts in the browser that answer messages, post on a schedule, and remember data. They run sandboxed, with limits on time, memory and posts.
+- **Automations**: admins write small Lua scripts that answer messages, react to reactions, receive webhooks, post on a schedule, and remember data, in an editor with a linter, formatter, test runs and version history. AI can write them, from the editor or through MCP. They run sandboxed, with limits on time, memory and posts.
 - A one-time setup link for the first account, then invite links. No email needed.
 - Slack-compatible incoming webhooks per channel, tested against the payloads Gatus sends.
 - Works on phones, in dark mode, and without JavaScript (pages reload instead of updating live).
@@ -100,17 +100,33 @@ mise run image         # build the container image and load it into Docker
 
 CI runs through [Dagger](https://dagger.io) (`.dagger/main.dang`); the GitHub workflows only call it. Pushing a `vX.Y.Z` tag that matches `Cargo.toml` builds, tests and publishes a release, its container images, and the checksums that the Homebrew formula and `install.sh` verify.
 
-The web interface is rendered on the server with [maud](https://maud.lambda.xyz). Styles are Tailwind-style utility classes compiled at build time by [encre-css](https://gitlab.com/encre-org/encre-css), a Rust implementation of Tailwind, so there is no Node toolchain. `assets/app.js` is the only page script; `assets/sw.js` shows push notifications.
+The web interface is rendered on the server with [maud](https://maud.lambda.xyz). Styles are Tailwind-style utility classes compiled at build time by [encre-css](https://gitlab.com/encre-org/encre-css), a Rust implementation of Tailwind, so there is no Node toolchain. `assets/app.js` is the main page script, `assets/editor.js` powers the automation editor, and `assets/sw.js` shows push notifications.
 
 ## Automations
 
-Open the lightning icon in the sidebar (admins only) and create an automation:
+Open the lightning icon in the sidebar (admins only) and create an automation. Scripts are Lua 5.4 and react to messages, reactions, webhook requests and timers:
 
 ```lua
+-- Answers !ping in a thread.
 sideporch.on_message(function(msg)
   if msg.text == "!ping" then
     sideporch.reply(msg, "pong")
   end
+end)
+
+-- Acknowledges alerts that someone is looking at.
+sideporch.on_reaction(function(event)
+  if event.added and event.emoji == "eyes" and event.message.channel == "alerts" then
+    sideporch.reply(event.message, event.user .. " is on it")
+    sideporch.react(event.message, "white_check_mark")
+  end
+end)
+
+-- Receives POST requests at the automation's own webhook URL.
+sideporch.on_webhook(function(request)
+  local service = request.json and request.json.service or "something"
+  sideporch.post("deploys", "Deploying *" .. service .. "*")
+  return { json = { ok = true } }
 end)
 
 sideporch.every(24 * 60 * 60, function()
@@ -118,7 +134,28 @@ sideporch.every(24 * 60 * 60, function()
 end)
 ```
 
-Scripts see new messages in public channels (`msg.text`, `msg.author`, `msg.username`, `msg.channel`, `msg.id`, `msg.thread_id`, `msg.is_bot`) and can `post`, `reply`, and keep data with `sideporch.get` and `sideporch.set`. They cannot read files or reach the network.
+Scripts can also keep data (`sideporch.get`, `sideporch.set`) and read and write JSON (`sideporch.json`). They run sandboxed, with limits on instructions, memory and posts, and cannot read files or reach the network. The editor lists the full API.
+
+The editor is made for writing and debugging them:
+
+- Syntax highlighting, completions for the `sideporch` API, and auto-indentation.
+- A linter ([selene](https://github.com/Kampfkarren/selene)) that knows the sandbox, and a formatter ([StyLua](https://github.com/JohnnyMorganz/StyLua)).
+- **Test runs** against a simulated message, reaction, webhook request or timer. They show what the script prints and would post, without changing anything.
+- A **run log** of what each automation printed, posted and answered, a **history** of every saved version with one-click restore, and each automation's **webhook URL**.
+
+Everything, including scripts, their history and their data, lives in the SQLite database, so a backup of it covers automations too.
+
+### Let AI write automations
+
+- **In the editor**: an admin connects a model under *Automations → AI provider*, either Anthropic's API or any OpenAI-compatible one (OpenAI, OpenRouter, Ollama, …). Then *Ask AI* writes or changes the script from a description. Sideporch lints and test-loads the answer, sends problems back to the model, and shows the result for review; nothing is saved until you choose to.
+- **From your own agent**: Sideporch is an [MCP](https://modelcontextprotocol.io) server at `/mcp`. Create a token under *Automations → MCP for AI agents*, then connect, for example with Claude Code:
+
+  ```sh
+  claude mcp add --transport http sideporch https://chat.example.com/mcp \
+    --header "Authorization: Bearer sp_…"
+  ```
+
+  The agent can read the API reference, lint, format and test scripts, read run logs, and create or change automations. Automations it creates start switched off, and every change it makes is kept in the history.
 
 ## Decisions
 

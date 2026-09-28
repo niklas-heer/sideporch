@@ -15,6 +15,7 @@ argon2 = "0.6.0"
 axum = { version = "0.8.9", features = ["multipart", "ws"] }
 base64ct = { version = "1.8.3", features = ["alloc"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
+full_moon = { version = "2.2.0", default-features = false, features = ["lua54"] }
 futures-util = "0.3.34"
 getrandom = "0.4.3"
 http-body-util = "0.1.5"
@@ -22,13 +23,15 @@ hyper-rustls = { version = "0.27.10", default-features = false, features = ["rin
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "http2", "tokio"] }
 jiff = "0.2.37"
 maud = { version = "0.27.0", features = ["axum"] }
-mlua = { version = "0.12.1", features = ["lua54", "vendored", "send"] }
+mlua = { version = "0.12.1", features = ["lua54", "vendored", "send", "serde"] }
 phosphor-svgs = "0.5.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+selene-lib = { version = "0.31.0", default-features = false, features = ["lua54"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
+stylua = { version = "2.5.2", default-features = false, features = ["lua54"] }
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

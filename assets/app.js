@@ -9,12 +9,14 @@
   const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
   const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
   const fullFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "short" });
+  const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
   function localizeTimes(root) {
     for (const time of root.querySelectorAll("time[datetime]")) {
       const date = new Date(time.getAttribute("datetime"));
       if (Number.isNaN(date.getTime())) continue;
-      time.textContent = time.dataset.format === "date" ? dateFormat.format(date) : timeFormat.format(date);
+      const format = { date: dateFormat, datetime: dateTimeFormat }[time.dataset.format] || timeFormat;
+      time.textContent = format.format(date);
       time.title = fullFormat.format(date);
     }
   }

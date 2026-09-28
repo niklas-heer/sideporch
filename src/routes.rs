@@ -13,7 +13,6 @@ use serde::Deserialize;
 use crate::{
     AppState, assets,
     auth::{self, CurrentUser},
-    automations,
     error::{AppError, AppResult},
     files::{self, MessageInput},
     messages::{self, Draft, Sender},
@@ -22,6 +21,11 @@ use crate::{
     views::{self, AccountForm, ChannelView, Render, Shell},
     webhook,
 };
+
+mod automation;
+mod settings;
+
+pub use automation::run_test;
 
 /// Messages shown per page of channel history.
 const PAGE_SIZE: usize = 100;
@@ -59,16 +63,6 @@ pub fn router(state: AppState) -> Router {
         .route("/push/key", get(push::public_key))
         .route("/push/subscriptions", post(push::subscribe))
         .route("/push/unsubscribe", post(push::unsubscribe))
-        .route("/automations", get(automation_list).post(create_automation))
-        .route("/automations/new", get(new_automation))
-        .route(
-            "/automations/{automation_id}",
-            get(edit_automation).post(update_automation),
-        )
-        .route(
-            "/automations/{automation_id}/delete",
-            post(delete_automation),
-        )
         .route("/c/{channel_id}/settings", get(channel_settings))
         .route("/c/{channel_id}/topic", post(set_topic))
         .route("/c/{channel_id}/webhooks", post(create_webhook))
@@ -83,6 +77,8 @@ pub fn router(state: AppState) -> Router {
         .route("/hooks/{token}", post(incoming_webhook))
         .route("/ws", get(realtime::connect))
         .route("/healthz", get(|| async { "ok" }))
+        .merge(automation::router())
+        .merge(settings::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -115,7 +111,7 @@ async fn security_headers(request: Request, next: Next) -> Response {
 }
 
 /// The URL people use to reach this server, for invite and webhook links.
-fn base_url(state: &AppState, headers: &HeaderMap) -> String {
+pub fn base_url(state: &AppState, headers: &HeaderMap) -> String {
     if let Some(url) = &state.public_url {
         return url.clone();
     }
@@ -898,152 +894,6 @@ async fn revoke_invite(
         .call(move |conn| store::revoke_invite(conn, &token))
         .await?;
     Ok(Redirect::to("/people").into_response())
-}
-
-// Automations (admins only)
-
-const fn require_admin(user: &CurrentUser) -> AppResult<()> {
-    if user.is_admin {
-        Ok(())
-    } else {
-        Err(AppError::Forbidden)
-    }
-}
-
-async fn automation_list(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
-    require_admin(&user)?;
-    let list = state.db.call(|conn| store::automations(conn)).await?;
-    let sidebar = shell_data(&state, user.id).await?;
-    let shell = Shell {
-        user: &user,
-        sidebar: &sidebar,
-        current: None,
-    };
-    Ok(views::automations::list_page(&shell, &list))
-}
-
-async fn automation_editor(
-    state: &AppState,
-    user: &CurrentUser,
-    editor: &views::automations::Editor<'_>,
-) -> AppResult<Markup> {
-    let sidebar = shell_data(state, user.id).await?;
-    let shell = Shell {
-        user,
-        sidebar: &sidebar,
-        current: None,
-    };
-    Ok(views::automations::editor_page(&shell, editor))
-}
-
-async fn new_automation(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
-    require_admin(&user)?;
-    let editor = views::automations::Editor {
-        id: None,
-        name: "",
-        source: automations::EXAMPLE,
-        enabled: true,
-        last_error: None,
-        form_error: None,
-    };
-    automation_editor(&state, &user, &editor).await
-}
-
-async fn edit_automation(
-    user: CurrentUser,
-    State(state): State<AppState>,
-    Path(automation_id): Path<i64>,
-) -> AppResult<Markup> {
-    require_admin(&user)?;
-    let automation = state
-        .db
-        .call(move |conn| store::automation(conn, automation_id))
-        .await?
-        .ok_or(AppError::NotFound)?;
-    let editor = views::automations::Editor {
-        id: Some(automation.id),
-        name: &automation.name,
-        source: &automation.source,
-        enabled: automation.enabled,
-        last_error: automation.last_error.as_deref(),
-        form_error: None,
-    };
-    automation_editor(&state, &user, &editor).await
-}
-
-#[derive(Deserialize)]
-struct AutomationForm {
-    name: String,
-    source: String,
-    enabled: Option<String>,
-}
-
-async fn save_automation(
-    state: &AppState,
-    user: &CurrentUser,
-    id: Option<i64>,
-    form: AutomationForm,
-) -> AppResult<Response> {
-    require_admin(user)?;
-    let name: String = form.name.trim().chars().take(80).collect();
-    let enabled = form.enabled.is_some();
-    if name.is_empty() || form.source.len() > 100_000 {
-        let editor = views::automations::Editor {
-            id,
-            name: &name,
-            source: &form.source,
-            enabled,
-            last_error: None,
-            form_error: Some("Give the automation a name, and keep the script under 100 kB."),
-        };
-        let page = automation_editor(state, user, &editor).await?;
-        return Ok((StatusCode::BAD_REQUEST, page).into_response());
-    }
-    let user_id = user.id;
-    let now = now_ms();
-    let source = form.source;
-    let saved = state
-        .db
-        .call(move |conn| {
-            if let Some(id) = id {
-                store::automation(conn, id)?.ok_or(AppError::NotFound)?;
-            }
-            store::save_automation(conn, id, &name, &source, enabled, user_id, now)
-        })
-        .await?;
-    state.automations.reload(state).await?;
-    Ok(Redirect::to(&format!("/automations/{saved}")).into_response())
-}
-
-async fn create_automation(
-    user: CurrentUser,
-    State(state): State<AppState>,
-    Form(form): Form<AutomationForm>,
-) -> AppResult<Response> {
-    save_automation(&state, &user, None, form).await
-}
-
-async fn update_automation(
-    user: CurrentUser,
-    State(state): State<AppState>,
-    Path(automation_id): Path<i64>,
-    Form(form): Form<AutomationForm>,
-) -> AppResult<Response> {
-    save_automation(&state, &user, Some(automation_id), form).await
-}
-
-async fn delete_automation(
-    user: CurrentUser,
-    State(state): State<AppState>,
-    Path(automation_id): Path<i64>,
-) -> AppResult<Response> {
-    require_admin(&user)?;
-    state
-        .db
-        .call(move |conn| store::delete_automation(conn, automation_id))
-        .await?;
-    state.automations.reload(&state).await?;
-    Ok(Redirect::to("/automations").into_response())
 }
 
 #[cfg(test)]

@@ -1,49 +1,44 @@
 //! Automations: small Lua scripts that admins write in the browser.
 //!
 //! Every enabled script runs in its own sandboxed Lua 5.4 state on one
-//! dedicated thread. Scripts only get the `string`, `table`, `math`, `utf8`
-//! and `coroutine` libraries plus a `sideporch` table:
-//!
-//! ```lua
-//! sideporch.on_message(function(msg)          -- new messages in public channels
-//!   if msg.text == "!ping" then sideporch.reply(msg, "pong") end
-//! end)
-//! sideporch.every(3600, function() ... end)   -- repeat every N seconds (at least 10)
-//! sideporch.post("general", "Hello")          -- post to a public channel
-//! sideporch.get("key") / sideporch.set("key", "value")  -- keep data between runs
-//! sideporch.now()                             -- Unix time in seconds
-//! ```
+//! dedicated thread. Scripts react to new messages, reactions, webhook
+//! requests and timers through a `sideporch` table, described in
+//! [`api`]. [`sandbox`] builds the Lua states, [`tooling`] lints and
+//! formats scripts.
 //!
 //! Each call has an instruction budget and each state a memory limit, so a
 //! runaway script fails with an error instead of stalling the server.
-//! Messages from automations never trigger automations.
+//! Messages and reactions from automations never trigger automations.
+//! Calls that print, act, or fail are kept in a per-script run log.
+
+pub mod api;
+pub mod sandbox;
+pub mod tooling;
 
 use std::{
+    collections::HashMap,
     path::Path,
     sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
 
-use mlua::{Function, HookTriggers, Lua, LuaOptions, StdLib, Table, Value, VmState};
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc as async_mpsc, oneshot};
 
 use crate::{
     AppState, db,
     error::{AppError, AppResult},
     messages::{self, Draft, Sender},
+    now_ms,
     store::{self, Author, Message},
 };
+pub use sandbox::WebhookResponse;
+use sandbox::{Action, ChannelRef, Identity, Outcome, Script, Sink, Storage};
 
-/// Instructions a single call may run, checked every 1,000 instructions.
-const INSTRUCTION_BUDGET: u32 = 2_000_000;
-const HOOK_INTERVAL: u32 = 1_000;
-const MEMORY_LIMIT: usize = 16 * 1024 * 1024;
-/// Messages a single call may post.
-const POST_LIMIT: usize = 20;
-const MIN_INTERVAL_SECS: u64 = 10;
-const MAX_VALUE_BYTES: usize = 64 * 1024;
+/// How long a webhook request waits for its script.
+const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A new message, as scripts see it.
 #[derive(Debug, Clone)]
@@ -89,25 +84,36 @@ impl MessageEvent {
     }
 }
 
+/// Someone added or removed a reaction.
+#[derive(Debug, Clone)]
+pub struct ReactionEvent {
+    pub emoji: String,
+    pub added: bool,
+    pub user: String,
+    pub username: String,
+    pub message: MessageEvent,
+}
+
+/// An HTTP request to an automation's webhook URL.
+#[derive(Debug, Clone, Default)]
+pub struct WebhookRequest {
+    pub method: String,
+    /// The part of the path after the token, such as `/deploy`, or empty.
+    pub path: String,
+    pub query: Vec<(String, String)>,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+}
+
 enum Command {
     Reload(Vec<store::Automation>, oneshot::Sender<()>),
     Message(MessageEvent),
-}
-
-/// Something a script asked Sideporch to do.
-enum Action {
-    Post {
+    Reaction(ReactionEvent),
+    Webhook {
         automation_id: i64,
-        name: String,
-        channel: ChannelRef,
-        text: String,
-        thread: Option<i64>,
+        request: WebhookRequest,
+        respond: oneshot::Sender<WebhookResponse>,
     },
-}
-
-enum ChannelRef {
-    Id(i64),
-    Name(String),
 }
 
 /// Handle to the automation thread.
@@ -119,7 +125,7 @@ pub struct Automations {
 
 impl Automations {
     /// Starts the automation thread. It keeps its own database connection
-    /// for script data.
+    /// for script data and run logs.
     pub fn start(db_path: &Path) -> AppResult<Self> {
         let conn = Arc::new(Mutex::new(db::connect(db_path)?));
         let (commands, receiver) = mpsc::channel();
@@ -150,9 +156,32 @@ impl Automations {
         }
     }
 
+    // Sending fails only if the thread is gone, which shutdown causes.
+
     pub fn message(&self, event: MessageEvent) {
-        // Fails only if the thread is gone, which shutdown causes.
         drop(self.commands.send(Command::Message(event)));
+    }
+
+    pub fn reaction(&self, event: ReactionEvent) {
+        drop(self.commands.send(Command::Reaction(event)));
+    }
+
+    /// Hands a request to the automation's webhook handler and waits for
+    /// its response.
+    pub async fn webhook(&self, automation_id: i64, request: WebhookRequest) -> WebhookResponse {
+        let (respond, response) = oneshot::channel();
+        let sent = self.commands.send(Command::Webhook {
+            automation_id,
+            request,
+            respond,
+        });
+        if sent.is_err() {
+            return WebhookResponse::text(503, "Automations are not running.");
+        }
+        match tokio::time::timeout(WEBHOOK_TIMEOUT, response).await {
+            Ok(Ok(response)) => response,
+            _ => WebhookResponse::text(504, "The automation did not answer in time."),
+        }
     }
 
     /// Reloads all scripts from the database and waits until they ran their
@@ -170,81 +199,82 @@ impl Automations {
 }
 
 async fn perform(state: &AppState, action: Action) {
-    let Action::Post {
-        automation_id,
-        name,
-        channel,
-        text,
-        thread,
-    } = action;
-    let channel_id = state
-        .db
-        .call(move |conn| match channel {
-            ChannelRef::Id(id) => Ok(conn
-                .query_row(
-                    "SELECT id FROM channels WHERE id = ?1 AND kind = 'public'",
-                    [id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .ok()),
-            ChannelRef::Name(name) => store::public_channel_id(conn, name.trim_start_matches('#')),
-        })
-        .await;
-    let result = match channel_id {
-        Ok(Some(channel_id)) => messages::post(
-            state,
-            Draft {
-                channel_id,
-                parent_id: thread,
-                sender: Sender::Automation {
-                    id: automation_id,
-                    name,
-                },
-                body: text,
-                attachments: Vec::new(),
-                files: Vec::new(),
-            },
-        )
-        .await
-        .map(drop),
-        Ok(None) => Err(AppError::bad_request(
-            "sideporch.post: no public channel with that name",
-        )),
-        Err(error) => Err(error),
+    let (automation_id, result) = match action {
+        Action::Post {
+            automation_id,
+            name,
+            channel,
+            text,
+            thread,
+        } => (
+            automation_id,
+            post(state, automation_id, name, channel, text, thread).await,
+        ),
+        Action::React {
+            automation_id,
+            channel_id,
+            message_id,
+            emoji,
+        } => (
+            automation_id,
+            messages::automation_reaction(state, automation_id, channel_id, message_id, emoji)
+                .await,
+        ),
     };
     if let Err(error) = result {
         let message = error.to_string();
         drop(
             state
                 .db
-                .call(move |conn| store::set_automation_error(conn, automation_id, Some(&message)))
+                .call(move |conn| {
+                    store::set_automation_error(conn, automation_id, Some(&message))?;
+                    store::record_automation_run(
+                        conn,
+                        automation_id,
+                        "action",
+                        now_ms(),
+                        0,
+                        "",
+                        Some(&message),
+                    )
+                })
                 .await,
         );
     }
 }
 
-struct Timer {
-    every: Duration,
-    next: Instant,
-    callback: Function,
-}
-
-struct Script {
-    id: i64,
-    lua: Lua,
-    handlers: Vec<Function>,
-    timers: Vec<Timer>,
-}
-
-/// Per-state data that the `sideporch` functions reach through app data.
-struct Registry {
-    handlers: Vec<Function>,
-    timers: Vec<Timer>,
-}
-
-struct Budget {
-    used: u32,
-    posts: usize,
+async fn post(
+    state: &AppState,
+    automation_id: i64,
+    name: String,
+    channel: ChannelRef,
+    text: String,
+    thread: Option<i64>,
+) -> AppResult<()> {
+    let channel_id = state
+        .db
+        .call(move |conn| match channel {
+            ChannelRef::Id(id, _) => store::public_channel(conn, id),
+            ChannelRef::Name(name) => store::public_channel_id(conn, name.trim_start_matches('#')),
+        })
+        .await?
+        .ok_or_else(|| AppError::bad_request("sideporch.post: no public channel with that name"))?;
+    messages::post(
+        state,
+        Draft {
+            channel_id,
+            parent_id: thread,
+            sender: Sender::Automation {
+                id: automation_id,
+                name,
+            },
+            body: text,
+            attachments: Vec::new(),
+            files: Vec::new(),
+        },
+    )
+    .await
+    .map(drop)
 }
 
 fn run(
@@ -253,6 +283,8 @@ fn run(
     actions: &async_mpsc::UnboundedSender<Action>,
 ) {
     let mut scripts: Vec<Script> = Vec::new();
+    // Which scripts last failed, so quiet successes only write when that changes.
+    let mut failing: HashMap<i64, bool> = HashMap::new();
     loop {
         let now = Instant::now();
         let wait = scripts
@@ -264,22 +296,41 @@ fn run(
             });
         match commands.recv_timeout(wait) {
             Ok(Command::Reload(automations, done)) => {
-                scripts = automations
-                    .into_iter()
-                    .filter(|automation| automation.enabled)
-                    .filter_map(|automation| load(&automation, conn, actions))
-                    .collect();
+                (scripts, failing) = load_all(automations, conn, actions);
                 // The caller may have stopped waiting.
                 let _ = done.send(());
             }
             Ok(Command::Message(event)) => {
                 for script in &scripts {
-                    for handler in &script.handlers {
-                        let result = message_table(&script.lua, &event)
-                            .and_then(|table| call(&script.lua, handler, table));
-                        report(conn, script.id, result);
+                    for handler in &script.on_message {
+                        let outcome = match sandbox::message_table(&script.lua, &event) {
+                            Ok(table) => sandbox::call(&script.lua, handler, table),
+                            Err(error) => failed(&error),
+                        };
+                        record(conn, &mut failing, script.id, "message", &outcome);
                     }
                 }
+            }
+            Ok(Command::Reaction(event)) => {
+                for script in &scripts {
+                    for handler in &script.on_reaction {
+                        let outcome = match sandbox::reaction_table(&script.lua, &event) {
+                            Ok(table) => sandbox::call(&script.lua, handler, table),
+                            Err(error) => failed(&error),
+                        };
+                        record(conn, &mut failing, script.id, "reaction", &outcome);
+                    }
+                }
+            }
+            Ok(Command::Webhook {
+                automation_id,
+                request,
+                respond,
+            }) => {
+                let script = scripts.iter().find(|script| script.id == automation_id);
+                let response = answer_webhook(script, &request, conn, &mut failing);
+                // The caller may have timed out.
+                let _ = respond.send(response);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -289,297 +340,339 @@ fn run(
             for timer in &mut script.timers {
                 if timer.next <= now {
                     timer.next = now.checked_add(timer.every).unwrap_or(now);
-                    let result = call(&script.lua, &timer.callback, ());
-                    report(conn, script.id, result);
+                    let outcome = sandbox::call(&script.lua, &timer.callback, ());
+                    record(conn, &mut failing, script.id, "timer", &outcome);
                 }
             }
         }
     }
 }
 
-/// Runs a script's top level, which registers its handlers and timers.
-fn load(
-    automation: &store::Automation,
+/// Loads every enabled script, and notes which automations have an error.
+fn load_all(
+    automations: Vec<store::Automation>,
     conn: &Arc<Mutex<Connection>>,
     actions: &async_mpsc::UnboundedSender<Action>,
-) -> Option<Script> {
-    let loaded = sandbox(automation, conn, actions).and_then(|lua| {
-        lua.set_app_data(Budget { used: 0, posts: 0 });
-        lua.load(automation.source.as_str())
-            .set_name(format!("={}", automation.name))
-            .set_mode(mlua::prelude::LuaChunkMode::Text)
-            .exec()?;
-        let registry = lua
-            .remove_app_data::<Registry>()
-            .ok_or_else(|| mlua::Error::runtime("registry missing"))?;
-        Ok(Script {
-            id: automation.id,
-            lua,
-            handlers: registry.handlers,
-            timers: registry.timers,
-        })
-    });
-    match loaded {
-        Ok(script) => {
-            report(conn, automation.id, Ok(()));
-            Some(script)
-        }
-        Err(error) => {
-            report(conn, automation.id, Err(error));
-            None
-        }
-    }
-}
-
-fn call(lua: &Lua, function: &Function, args: impl mlua::IntoLuaMulti) -> mlua::Result<()> {
-    lua.set_app_data(Budget { used: 0, posts: 0 });
-    function.call::<()>(args)
-}
-
-fn report(conn: &Arc<Mutex<Connection>>, id: i64, result: mlua::Result<()>) {
-    let error = result.err().map(|error| clean_error(&error));
-    if let Some(error) = &error {
-        tracing::warn!(automation = id, %error, "automation failed");
-    }
-    if let Ok(conn) = conn.lock()
-        && let Err(error) = store::set_automation_error(&conn, id, error.as_deref())
-    {
-        tracing::warn!(?error, "could not record automation status");
-    }
-}
-
-/// The first line of a Lua error, without the Rust traceback noise.
-fn clean_error(error: &mlua::Error) -> String {
-    let text = match error {
-        mlua::Error::CallbackError { cause, .. } => return clean_error(cause),
-        other => other.to_string(),
-    };
-    text.lines()
-        .find(|line| !line.trim().is_empty() && !line.starts_with("stack traceback"))
-        .unwrap_or("unknown error")
-        .trim_start_matches("runtime error: ")
-        .trim_start_matches("syntax error: ")
-        .to_owned()
-}
-
-fn sandbox(
-    automation: &store::Automation,
-    conn: &Arc<Mutex<Connection>>,
-    actions: &async_mpsc::UnboundedSender<Action>,
-) -> mlua::Result<Lua> {
-    let lua = Lua::new_with(
-        StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE,
-        LuaOptions::default(),
-    )?;
-    lua.set_memory_limit(MEMORY_LIMIT)?;
-    lua.set_global_hook(
-        HookTriggers::new().every_nth_instruction(HOOK_INTERVAL),
-        |lua, _| {
-            let exhausted = lua.app_data_mut::<Budget>().is_some_and(|mut budget| {
-                budget.used = budget.used.saturating_add(HOOK_INTERVAL);
-                budget.used > INSTRUCTION_BUDGET
-            });
-            if exhausted {
-                Err(mlua::Error::runtime("stopped: the script ran too long"))
-            } else {
-                Ok(VmState::Continue)
-            }
-        },
-    )?;
-    let globals = lua.globals();
-    for name in ["dofile", "loadfile", "load", "require", "collectgarbage"] {
-        globals.set(name, Value::Nil)?;
-    }
-    if let Ok(string) = globals.get::<Table>("string") {
-        string.set("dump", Value::Nil)?;
-    }
-    let script_name = automation.name.clone();
-    globals.set(
-        "print",
-        lua.create_function(move |_, values: mlua::Variadic<Value>| {
-            let line: Vec<String> = values
-                .iter()
-                .map(|value| value.to_string().unwrap_or_default())
-                .collect();
-            tracing::info!(automation = %script_name, "{}", line.join("\t"));
-            Ok(())
-        })?,
-    )?;
-    lua.set_app_data(Registry {
-        handlers: Vec::new(),
-        timers: Vec::new(),
-    });
-    let api = lua.create_table()?;
-    register_triggers(&lua, &api)?;
-    register_posting(&lua, &api, automation, actions)?;
-    register_storage(&lua, &api, automation.id, conn)?;
-    api.set(
-        "now",
-        lua.create_function(|_, ()| Ok(jiff::Timestamp::now().as_second()))?,
-    )?;
-    globals.set("sideporch", api)?;
-    Ok(lua)
-}
-
-/// `sideporch.on_message` and `sideporch.every`.
-fn register_triggers(lua: &Lua, api: &Table) -> mlua::Result<()> {
-    api.set(
-        "on_message",
-        lua.create_function(|lua, handler: Function| {
-            registry(lua)?.handlers.push(handler);
-            Ok(())
-        })?,
-    )?;
-    api.set(
-        "every",
-        lua.create_function(|lua, (seconds, callback): (u64, Function)| {
-            if seconds < MIN_INTERVAL_SECS {
-                return Err(mlua::Error::runtime(
-                    "sideporch.every: use at least 10 seconds",
-                ));
-            }
-            let every = Duration::from_secs(seconds);
-            let now = Instant::now();
-            registry(lua)?.timers.push(Timer {
-                every,
-                next: now.checked_add(every).unwrap_or(now),
-                callback,
-            });
-            Ok(())
-        })?,
-    )
-}
-
-/// Counts a post against the current call's limit.
-fn spend_post(lua: &Lua) -> mlua::Result<()> {
-    let posts = {
-        let mut budget = lua
-            .app_data_mut::<Budget>()
-            .ok_or_else(|| mlua::Error::runtime("budget missing"))?;
-        budget.posts = budget.posts.saturating_add(1);
-        budget.posts
-    };
-    if posts > POST_LIMIT {
-        return Err(mlua::Error::runtime("stopped: too many posts in one run"));
-    }
-    Ok(())
-}
-
-/// `sideporch.post` and `sideporch.reply`.
-fn register_posting(
-    lua: &Lua,
-    api: &Table,
-    automation: &store::Automation,
-    actions: &async_mpsc::UnboundedSender<Action>,
-) -> mlua::Result<()> {
-    let poster = |actions: async_mpsc::UnboundedSender<Action>| {
-        let automation_id = automation.id;
-        let name = automation.name.clone();
-        move |lua: &Lua, channel: ChannelRef, text: String, thread: Option<i64>| {
-            let text = text.trim();
-            if text.is_empty() {
-                return Err(mlua::Error::runtime("sideporch.post: the text is empty"));
-            }
-            spend_post(lua)?;
-            actions
-                .send(Action::Post {
-                    automation_id,
-                    name: name.clone(),
-                    channel,
-                    text: text.chars().take(10_000).collect(),
-                    thread,
-                })
-                .map_err(|_| mlua::Error::runtime("Sideporch is shutting down"))
-        }
-    };
-    let post = poster(actions.clone());
-    api.set(
-        "post",
-        lua.create_function(
-            move |lua, (channel, text, options): (String, String, Option<Table>)| {
-                let thread = options
-                    .map(|options| options.get::<Option<i64>>("thread"))
-                    .transpose()?
-                    .flatten();
-                post(lua, ChannelRef::Name(channel), text, thread)
-            },
-        )?,
-    )?;
-    let reply = poster(actions.clone());
-    api.set(
-        "reply",
-        lua.create_function(move |lua, (message, text): (Table, String)| {
-            let channel: i64 = message.get("channel_id")?;
-            let thread = message
-                .get::<Option<i64>>("thread_id")?
-                .or(message.get::<Option<i64>>("id")?);
-            reply(lua, ChannelRef::Id(channel), text, thread)
-        })?,
-    )
-}
-
-/// `sideporch.get` and `sideporch.set`, stored per automation.
-fn register_storage(
-    lua: &Lua,
-    api: &Table,
-    id: i64,
-    conn: &Arc<Mutex<Connection>>,
-) -> mlua::Result<()> {
-    let data = Arc::clone(conn);
-    api.set(
-        "get",
-        lua.create_function(move |_, key: String| {
-            let conn = data
-                .lock()
-                .map_err(|_| mlua::Error::runtime("database unavailable"))?;
-            store::automation_value(&conn, id, &key)
-                .map_err(|error| mlua::Error::runtime(error.to_string()))
-        })?,
-    )?;
-    let data = Arc::clone(conn);
-    api.set(
-        "set",
-        lua.create_function(move |_, (key, value): (String, Option<Value>)| {
-            let value = match value {
-                None | Some(Value::Nil) => None,
-                Some(Value::String(text)) => Some(text.to_str()?.to_owned()),
-                Some(other) => Some(other.to_string()?),
+) -> (Vec<Script>, HashMap<i64, bool>) {
+    let mut failing: HashMap<i64, bool> = automations
+        .iter()
+        .map(|automation| (automation.id, automation.last_error.is_some()))
+        .collect();
+    let scripts = automations
+        .into_iter()
+        .filter(|automation| automation.enabled)
+        .filter_map(|automation| {
+            let identity = Identity {
+                id: automation.id,
+                name: automation.name,
             };
-            if key.len() > 200
-                || value
-                    .as_ref()
-                    .is_some_and(|value| value.len() > MAX_VALUE_BYTES)
-            {
-                return Err(mlua::Error::runtime(
-                    "sideporch.set: key or value is too long",
-                ));
+            let (script, outcome) = sandbox::load(
+                &identity,
+                &automation.source,
+                Storage::Live(Arc::clone(conn)),
+                &Sink::Live(actions.clone()),
+            );
+            record(conn, &mut failing, identity.id, "load", &outcome);
+            script
+        })
+        .collect();
+    (scripts, failing)
+}
+
+fn answer_webhook(
+    script: Option<&Script>,
+    request: &WebhookRequest,
+    conn: &Arc<Mutex<Connection>>,
+    failing: &mut HashMap<i64, bool>,
+) -> WebhookResponse {
+    let Some(script) = script else {
+        return WebhookResponse::text(503, "This automation is switched off or failed to load.");
+    };
+    let Some(handler) = &script.on_webhook else {
+        return WebhookResponse::text(404, "This automation has no webhook handler.");
+    };
+    let (mut outcome, response) = sandbox::call_webhook(&script.lua, handler, request);
+    outcome
+        .log
+        .insert(0, format!("{} {}", request.method, display_path(request)));
+    failing.insert(script.id, outcome.error.is_some());
+    record_always(conn, script.id, "webhook", &outcome);
+    response.unwrap_or_else(|| WebhookResponse::text(500, "The automation failed."))
+}
+
+fn display_path(request: &WebhookRequest) -> String {
+    if request.path.is_empty() {
+        "/".to_owned()
+    } else {
+        request.path.clone()
+    }
+}
+
+fn failed(error: &mlua::Error) -> Outcome {
+    Outcome {
+        error: Some(sandbox::clean_error(error)),
+        ..Outcome::default()
+    }
+}
+
+/// Stores the script's status, and the call in the run log if it printed,
+/// acted, or failed.
+fn record(
+    conn: &Arc<Mutex<Connection>>,
+    failing: &mut HashMap<i64, bool>,
+    id: i64,
+    trigger: &str,
+    outcome: &Outcome,
+) {
+    let failed_before = failing.insert(id, outcome.error.is_some()).unwrap_or(false);
+    if outcome.log.is_empty() && outcome.error.is_none() {
+        // A quiet success only clears an earlier error.
+        if failed_before
+            && let Ok(conn) = conn.lock()
+            && let Err(error) = store::set_automation_error(&conn, id, None)
+        {
+            tracing::warn!(?error, "could not record automation status");
+        }
+        return;
+    }
+    record_always(conn, id, trigger, outcome);
+}
+
+fn record_always(conn: &Arc<Mutex<Connection>>, id: i64, trigger: &str, outcome: &Outcome) {
+    if let Some(error) = &outcome.error {
+        tracing::warn!(automation = id, trigger, %error, "automation failed");
+    }
+    let Ok(conn) = conn.lock() else {
+        return;
+    };
+    let duration = i64::try_from(outcome.duration.as_micros()).unwrap_or(i64::MAX);
+    let result = store::set_automation_error(&conn, id, outcome.error.as_deref()).and_then(|()| {
+        store::record_automation_run(
+            &conn,
+            id,
+            trigger,
+            now_ms(),
+            duration,
+            &outcome.log.join("\n"),
+            outcome.error.as_deref(),
+        )
+    });
+    if let Err(error) = result {
+        tracing::warn!(?error, "could not record automation run");
+    }
+}
+
+/// What a dry run should simulate.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TestTrigger {
+    /// Only load the script.
+    Load,
+    Message {
+        #[serde(default)]
+        text: String,
+        #[serde(default = "default_channel")]
+        channel: String,
+        #[serde(default = "default_author")]
+        author: String,
+    },
+    Reaction {
+        #[serde(default = "default_emoji")]
+        emoji: String,
+        #[serde(default = "yes")]
+        added: bool,
+        #[serde(default)]
+        text: String,
+        #[serde(default = "default_channel")]
+        channel: String,
+    },
+    Webhook {
+        #[serde(default = "default_method")]
+        method: String,
+        #[serde(default)]
+        path: String,
+        #[serde(default)]
+        body: String,
+    },
+    /// Calls every timer once.
+    Timer,
+}
+
+fn default_channel() -> String {
+    "general".to_owned()
+}
+fn default_author() -> String {
+    "Test Person".to_owned()
+}
+fn default_emoji() -> String {
+    "thumbsup".to_owned()
+}
+fn default_method() -> String {
+    "POST".to_owned()
+}
+const fn yes() -> bool {
+    true
+}
+
+/// The result of a dry run.
+#[derive(Debug, Serialize)]
+pub struct TestReport {
+    pub ok: bool,
+    pub error: Option<String>,
+    /// Printed lines and would-be actions, in order.
+    pub log: Vec<String>,
+    /// Handlers the script registered.
+    pub handlers: Handlers,
+    /// How many handlers the simulated event reached.
+    pub called: usize,
+    pub response: Option<WebhookResponse>,
+    pub instructions: u32,
+    pub duration_ms: f64,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct Handlers {
+    pub message: usize,
+    pub reaction: usize,
+    pub webhook: bool,
+    pub timers: usize,
+}
+
+/// Runs `source` in a fresh sandbox against a simulated event. Posts and
+/// reactions are only described, and `sideporch.set` changes a copy of
+/// `data`, so nothing in Sideporch changes. Blocks; run it off the async
+/// threads.
+pub fn test(
+    name: &str,
+    source: &str,
+    data: HashMap<String, String>,
+    trigger: &TestTrigger,
+) -> TestReport {
+    let identity = Identity {
+        id: 0,
+        name: name.to_owned(),
+    };
+    let (script, mut outcome) = sandbox::load(
+        &identity,
+        source,
+        Storage::Dry(Arc::new(Mutex::new(data))),
+        &Sink::Dry(Arc::default()),
+    );
+    let mut report = TestReport {
+        ok: false,
+        error: None,
+        log: Vec::new(),
+        handlers: Handlers::default(),
+        called: 0,
+        response: None,
+        instructions: 0,
+        duration_ms: 0.0,
+    };
+    if let Some(script) = &script {
+        report.handlers = Handlers {
+            message: script.on_message.len(),
+            reaction: script.on_reaction.len(),
+            webhook: script.on_webhook.is_some(),
+            timers: script.timers.len(),
+        };
+        if outcome.error.is_none() {
+            simulate(script, trigger, &mut outcome, &mut report);
+        }
+    }
+    report.ok = outcome.error.is_none();
+    report.error = outcome.error;
+    report.log = outcome.log;
+    report.instructions = outcome.instructions;
+    report.duration_ms = outcome.duration.as_secs_f64() * 1000.0;
+    report
+}
+
+fn simulate(
+    script: &Script,
+    trigger: &TestTrigger,
+    outcome: &mut Outcome,
+    report: &mut TestReport,
+) {
+    let lua = &script.lua;
+    let message = |text: &str, channel: &str, author: &str| MessageEvent {
+        id: 1,
+        channel_id: 1,
+        channel: channel.trim_start_matches('#').to_owned(),
+        text: text.to_owned(),
+        author: author.to_owned(),
+        username: Some("test".to_owned()),
+        is_bot: false,
+        thread_id: None,
+    };
+    let mut each = |handlers: &[mlua::Function], args: &dyn Fn() -> mlua::Result<mlua::Table>| {
+        for handler in handlers {
+            if outcome.error.is_some() {
+                return;
             }
-            let conn = data
-                .lock()
-                .map_err(|_| mlua::Error::runtime("database unavailable"))?;
-            store::set_automation_value(&conn, id, &key, value.as_deref())
-                .map_err(|error| mlua::Error::runtime(error.to_string()))
-        })?,
-    )
-}
-
-fn registry(lua: &Lua) -> mlua::Result<mlua::AppDataRefMut<'_, Registry>> {
-    lua.app_data_mut::<Registry>().ok_or_else(|| {
-        mlua::Error::runtime("handlers can only be registered while the script loads")
-    })
-}
-
-fn message_table(lua: &Lua, event: &MessageEvent) -> mlua::Result<Table> {
-    let table = lua.create_table()?;
-    table.set("id", event.id)?;
-    table.set("channel_id", event.channel_id)?;
-    table.set("channel", event.channel.as_str())?;
-    table.set("text", event.text.as_str())?;
-    table.set("author", event.author.as_str())?;
-    table.set("username", event.username.as_deref())?;
-    table.set("is_bot", event.is_bot)?;
-    table.set("thread_id", event.thread_id)?;
-    Ok(table)
+            report.called = report.called.saturating_add(1);
+            outcome.absorb(match args() {
+                Ok(table) => sandbox::call(lua, handler, table),
+                Err(error) => failed(&error),
+            });
+        }
+    };
+    match trigger {
+        TestTrigger::Load => {}
+        TestTrigger::Message {
+            text,
+            channel,
+            author,
+        } => {
+            let event = message(text, channel, author);
+            each(&script.on_message, &|| sandbox::message_table(lua, &event));
+        }
+        TestTrigger::Reaction {
+            emoji,
+            added,
+            text,
+            channel,
+        } => {
+            let event = ReactionEvent {
+                emoji: emoji.trim_matches(':').to_owned(),
+                added: *added,
+                user: default_author(),
+                username: "test".to_owned(),
+                message: message(text, channel, "Someone"),
+            };
+            each(&script.on_reaction, &|| {
+                sandbox::reaction_table(lua, &event)
+            });
+        }
+        TestTrigger::Timer => {
+            let callbacks: Vec<mlua::Function> = script
+                .timers
+                .iter()
+                .map(|timer| timer.callback.clone())
+                .collect();
+            for callback in &callbacks {
+                if outcome.error.is_some() {
+                    break;
+                }
+                report.called = report.called.saturating_add(1);
+                outcome.absorb(sandbox::call(lua, callback, ()));
+            }
+        }
+        TestTrigger::Webhook { method, path, body } => {
+            if let Some(handler) = &script.on_webhook {
+                report.called = 1;
+                let request = WebhookRequest {
+                    method: method.to_uppercase(),
+                    path: path.clone(),
+                    query: Vec::new(),
+                    headers: vec![("content-type".to_owned(), "application/json".to_owned())],
+                    body: body.clone(),
+                };
+                let (called, response) = sandbox::call_webhook(lua, handler, &request);
+                outcome.absorb(called);
+                report.response = response;
+            }
+        }
+    }
 }
 
 /// The script a new automation starts with.
@@ -599,3 +692,53 @@ sideporch.on_message(function(msg)
   end
 end)
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dry_runs_describe_actions_without_saving() {
+        let source = r##"sideporch.on_message(function(msg)
+  local n = tonumber(sideporch.get("n") or "0") + 1
+  sideporch.set("n", n)
+  print("seen", n)
+  sideporch.reply(msg, "#" .. msg.channel .. " " .. msg.text)
+end)"##;
+        let data = HashMap::from([("n".to_owned(), "4".to_owned())]);
+        let report = test(
+            "Echo",
+            source,
+            data,
+            &TestTrigger::Message {
+                text: "hi".to_owned(),
+                channel: "#garden".to_owned(),
+                author: default_author(),
+            },
+        );
+        assert!(report.ok, "{report:?}");
+        assert_eq!(report.called, 1);
+        assert_eq!(
+            report.log,
+            ["seen\t5", "→ post in #garden (thread 1): #garden hi"]
+        );
+    }
+
+    #[test]
+    fn dry_runs_report_errors_and_handlers() {
+        let report = test(
+            "Broken",
+            "sideporch.on_reaction(function(e) error('nope: ' .. e.emoji) end)",
+            HashMap::new(),
+            &TestTrigger::Reaction {
+                emoji: ":tada:".to_owned(),
+                added: true,
+                text: String::new(),
+                channel: default_channel(),
+            },
+        );
+        assert!(!report.ok);
+        assert_eq!(report.handlers.reaction, 1);
+        assert_eq!(report.error.as_deref(), Some("line 1: nope: tada"));
+    }
+}

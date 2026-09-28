@@ -3,6 +3,7 @@
 //! [`Sideporch::open`] prepares the data directory and database;
 //! [`Sideporch::router`] is the complete web application.
 
+mod ai;
 mod assets;
 mod auth;
 mod automations;
@@ -11,6 +12,7 @@ mod error;
 mod files;
 mod icons;
 mod markup;
+mod mcp;
 mod messages;
 mod push;
 mod realtime;
@@ -29,7 +31,7 @@ use axum::Router;
 use sha2::{Digest, Sha256};
 
 pub use crate::error::AppError as Error;
-use crate::{automations::Automations, db::Db, push::Push, realtime::Hub};
+use crate::{ai::Ai, automations::Automations, db::Db, push::Push, realtime::Hub};
 
 /// Where Sideporch keeps its data and how people reach it.
 #[derive(Debug, Clone)]
@@ -50,6 +52,7 @@ pub(crate) struct AppState {
     db: Db,
     hub: Hub,
     push: Arc<Push>,
+    ai: Arc<Ai>,
     automations: Automations,
     public_url: Option<String>,
     secure_cookies: bool,
@@ -128,6 +131,7 @@ impl Sideporch {
             db,
             hub: Hub::default(),
             push: Arc::new(push),
+            ai: Arc::new(Ai::new()?),
             automations: Automations::start(&db_path)?,
             secure_cookies: public_url
                 .as_deref()

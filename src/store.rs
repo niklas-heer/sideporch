@@ -1,6 +1,8 @@
 //! Queries over the `SQLite` database. Functions here are synchronous and
 //! run inside [`crate::db::Db::call`].
 
+use std::collections::HashMap;
+
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::{error::AppResult, webhook::Attachment};
@@ -76,6 +78,14 @@ pub struct Reaction {
     pub emoji: String,
     pub user_ids: Vec<i64>,
     pub names: Vec<String>,
+    /// Names of automations that reacted.
+    pub bots: Vec<String>,
+}
+
+impl Reaction {
+    pub const fn count(&self) -> usize {
+        self.user_ids.len().saturating_add(self.bots.len())
+    }
 }
 
 pub struct NewMessage<'a> {
@@ -186,6 +196,25 @@ pub fn create_channel(conn: &Connection, name: &str, created_by: i64, now: i64) 
         params![name, created_by, now],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+/// `channel_id` if it is a public channel.
+pub fn public_channel(conn: &Connection, channel_id: i64) -> AppResult<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT id FROM channels WHERE kind = 'public' AND id = ?1",
+            [channel_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Names of all public channels, alphabetically.
+pub fn public_channel_names(conn: &Connection) -> AppResult<Vec<String>> {
+    let mut statement =
+        conn.prepare("SELECT name FROM channels WHERE kind = 'public' ORDER BY name")?;
+    let names = statement.query_map([], |row| row.get(0))?;
+    Ok(names.collect::<Result<_, _>>()?)
 }
 
 pub fn public_channel_id(conn: &Connection, name: &str) -> AppResult<Option<i64>> {
@@ -429,6 +458,36 @@ fn hydrate(conn: &Connection, messages: &mut [Message]) -> AppResult<()> {
                 emoji,
                 user_ids: vec![user_id],
                 names: vec![name],
+                bots: Vec::new(),
+            });
+        }
+    }
+    let mut statement = conn.prepare(
+        "SELECT r.message_id, r.emoji, a.name
+         FROM automation_reactions r JOIN automations a ON a.id = r.automation_id
+         WHERE r.message_id IN (SELECT value FROM json_each(?1))
+         ORDER BY r.message_id, r.created_at, r.automation_id",
+    )?;
+    let rows = statement.query_map([&ids], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    for row in rows {
+        let (message_id, emoji, name) = row?;
+        let Some(message) = messages.iter_mut().find(|m| m.id == message_id) else {
+            continue;
+        };
+        if let Some(reaction) = message.reactions.iter_mut().find(|r| r.emoji == emoji) {
+            reaction.bots.push(name);
+        } else {
+            message.reactions.push(Reaction {
+                emoji,
+                user_ids: Vec::new(),
+                names: Vec::new(),
+                bots: vec![name],
             });
         }
     }
@@ -795,13 +854,14 @@ pub fn render_context(conn: &Connection) -> AppResult<crate::markup::Context> {
 // Reactions
 
 /// Adds the reaction, or removes it if the user already reacted that way.
+/// Returns whether it was added.
 pub fn toggle_reaction(
     conn: &Connection,
     message_id: i64,
     user_id: i64,
     emoji: &str,
     now: i64,
-) -> AppResult<()> {
+) -> AppResult<bool> {
     let removed = conn.execute(
         "DELETE FROM reactions WHERE message_id = ?1 AND user_id = ?2 AND emoji = ?3",
         params![message_id, user_id, emoji],
@@ -812,7 +872,23 @@ pub fn toggle_reaction(
             params![message_id, user_id, emoji, now],
         )?;
     }
-    Ok(())
+    Ok(removed == 0)
+}
+
+/// Adds an automation's reaction. Returns false if it already reacted so.
+pub fn add_automation_reaction(
+    conn: &Connection,
+    message_id: i64,
+    automation_id: i64,
+    emoji: &str,
+    now: i64,
+) -> AppResult<bool> {
+    let added = conn.execute(
+        "INSERT OR IGNORE INTO automation_reactions (message_id, automation_id, emoji, created_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![message_id, automation_id, emoji, now],
+    )?;
+    Ok(added > 0)
 }
 
 // Search
@@ -873,6 +949,11 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> AppResult<()> {
          ON CONFLICT (key) DO UPDATE SET value = excluded.value",
         params![key, value],
     )?;
+    Ok(())
+}
+
+pub fn delete_setting(conn: &Connection, key: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
     Ok(())
 }
 
@@ -986,7 +1067,12 @@ pub struct Automation {
     pub enabled: bool,
     pub last_error: Option<String>,
     pub updated_at: i64,
+    /// The secret part of the automation's webhook URL.
+    pub hook_token: String,
 }
+
+const AUTOMATION_COLUMNS: &str =
+    "id, name, source, enabled, last_error, updated_at, COALESCE(hook_token, '')";
 
 fn automation_from_row(row: &Row<'_>) -> rusqlite::Result<Automation> {
     Ok(Automation {
@@ -996,13 +1082,14 @@ fn automation_from_row(row: &Row<'_>) -> rusqlite::Result<Automation> {
         enabled: row.get(3)?,
         last_error: row.get(4)?,
         updated_at: row.get(5)?,
+        hook_token: row.get(6)?,
     })
 }
 
 pub fn automations(conn: &Connection) -> AppResult<Vec<Automation>> {
-    let mut statement = conn.prepare(
-        "SELECT id, name, source, enabled, last_error, updated_at FROM automations ORDER BY name COLLATE NOCASE",
-    )?;
+    let mut statement = conn.prepare(&format!(
+        "SELECT {AUTOMATION_COLUMNS} FROM automations ORDER BY name COLLATE NOCASE"
+    ))?;
     let automations = statement.query_map([], automation_from_row)?;
     Ok(automations.collect::<Result<_, _>>()?)
 }
@@ -1010,40 +1097,182 @@ pub fn automations(conn: &Connection) -> AppResult<Vec<Automation>> {
 pub fn automation(conn: &Connection, id: i64) -> AppResult<Option<Automation>> {
     Ok(conn
         .query_row(
-            "SELECT id, name, source, enabled, last_error, updated_at FROM automations WHERE id = ?1",
+            &format!("SELECT {AUTOMATION_COLUMNS} FROM automations WHERE id = ?1"),
             [id],
             automation_from_row,
         )
         .optional()?)
 }
 
+/// The automation whose webhook URL carries `token`.
+pub fn automation_by_hook_token(conn: &Connection, token: &str) -> AppResult<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT id FROM automations WHERE hook_token = ?1",
+            [token],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+pub fn new_hook_token(conn: &Connection, id: i64) -> AppResult<()> {
+    conn.execute(
+        "UPDATE automations SET hook_token = lower(hex(randomblob(20))) WHERE id = ?1",
+        [id],
+    )?;
+    Ok(())
+}
+
+/// What to save, and who saved it with which tool.
+pub struct AutomationEdit<'a> {
+    pub name: &'a str,
+    pub source: &'a str,
+    pub enabled: bool,
+    pub user_id: i64,
+    /// `editor`, `AI`, `restore`, or `MCP: <token name>`.
+    pub saved_with: &'a str,
+}
+
+/// Versions kept per automation.
+const KEPT_VERSIONS: i64 = 50;
+
+/// Creates or updates an automation and records a version when the source
+/// changed. Returns its id.
 pub fn save_automation(
-    conn: &Connection,
+    conn: &mut Connection,
     id: Option<i64>,
-    name: &str,
-    source: &str,
-    enabled: bool,
-    user_id: i64,
+    edit: &AutomationEdit<'_>,
     now: i64,
 ) -> AppResult<i64> {
-    if let Some(id) = id {
-        conn.execute(
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let id = if let Some(id) = id {
+        tx.execute(
             "UPDATE automations SET name = ?1, source = ?2, enabled = ?3, last_error = NULL, updated_at = ?4 WHERE id = ?5",
-            params![name, source, enabled, now, id],
+            params![edit.name, edit.source, edit.enabled, now, id],
         )?;
-        Ok(id)
+        id
     } else {
-        conn.execute(
-            "INSERT INTO automations (name, source, enabled, created_by, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-            params![name, source, enabled, user_id, now],
+        tx.execute(
+            "INSERT INTO automations (name, source, enabled, created_by, created_at, updated_at, hook_token)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, lower(hex(randomblob(20))))",
+            params![edit.name, edit.source, edit.enabled, edit.user_id, now],
         )?;
-        Ok(conn.last_insert_rowid())
+        tx.last_insert_rowid()
+    };
+    let latest: Option<String> = tx
+        .query_row(
+            "SELECT source FROM automation_versions WHERE automation_id = ?1 ORDER BY id DESC LIMIT 1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if latest.as_deref() != Some(edit.source) {
+        tx.execute(
+            "INSERT INTO automation_versions (automation_id, source, saved_by, saved_with, saved_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, edit.source, edit.user_id, edit.saved_with, now],
+        )?;
+        tx.execute(
+            "DELETE FROM automation_versions WHERE automation_id = ?1 AND id NOT IN
+             (SELECT id FROM automation_versions WHERE automation_id = ?1 ORDER BY id DESC LIMIT ?2)",
+            params![id, KEPT_VERSIONS],
+        )?;
     }
+    tx.commit()?;
+    Ok(id)
 }
 
 pub fn delete_automation(conn: &Connection, id: i64) -> AppResult<()> {
     conn.execute("DELETE FROM automations WHERE id = ?1", [id])?;
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub struct AutomationVersion {
+    pub id: i64,
+    pub source: String,
+    pub saved_by: Option<String>,
+    pub saved_with: String,
+    pub saved_at: i64,
+}
+
+/// Saved versions, newest first.
+pub fn automation_versions(conn: &Connection, id: i64) -> AppResult<Vec<AutomationVersion>> {
+    let mut statement = conn.prepare(
+        "SELECT v.id, v.source, u.display_name, v.saved_with, v.saved_at
+         FROM automation_versions v LEFT JOIN users u ON u.id = v.saved_by
+         WHERE v.automation_id = ?1 ORDER BY v.id DESC",
+    )?;
+    let versions = statement.query_map([id], |row| {
+        Ok(AutomationVersion {
+            id: row.get(0)?,
+            source: row.get(1)?,
+            saved_by: row.get(2)?,
+            saved_with: row.get(3)?,
+            saved_at: row.get(4)?,
+        })
+    })?;
+    Ok(versions.collect::<Result<_, _>>()?)
+}
+
+#[derive(Debug, Clone)]
+pub struct AutomationRun {
+    pub trigger: String,
+    pub started_at: i64,
+    pub duration_us: i64,
+    pub output: String,
+    pub error: Option<String>,
+}
+
+/// Runs kept per automation.
+const KEPT_RUNS: i64 = 100;
+
+pub fn record_automation_run(
+    conn: &Connection,
+    id: i64,
+    trigger: &str,
+    started_at: i64,
+    duration_us: i64,
+    output: &str,
+    error: Option<&str>,
+) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO automation_runs (automation_id, trigger, started_at, duration_us, output, error)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![id, trigger, started_at, duration_us, output, error],
+    )?;
+    conn.execute(
+        "DELETE FROM automation_runs WHERE automation_id = ?1 AND id NOT IN
+         (SELECT id FROM automation_runs WHERE automation_id = ?1 ORDER BY id DESC LIMIT ?2)",
+        params![id, KEPT_RUNS],
+    )?;
+    Ok(())
+}
+
+/// The newest `limit` runs, newest first.
+pub fn automation_runs(conn: &Connection, id: i64, limit: i64) -> AppResult<Vec<AutomationRun>> {
+    let mut statement = conn.prepare(
+        "SELECT trigger, started_at, duration_us, output, error FROM automation_runs
+         WHERE automation_id = ?1 ORDER BY id DESC LIMIT ?2",
+    )?;
+    let runs = statement.query_map(params![id, limit], |row| {
+        Ok(AutomationRun {
+            trigger: row.get(0)?,
+            started_at: row.get(1)?,
+            duration_us: row.get(2)?,
+            output: row.get(3)?,
+            error: row.get(4)?,
+        })
+    })?;
+    Ok(runs.collect::<Result<_, _>>()?)
+}
+
+/// All saved data of an automation, for dry runs.
+pub fn automation_values(conn: &Connection, id: i64) -> AppResult<HashMap<String, String>> {
+    let mut statement = conn
+        .prepare("SELECT key, value FROM automation_data WHERE automation_id = ?1 LIMIT 10000")?;
+    let values = statement.query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(values.collect::<Result<_, _>>()?)
 }
 
 pub fn set_automation_error(conn: &Connection, id: i64, error: Option<&str>) -> AppResult<()> {
@@ -1082,4 +1311,76 @@ pub fn set_automation_value(
         )?,
     };
     Ok(())
+}
+
+// API tokens for the MCP endpoint
+
+#[derive(Debug, Clone)]
+pub struct ApiToken {
+    pub id: i64,
+    pub name: String,
+    pub owner: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+pub fn create_api_token(
+    conn: &Connection,
+    user_id: i64,
+    name: &str,
+    token_hash: &[u8],
+    now: i64,
+) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO api_tokens (user_id, name, token_hash, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![user_id, name, token_hash, now],
+    )?;
+    Ok(())
+}
+
+pub fn api_tokens(conn: &Connection) -> AppResult<Vec<ApiToken>> {
+    let mut statement = conn.prepare(
+        "SELECT t.id, t.name, u.display_name, t.created_at, t.last_used_at
+         FROM api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id DESC",
+    )?;
+    let tokens = statement.query_map([], |row| {
+        Ok(ApiToken {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            owner: row.get(2)?,
+            created_at: row.get(3)?,
+            last_used_at: row.get(4)?,
+        })
+    })?;
+    Ok(tokens.collect::<Result<_, _>>()?)
+}
+
+pub fn delete_api_token(conn: &Connection, id: i64) -> AppResult<()> {
+    conn.execute("DELETE FROM api_tokens WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+/// The admin a token belongs to, as (user id, token name), recording the
+/// use. Tokens of people who are no longer admins stop working.
+pub fn use_api_token(
+    conn: &Connection,
+    token_hash: &[u8],
+    now: i64,
+) -> AppResult<Option<(i64, String)>> {
+    let found: Option<(i64, i64, String)> = conn
+        .query_row(
+            "SELECT t.id, u.id, t.name FROM api_tokens t JOIN users u ON u.id = t.user_id
+             WHERE t.token_hash = ?1 AND u.is_admin = 1",
+            [token_hash],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((token_id, user_id, name)) = found else {
+        return Ok(None);
+    };
+    conn.execute(
+        "UPDATE api_tokens SET last_used_at = ?1 WHERE id = ?2",
+        params![now, token_id],
+    )?;
+    Ok(Some((user_id, name)))
 }

@@ -17,6 +17,7 @@ use crate::{
 pub mod automations;
 pub mod emoji;
 pub mod search;
+pub mod settings;
 
 /// How to render messages: this Sideporch's custom emoji and usernames, and
 /// who is looking. Live updates are rendered once for everyone, so they
@@ -724,10 +725,10 @@ pub fn reactions_bar(message: &Message, render: &Render<'_>) -> Markup {
                 form method="post" action=(action) data-reaction-form {
                     button type="submit" name="emoji" value=(reaction.emoji) data-users=(users)
                         aria-pressed=(if mine { "true" } else { "false" })
-                        title={ (reaction.names.join(", ")) " reacted with :" (reaction.emoji) ":" }
+                        title={ (reaction.names.iter().chain(&reaction.bots).cloned().collect::<Vec<_>>().join(", ")) " reacted with :" (reaction.emoji) ":" }
                         class="flex items-center gap-1 rounded-full border border-line bg-white px-2 py-0.5 text-sm hover:border-floor-3 aria-pressed:border-floor-3 aria-pressed:bg-haint-2 dark:border-night-line dark:bg-night-2 dark:aria-pressed:bg-floor-2" {
                         (PreEscaped(render.ctx.emoji_html(&reaction.emoji).unwrap_or_default()))
-                        span class="font-semibold" { (reaction.user_ids.len()) }
+                        span class="font-semibold" { (reaction.count()) }
                     }
                 }
             }
@@ -801,6 +802,27 @@ pub fn panel_page(title: &str, shell: &Shell<'_>, heading: &Markup, content: &Ma
     app_page(title, shell, &PageData::default(), &main)
 }
 
+/// A panel page with room for side-by-side tools, such as the script editor.
+pub fn wide_panel_page(
+    title: &str,
+    shell: &Shell<'_>,
+    heading: &Markup,
+    content: &Markup,
+) -> Markup {
+    let main = html! {
+        main class="flex min-w-0 flex-1 flex-col" {
+            header class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-5 dark:border-night-line" {
+                (back_to_channels())
+                h1 class="min-w-0 text-lg font-bold" { (heading) }
+            }
+            div class="flex-1 overflow-y-auto" {
+                div class="max-w-7xl px-5 py-6" { (content) }
+            }
+        }
+    };
+    app_page(title, shell, &PageData::default(), &main)
+}
+
 pub fn new_channel_page(shell: &Shell<'_>, error: Option<&str>, name: &str) -> Markup {
     panel_page(
         "New channel",
@@ -816,7 +838,7 @@ pub fn new_channel_page(shell: &Shell<'_>, error: Option<&str>, name: &str) -> M
     )
 }
 
-fn copy_row(value: &str) -> Markup {
+pub fn copy_row(value: &str) -> Markup {
     html! {
         div class="flex items-center gap-2" {
             code class="min-w-0 flex-1 truncate rounded-lg bg-screen px-3 py-2 text-sm dark:bg-night-2" { (value) }

@@ -4,7 +4,7 @@
 
 use crate::{
     AppState,
-    automations::MessageEvent,
+    automations::{MessageEvent, ReactionEvent},
     error::{AppError, AppResult},
     markup, now_ms, push, realtime,
     store::{self, Message, NewMessage},
@@ -148,7 +148,8 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
     Ok(posted.message)
 }
 
-/// Adds or removes the user's `emoji` reaction and shows the change live.
+/// Adds or removes the user's `emoji` reaction, shows the change live, and
+/// tells automations about reactions in public channels.
 pub async fn toggle_reaction(
     state: &AppState,
     user_id: i64,
@@ -157,7 +158,7 @@ pub async fn toggle_reaction(
     emoji: String,
 ) -> AppResult<()> {
     let now = now_ms();
-    let (message, audience, ctx) = state
+    let (message, audience, ctx, event) = state
         .db
         .call(move |conn| {
             store::channel_for(conn, channel_id, user_id)?.ok_or(AppError::NotFound)?;
@@ -168,18 +169,86 @@ pub async fn toggle_reaction(
             if !ctx.has_emoji(&emoji) {
                 return Err(AppError::bad_request("That emoji doesn't exist here."));
             }
-            store::toggle_reaction(conn, message.id, user_id, &emoji, now)?;
+            let added = store::toggle_reaction(conn, message.id, user_id, &emoji, now)?;
             let message = store::message(conn, message_id)?.ok_or(AppError::NotFound)?;
-            Ok((message, store::audience(conn, channel_id)?, ctx))
+            let audience = store::audience(conn, channel_id)?;
+            // Automations see public channels only.
+            let event = if audience.is_none() {
+                let (user, username) = conn.query_row(
+                    "SELECT display_name, username FROM users WHERE id = ?1",
+                    [user_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                Some(ReactionEvent {
+                    emoji,
+                    added,
+                    user,
+                    username,
+                    message: MessageEvent::new(conn, &message)?,
+                })
+            } else {
+                None
+            };
+            Ok((message, audience, ctx, event))
         })
         .await?;
+    publish_reactions(state, audience, &message, &ctx);
+    if let Some(event) = event {
+        state.automations.reaction(event);
+    }
+    Ok(())
+}
+
+/// Adds an automation's reaction to a message in a public channel.
+/// Automations' reactions never trigger automations.
+pub async fn automation_reaction(
+    state: &AppState,
+    automation_id: i64,
+    channel_id: i64,
+    message_id: i64,
+    emoji: String,
+) -> AppResult<()> {
+    let now = now_ms();
+    let changed = state
+        .db
+        .call(move |conn| {
+            store::public_channel(conn, channel_id)?.ok_or_else(|| {
+                AppError::bad_request("sideporch.react: the message is not in a public channel")
+            })?;
+            store::message(conn, message_id)?
+                .filter(|message| message.channel_id == channel_id)
+                .ok_or_else(|| AppError::bad_request("sideporch.react: no such message"))?;
+            let ctx = store::render_context(conn)?;
+            if !ctx.has_emoji(&emoji) {
+                return Err(AppError::bad_request(format!(
+                    "sideporch.react: there is no emoji named {emoji}"
+                )));
+            }
+            if !store::add_automation_reaction(conn, message_id, automation_id, &emoji, now)? {
+                return Ok(None);
+            }
+            let message = store::message(conn, message_id)?.ok_or(AppError::NotFound)?;
+            Ok(Some((message, store::audience(conn, channel_id)?, ctx)))
+        })
+        .await?;
+    if let Some((message, audience, ctx)) = changed {
+        publish_reactions(state, audience, &message, &ctx);
+    }
+    Ok(())
+}
+
+fn publish_reactions(
+    state: &AppState,
+    audience: Option<Vec<i64>>,
+    message: &Message,
+    ctx: &markup::Context,
+) {
     state.hub.publish(
         audience,
         &realtime::Event::Reactions {
-            channel_id,
-            message_id,
-            html: views::reactions_bar(&message, &views::Render::shared(&ctx)).into_string(),
+            channel_id: message.channel_id,
+            message_id: message.id,
+            html: views::reactions_bar(message, &views::Render::shared(ctx)).into_string(),
         },
     );
-    Ok(())
 }

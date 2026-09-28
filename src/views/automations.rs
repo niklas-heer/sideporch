@@ -1,11 +1,14 @@
 //! Automation management for admins.
 
-use maud::{Markup, html};
+use maud::{Markup, PreEscaped, html};
 
-use super::{Shell, form_error, panel_page, section, timestamp};
+use super::{
+    ASSET_VERSION, Shell, copy_row, form_error, panel_page, section, timestamp, wide_panel_page,
+};
 use crate::{
+    automations::api,
     icons::{self, icon},
-    store::Automation,
+    store::{Automation, AutomationRun, AutomationVersion},
 };
 
 pub fn list_page(shell: &Shell<'_>, automations: &[Automation]) -> Markup {
@@ -15,9 +18,13 @@ pub fn list_page(shell: &Shell<'_>, automations: &[Automation]) -> Markup {
         &html! { "Automations" },
         &html! {
             p class="mb-5 text-muted dark:text-haint" {
-                "Small Lua scripts that answer messages and post on a schedule. They run inside Sideporch, sandboxed, with no access to files or the network."
+                "Small Lua scripts that answer messages, react to reactions, receive webhooks, and post on a schedule. They run inside Sideporch, sandboxed, with no access to files or the network."
             }
-            a href="/automations/new" class="btn mb-6" { (icon(icons::PLUS, "h-5 w-5")) "New automation" }
+            div class="mb-6 flex flex-wrap items-center gap-2" {
+                a href="/automations/new" class="btn" { (icon(icons::PLUS, "h-5 w-5")) "New automation" }
+                a href="/settings/ai" class="btn-quiet" { (icon(icons::SPARKLE, "h-4 w-4")) "AI provider" }
+                a href="/settings/mcp" class="btn-quiet" { (icon(icons::KEY, "h-4 w-4")) "MCP for AI agents" }
+            }
             @if automations.is_empty() {
                 p class="text-muted dark:text-haint" { "No automations yet." }
             } @else {
@@ -31,13 +38,7 @@ pub fn list_page(shell: &Shell<'_>, automations: &[Automation]) -> Markup {
                                     span class="block truncate font-semibold" { (automation.name) }
                                     span class="block text-xs text-muted dark:text-haint" { "Changed " (timestamp(automation.updated_at)) }
                                 }
-                                @if automation.last_error.is_some() {
-                                    span class="rounded bg-red-100 px-2 text-xs font-semibold text-red-800 dark:bg-red-950 dark:text-red-200" { "Error" }
-                                } @else if automation.enabled {
-                                    span class="rounded bg-haint-2 px-2 text-xs font-semibold text-floor dark:bg-floor-2 dark:text-haint-2" { "On" }
-                                } @else {
-                                    span class="rounded bg-screen px-2 text-xs font-semibold text-muted dark:bg-night-2 dark:text-haint" { "Off" }
-                                }
+                                (status_badge(automation.enabled, automation.last_error.is_some()))
                             }
                         }
                     }
@@ -47,6 +48,19 @@ pub fn list_page(shell: &Shell<'_>, automations: &[Automation]) -> Markup {
     )
 }
 
+fn status_badge(enabled: bool, failed: bool) -> Markup {
+    html! {
+        @if failed {
+            span class="rounded bg-red-100 px-2 text-xs font-semibold text-red-800 dark:bg-red-950 dark:text-red-200" { "Error" }
+        } @else if enabled {
+            span class="rounded bg-haint-2 px-2 text-xs font-semibold text-floor dark:bg-floor-2 dark:text-haint-2" { "On" }
+        } @else {
+            span class="rounded bg-screen px-2 text-xs font-semibold text-muted dark:bg-night-2 dark:text-haint" { "Off" }
+        }
+    }
+}
+
+#[derive(Default)]
 pub struct Editor<'a> {
     pub id: Option<i64>,
     pub name: &'a str,
@@ -54,6 +68,11 @@ pub struct Editor<'a> {
     pub enabled: bool,
     pub last_error: Option<&'a str>,
     pub form_error: Option<&'a str>,
+    pub hook_url: Option<&'a str>,
+    pub runs: &'a [AutomationRun],
+    pub versions: &'a [AutomationVersion],
+    /// Whether an AI provider is set up, so the editor can offer to write scripts.
+    pub ai_ready: bool,
 }
 
 pub fn editor_page(shell: &Shell<'_>, editor: &Editor<'_>) -> Markup {
@@ -61,7 +80,8 @@ pub fn editor_page(shell: &Shell<'_>, editor: &Editor<'_>) -> Markup {
         || "/automations".to_owned(),
         |id| format!("/automations/{id}"),
     );
-    panel_page(
+    let completions = api::completions().to_string().replace("</", "<\\/");
+    wide_panel_page(
         "Automation",
         shell,
         &html! { @if editor.id.is_some() { (editor.name) } @else { "New automation" } },
@@ -73,47 +93,295 @@ pub fn editor_page(shell: &Shell<'_>, editor: &Editor<'_>) -> Markup {
                     pre class="mt-1 whitespace-pre-wrap font-mono text-xs" { (error) }
                 }
             }
-            form method="post" action=(action) {
-                div class="mb-4" {
-                    label for="automation-name" class="field-label" { "Name" }
-                    input id="automation-name" name="name" value=(editor.name) required maxlength="80" class="field"
-                        placeholder="Porch butler";
-                    p class="mt-1 text-sm text-muted dark:text-haint" { "Messages the automation posts appear under this name." }
+            div class="flex flex-col gap-8 xl:flex-row" {
+                div class="min-w-0 flex-1" {
+                    form id="automation-form" method="post" action=(action) data-automation-id=[editor.id] {
+                        div class="mb-4" {
+                            label for="automation-name" class="field-label" { "Name" }
+                            input id="automation-name" name="name" value=(editor.name) required maxlength="80" class="field"
+                                placeholder="Porch butler";
+                            p class="mt-1 text-sm text-muted dark:text-haint" { "Messages and reactions from the automation appear under this name." }
+                        }
+                        div class="mb-2 flex flex-wrap items-center gap-2" {
+                            label for="automation-source" class="field-label mb-0 mr-auto" { "Lua script" }
+                            div data-editor-tools hidden class="flex flex-wrap items-center gap-2" {
+                                span data-editor-status role="status" class="text-sm text-muted dark:text-haint" {}
+                                button type="button" data-action="format" class="btn-quiet text-sm" title="Format (Shift+Alt+F)" {
+                                    (icon(icons::MAGIC_WAND, "h-4 w-4")) "Format"
+                                }
+                                button type="button" data-action="test" class="btn-quiet text-sm" title="Run a test (Ctrl+Enter)" {
+                                    (icon(icons::PLAY, "h-4 w-4")) "Test"
+                                }
+                                button type="button" data-action="ai" class="btn-quiet text-sm" title="Let AI write or change the script" {
+                                    (icon(icons::SPARKLE, "h-4 w-4")) "Ask AI"
+                                }
+                            }
+                        }
+                        div data-editor class="code-editor" {
+                            textarea id="automation-source" name="source" rows="22" spellcheck="false" maxlength="100000"
+                                autocapitalize="off" autocomplete="off" data-lua-editor
+                                class="field font-mono text-sm leading-relaxed" { (editor.source) }
+                        }
+                        p data-editor-hint hidden class="mt-1 text-xs text-muted dark:text-haint" {
+                            "Tab indents; press Esc, then Tab, to leave the editor. Ctrl+S saves, Ctrl+Enter tests, Ctrl+Space completes, Ctrl+/ comments."
+                        }
+                        ul data-problems hidden class="mt-2 space-y-1 text-sm" {}
+                        label class="mb-5 mt-4 flex items-center gap-2" {
+                            input type="checkbox" name="enabled" value="on" checked[editor.enabled] class="h-4 w-4 accent-floor";
+                            span { "Run this automation" }
+                        }
+                        div class="flex flex-wrap gap-2" {
+                            button type="submit" class="btn" { "Save automation" }
+                            a href="/automations" class="btn-quiet" { "Back to automations" }
+                        }
+                    }
+                    @if let Some(id) = editor.id {
+                        form method="post" action={ "/automations/" (id) "/delete" } class="mb-10 mt-8" {
+                            button type="submit" class="btn-quiet text-sm" { (icon(icons::TRASH, "h-4 w-4")) "Delete automation" }
+                        }
+                    }
                 }
-                div class="mb-4" {
-                    label for="automation-source" class="field-label" { "Lua script" }
-                    textarea id="automation-source" name="source" rows="18" spellcheck="false" maxlength="100000"
-                        class="field font-mono text-sm leading-relaxed" { (editor.source) }
-                }
-                label class="mb-5 flex items-center gap-2" {
-                    input type="checkbox" name="enabled" value="on" checked[editor.enabled] class="h-4 w-4 accent-floor";
-                    span { "Run this automation" }
-                }
-                div class="flex flex-wrap gap-2" {
-                    button type="submit" class="btn" { "Save automation" }
-                    a href="/automations" class="btn-quiet" { "Back to automations" }
+                aside class="w-full space-y-6 xl:w-96 xl:shrink-0" {
+                    (test_panel())
+                    (ai_panel(editor.ai_ready, shell.user.is_admin))
                 }
             }
-            @if let Some(id) = editor.id {
-                form method="post" action={ "/automations/" (id) "/delete" } class="mb-10 mt-8" {
-                    button type="submit" class="btn-quiet text-sm" { (icon(icons::TRASH, "h-4 w-4")) "Delete automation" }
+            @if let (Some(id), Some(url)) = (editor.id, editor.hook_url) {
+                div id="webhook" class="mt-10 max-w-3xl" {
+                    (section("Webhook", "Requests to this URL reach the script's sideporch.on_webhook handler; paths below it arrive as request.path. Anyone with the URL can call it, so treat it like a password.", &html! {
+                        (copy_row(url))
+                        pre class="mt-3 overflow-x-auto rounded-lg bg-screen p-3 text-xs dark:bg-night-2" {
+                            code { "curl -X POST " (url) " -H 'Content-Type: application/json' -d '{\"hello\": \"porch\"}'" }
+                        }
+                        form method="post" action={ "/automations/" (id) "/webhook-token" } class="mt-3" {
+                            button type="submit" class="btn-quiet text-sm" { (icon(icons::ARROWS_CLOCKWISE, "h-4 w-4")) "Make a new URL" }
+                        }
+                    }))
                 }
             }
-            (section("What scripts can do", "Scripts get Lua's string, table, math, utf8 and coroutine libraries plus these functions:", &html! {
-                pre class="overflow-x-auto rounded-lg bg-screen p-3 text-sm dark:bg-night-2" {
-                    code { (REFERENCE) }
+            @if editor.id.is_some() {
+                div class="max-w-3xl" {
+                    (runs_section(editor.runs))
+                    (history_section(editor.id, editor.versions))
                 }
-            }))
+            }
+            div class="max-w-3xl" {
+                (reference_section())
+            }
+            script type="application/json" id="lua-api" { (PreEscaped(completions)) }
+            script src={ "/assets/editor.js?v=" (ASSET_VERSION) } defer {}
         },
     )
 }
 
-const REFERENCE: &str = "sideporch.on_message(function(msg) ... end)
-  -- msg.text, msg.author, msg.username, msg.channel,
-  -- msg.id, msg.thread_id, msg.is_bot
-sideporch.every(seconds, function() ... end)   -- at least 10 seconds
-sideporch.post(\"general\", \"text\", { thread = id })
-sideporch.reply(msg, \"text\")                  -- answers in the thread
-sideporch.get(\"key\")  sideporch.set(\"key\", value)
-sideporch.now()                                 -- Unix time in seconds
-print(...)                                      -- writes to the server log";
+fn test_panel() -> Markup {
+    html! {
+        section data-test-panel hidden aria-labelledby="test-heading" class="rounded-xl border border-line p-4 dark:border-night-line" {
+            h2 id="test-heading" class="font-bold" { "Test run" }
+            p class="mb-3 mt-1 text-sm text-muted dark:text-haint" {
+                "Runs the script as it is in the editor, without saving. Posts and reactions are only described, and saved data stays unchanged."
+            }
+            form data-test-form class="space-y-3" {
+                div {
+                    label for="test-kind" class="field-label" { "Simulate" }
+                    select id="test-kind" name="kind" class="field" {
+                        option value="message" { "A new message" }
+                        option value="reaction" { "A reaction" }
+                        option value="webhook" { "A webhook request" }
+                        option value="timer" { "Timers firing" }
+                        option value="load" { "Loading only" }
+                    }
+                }
+                div data-for="message reaction" {
+                    label for="test-text" class="field-label" { "Message text" }
+                    input id="test-text" name="text" class="field font-mono text-sm" value="!ping";
+                }
+                div data-for="message reaction" {
+                    label for="test-channel" class="field-label" { "Channel" }
+                    input id="test-channel" name="channel" class="field" value="general";
+                }
+                div data-for="reaction" hidden {
+                    label for="test-emoji" class="field-label" { "Emoji" }
+                    input id="test-emoji" name="emoji" class="field" value="thumbsup";
+                    label class="mt-2 flex items-center gap-2 text-sm" {
+                        input type="checkbox" name="added" checked class="h-4 w-4 accent-floor";
+                        "Added (off: removed)"
+                    }
+                }
+                div data-for="webhook" hidden {
+                    div class="flex gap-2" {
+                        div class="w-28" {
+                            label for="test-method" class="field-label" { "Method" }
+                            select id="test-method" name="method" class="field" {
+                                option { "POST" } option { "GET" } option { "PUT" } option { "DELETE" }
+                            }
+                        }
+                        div class="min-w-0 flex-1" {
+                            label for="test-path" class="field-label" { "Path" }
+                            input id="test-path" name="path" class="field font-mono text-sm" placeholder="/deploy";
+                        }
+                    }
+                    label for="test-body" class="field-label mt-2" { "Body" }
+                    textarea id="test-body" name="body" rows="4" class="field font-mono text-xs" spellcheck="false" { "{\"hello\": \"porch\"}" }
+                }
+                button type="submit" class="btn w-full" { (icon(icons::PLAY, "h-4 w-4")) "Run test" }
+            }
+            div data-test-output aria-live="polite" class="mt-4 empty:hidden" {}
+        }
+    }
+}
+
+fn ai_panel(ready: bool, is_admin: bool) -> Markup {
+    html! {
+        section data-ai-panel hidden aria-labelledby="ai-heading" class="rounded-xl border border-line p-4 dark:border-night-line" {
+            h2 id="ai-heading" class="flex items-center gap-2 font-bold" { (icon(icons::SPARKLE, "h-5 w-5")) "Ask AI" }
+            @if ready {
+                p class="mb-3 mt-1 text-sm text-muted dark:text-haint" {
+                    "Describe what the automation should do, or how to change the script. You can review the result before it replaces anything."
+                }
+                form data-ai-form class="space-y-3" {
+                    label for="ai-prompt" class="sr-only" { "What should the script do?" }
+                    textarea id="ai-prompt" name="prompt" rows="4" required maxlength="4000" class="field text-sm"
+                        placeholder="When someone reacts with :eyes: to a message in #alerts, answer in the thread that they're looking into it." {}
+                    button type="submit" class="btn w-full" { (icon(icons::SPARKLE, "h-4 w-4")) "Write the script" }
+                }
+                div data-ai-output aria-live="polite" class="mt-4 empty:hidden" {}
+            } @else {
+                p class="mt-1 text-sm text-muted dark:text-haint" {
+                    "No AI provider is connected yet. "
+                    @if is_admin {
+                        a href="/settings/ai" class="font-semibold underline" { "Connect one" }
+                        " (OpenAI, Anthropic, Ollama, or any OpenAI-compatible API) to let it write scripts."
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn runs_section(runs: &[AutomationRun]) -> Markup {
+    section(
+        "Recent runs",
+        "Runs that printed, posted, reacted, answered a webhook, or failed. The newest 100 are kept.",
+        &html! {
+            @if runs.is_empty() {
+                p class="text-sm text-muted dark:text-haint" { "Nothing yet." }
+            } @else {
+                ol class="space-y-2" {
+                    @for run in runs {
+                        li class="rounded-lg border border-line px-3 py-2 text-sm dark:border-night-line" {
+                            div class="flex flex-wrap items-center gap-2" {
+                                span class="rounded bg-screen px-2 font-mono text-xs dark:bg-night-2" { (run.trigger) }
+                                (datetime(run.started_at))
+                                span class="text-xs text-muted dark:text-haint" { (duration(run.duration_us)) }
+                                @if run.error.is_some() {
+                                    span class="ml-auto rounded bg-red-100 px-2 text-xs font-semibold text-red-800 dark:bg-red-950 dark:text-red-200" { "Error" }
+                                }
+                            }
+                            @if !run.output.is_empty() {
+                                pre class="mt-2 overflow-x-auto whitespace-pre-wrap font-mono text-xs" { (run.output) }
+                            }
+                            @if let Some(error) = &run.error {
+                                p class="mt-1 font-mono text-xs text-red-800 dark:text-red-200" { (error) }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+fn history_section(id: Option<i64>, versions: &[AutomationVersion]) -> Markup {
+    section(
+        "History",
+        "Every saved version of the script, newest first. Restoring one saves it as a new version.",
+        &html! {
+            ol class="space-y-2" {
+                @for (index, version) in versions.iter().enumerate() {
+                    li class="rounded-lg border border-line px-3 py-2 text-sm dark:border-night-line" {
+                        details {
+                            summary class="flex cursor-pointer flex-wrap items-center gap-2" {
+                                (datetime(version.saved_at))
+                                span class="text-muted dark:text-haint" {
+                                    "by " (version.saved_by.as_deref().unwrap_or("a former member"))
+                                    " with " (version.saved_with)
+                                }
+                                @if index == 0 {
+                                    span class="ml-auto rounded bg-haint-2 px-2 text-xs font-semibold text-floor dark:bg-floor-2 dark:text-haint-2" { "Current" }
+                                }
+                            }
+                            pre class="mt-2 max-h-80 overflow-auto rounded bg-screen p-2 font-mono text-xs dark:bg-night-2" { (version.source) }
+                            @if let (Some(id), true) = (id, index > 0) {
+                                form method="post" action={ "/automations/" (id) "/versions/" (version.id) "/restore" } class="mt-2" {
+                                    button type="submit" class="btn-quiet text-sm" { (icon(icons::ARROW_COUNTER_CLOCKWISE, "h-4 w-4")) "Restore this version" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+fn reference_section() -> Markup {
+    section(
+        "What scripts can do",
+        api::LIMITS,
+        &html! {
+            dl class="space-y-3 text-sm" {
+                @for function in api::FUNCTIONS {
+                    div {
+                        dt { code class="font-mono font-semibold" { (function.signature()) } }
+                        dd class="mt-0.5 text-muted dark:text-haint" { (inline_code(function.doc)) }
+                    }
+                }
+            }
+            @for (name, fields) in api::EVENTS {
+                h3 class="mb-2 mt-5 font-semibold" { (inline_code(name)) }
+                dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm" {
+                    @for (field, doc) in *fields {
+                        dt { code class="font-mono" { (field) } }
+                        dd class="text-muted dark:text-haint" { (inline_code(doc)) }
+                    }
+                }
+            }
+        },
+    )
+}
+
+/// Text with `backticked` parts shown as code.
+fn inline_code(text: &str) -> Markup {
+    html! {
+        @for (index, part) in text.split('`').enumerate() {
+            @if index % 2 == 1 {
+                code class="font-mono text-ink dark:text-haint-2" { (part) }
+            } @else {
+                (part)
+            }
+        }
+    }
+}
+
+fn datetime(at: i64) -> Markup {
+    let when = jiff::Timestamp::from_millisecond(at).unwrap_or_default();
+    html! {
+        time datetime=(when.to_string()) data-format="datetime" class="text-xs text-muted dark:text-haint" {
+            (when.strftime("%Y-%m-%d %H:%M UTC").to_string())
+        }
+    }
+}
+
+fn duration(micros: i64) -> String {
+    if micros < 1_000 {
+        format!("{micros} µs")
+    } else {
+        let millis = micros.checked_div(1_000).unwrap_or_default();
+        let tenths = micros
+            .checked_rem(1_000)
+            .and_then(|rest| rest.checked_div(100))
+            .unwrap_or_default();
+        format!("{millis}.{tenths} ms")
+    }
+}

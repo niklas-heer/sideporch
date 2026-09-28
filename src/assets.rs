@@ -11,6 +11,7 @@ use crate::AppState;
 
 const APP_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/app.css"));
 const APP_JS: &str = include_str!("../assets/app.js");
+const EDITOR_JS: &str = include_str!("../assets/editor.js");
 const SERVICE_WORKER: &str = include_str!("../assets/sw.js");
 const LOGO: &str = include_str!("../assets/logo.svg");
 const MANIFEST: &str = r##"{
@@ -65,6 +66,16 @@ pub fn router() -> Router<AppState> {
                     "text/javascript; charset=utf-8",
                     IMMUTABLE,
                     APP_JS.as_bytes(),
+                )
+            }),
+        )
+        .route(
+            "/assets/editor.js",
+            get(|| async {
+                serve(
+                    "text/javascript; charset=utf-8",
+                    IMMUTABLE,
+                    EDITOR_JS.as_bytes(),
                 )
             }),
         )
