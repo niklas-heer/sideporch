@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sideporch: a small, self-hosted team chat in one binary</title>
+  <meta name="description" content="Channels, threads and direct messages for a team, a club or a family, with the things people miss from Slack, on a server you control. One program, one data directory.">
+  <meta name="theme-color" content="#24403C">
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://sideporch.app/">
+  <meta property="og:title" content="Sideporch">
+  <meta property="og:description" content="A small, self-hosted team chat in one binary.">
+  <meta property="og:url" content="https://sideporch.app/">
+  <meta property="og:image" content="https://sideporch.app/img/channel.webp">
+  <meta property="og:type" content="website">
+  <link rel="preload" href="/fonts/normal-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="hero">
+    <img class="logo" src="/logo.svg" alt="" width="72" height="72">
+    <h1>Sideporch</h1>
+    <p class="tagline">A small, self-hosted team chat in one binary.</p>
+    <p class="lede">Channels, threads and direct messages for a team, a club or a family, with the things people miss from Slack, on a server you control.</p>
+    <p class="actions">
+      <a class="button" href="#try-it">Try it</a>
+      <a class="button quiet" href="https://github.com/niklas-heer/sideporch">View on GitHub</a>
+    </p>
+    <p class="status">Early: it works end to end, but expect rough edges and breaking changes before 1.0.</p>
+  </header>
+
+  <main>
+    <picture class="shot">
+      <source media="(prefers-color-scheme: dark)" srcset="/img/channel-dark.webp">
+      <img src="/img/channel.webp" alt="A Sideporch channel with a thread open on the right: messages with reactions, a checklist and a poll." width="1600" height="1083">
+    </picture>
+
+    <section class="why" aria-labelledby="why">
+      <h2 id="why">Why Sideporch</h2>
+      <ul class="cards">
+        <li><h3>Yours, and simple to run</h3><p>One program and one data directory. No database server, no email server, nothing else to install. It runs on a small VPS, a home server or an ARM board.</p></li>
+        <li><h3>Familiar</h3><p>Channels, threads, mentions, reactions, search and notifications work the way people know from Slack, and you can bring your Slack history along.</p></li>
+        <li><h3>Easy to back up and move</h3><p>Everything lives in one directory. Download a complete backup from the browser, or have Sideporch write one every day.</p></li>
+        <li><h3>Works with your tools</h3><p>Monitors, CI and bots post through Slack-compatible webhooks, so tools like Gatus and Grafana work unchanged. Automations in Lua do the rest.</p></li>
+      </ul>
+    </section>
+
+    <section id="try-it" aria-labelledby="try">
+      <h2 id="try">Try it</h2>
+      <p>With Docker:</p>
+      <pre><code>docker run -d -p 8080:8080 -v sideporch:/data ghcr.io/niklas-heer/sideporch</code></pre>
+      <p>Or with Homebrew on macOS and Linux:</p>
+      <pre><code>brew install niklas-heer/tap/sideporch
+sideporch</code></pre>
+      <p>Open <code>http://localhost:8080</code>. The first person to open it creates the admin account, then invites everyone else with a link; nobody needs an email address. The <a href="https://github.com/niklas-heer/sideporch#install">README</a> covers running it for real.</p>
+    </section>
+
+    <section class="gallery" aria-label="Screenshots">
+      <figure><img src="/img/deploys.webp" alt="A #deploys channel with Gatus alerts from a webhook, a Mermaid diagram and an approval automation." loading="lazy" width="1600" height="1224"><figcaption>Webhooks, diagrams and approvals in one channel.</figcaption></figure>
+      <figure><img src="/img/automation.webp" alt="The automation editor with a Lua script." loading="lazy" width="1600" height="1083"><figcaption>Automations in Lua, written in the browser.</figcaption></figure>
+      <figure><img src="/img/phones.webp" alt="Sideporch on two phones." loading="lazy" width="1100" height="1056"><figcaption>Installs like an app on phones.</figcaption></figure>
+    </section>
+  </main>
+
+  <footer>
+    <p><a href="https://github.com/niklas-heer/sideporch">GitHub</a> · <a href="https://github.com/niklas-heer/sideporch/releases">Releases</a> · MIT licensed</p>
+  </footer>
+</body>
+</html>
