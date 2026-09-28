@@ -10,7 +10,6 @@ use crate::{
     markup::{self, Context},
     store::{
         Author, Channel, ChannelKind, FileRef, Gif, Invite, Message, Sidebar, SidebarItem, User,
-        Webhook,
     },
     webhook::Attachment,
 };
@@ -18,6 +17,8 @@ use crate::{
 pub mod account;
 pub mod admin;
 pub mod automations;
+pub mod channels;
+pub use channels::{ChannelSettings, channel_settings_page};
 pub mod emoji;
 pub mod gifs;
 pub mod messages;
@@ -244,11 +245,17 @@ fn sidebar_link(item: &SidebarItem, current: Option<i64>, svg: &str) -> Markup {
     let state = if active {
         "bg-floor-3 text-white"
     } else {
-        "text-haint-2 hover:bg-floor-2 data-[unread]:font-bold data-[unread]:text-white"
+        "text-haint-2 hover:bg-floor-2 data-[unread]:font-bold data-[unread]:text-white data-[muted]:opacity-60"
+    };
+    let svg = if item.private {
+        icons::LOCK_SIMPLE
+    } else {
+        svg
     };
     html! {
         li {
             a href={ "/c/" (item.channel_id) } data-channel-link=(item.channel_id) data-unread[item.unread && !active]
+                data-muted[item.muted] title=[item.muted.then_some("Muted")]
                 aria-current=[active.then_some("page")]
                 class={ "group flex items-center gap-2 rounded-lg px-3 py-1.5 " (state) } {
                 (icon(svg, "h-4 w-4 shrink-0 opacity-70"))
@@ -298,9 +305,14 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                     (nav_link("/saved", icons::BOOKMARK_SIMPLE, "Saved", false))
                 }
                 div class="mb-1 mt-2 flex items-center justify-between px-3 text-sm text-haint" {
-                    h2 class="font-semibold" { "Channels" }
-                    a href="/channels/new" class="rounded-md p-1 hover:bg-floor-2 hover:text-white" aria-label="Create a channel" title="Create a channel" {
-                        (icon(icons::PLUS, "h-4 w-4"))
+                    h2 class="font-semibold" { a href="/channels/browse" class="hover:text-white hover:underline" title="Browse all channels" { "Channels" } }
+                    span class="flex items-center" {
+                        a href="/channels/browse" class="rounded-md p-1 hover:bg-floor-2 hover:text-white" aria-label="Browse channels" title="Browse channels" {
+                            (icon(icons::COMPASS, "h-4 w-4"))
+                        }
+                        a href="/channels/new" class="rounded-md p-1 hover:bg-floor-2 hover:text-white" aria-label="Create a channel" title="Create a channel" {
+                            (icon(icons::PLUS, "h-4 w-4"))
+                        }
                     }
                 }
                 ul class="space-y-0.5" {
@@ -395,6 +407,7 @@ fn back_to_channels() -> Markup {
 fn channel_label(channel: &Channel) -> Markup {
     let svg = match channel.kind {
         ChannelKind::Public => icons::HASH,
+        ChannelKind::Private => icons::LOCK_SIMPLE,
         ChannelKind::Direct => icons::CHAT_CIRCLE_TEXT,
     };
     html! {
@@ -429,7 +442,7 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
         thread: view.thread.map(|(root, _)| root.id),
     };
     let composer_label = match channel.kind {
-        ChannelKind::Public => format!("Message #{}", channel.name),
+        ChannelKind::Public | ChannelKind::Private => format!("Message #{}", channel.name),
         ChannelKind::Direct => format!("Message {}", channel.name),
     };
     let column = if thread_open {
@@ -452,7 +465,15 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
                     (icon(icons::PUSH_PIN, "h-5 w-5"))
                     @if view.pins > 0 { span { (view.pins) } }
                 }
-                @if channel.kind == ChannelKind::Public {
+                @if channel.kind != ChannelKind::Direct {
+                    form method="post" action={ "/c/" (channel.id) "/mute" } {
+                        button type="submit" aria-pressed=(if channel.muted { "true" } else { "false" })
+                            class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink aria-pressed:text-amber-700 dark:text-haint dark:hover:bg-night-2 dark:aria-pressed:text-lamp"
+                            aria-label=(if channel.muted { "Unmute channel" } else { "Mute channel" })
+                            title=(if channel.muted { "Muted: no unread marks or @channel notifications. Click to unmute." } else { "Mute: no unread marks or @channel notifications" }) {
+                            (icon(if channel.muted { icons::BELL_SLASH } else { icons::BELL }, "h-5 w-5"))
+                        }
+                    }
                     a href={ "/c/" (channel.id) "/settings" } class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night-2"
                         aria-label="Channel settings" title="Channel settings and webhooks" {
                         (icon(icons::GEAR_SIX, "h-5 w-5"))
@@ -470,6 +491,12 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
                 }
                 ol id="messages" class="py-3" {
                     (message_list(view.messages, view.render))
+                }
+            }
+            @if channel.left {
+                form method="post" action={ "/c/" (channel.id) "/join" } class="mx-4 flex items-center gap-3 rounded-xl bg-screen px-4 py-2 text-sm dark:bg-night-2" {
+                    span class="flex-1" { "You left #" (channel.name) ". Join it again to see it in your sidebar, or just write." }
+                    button type="submit" class="btn px-3 py-1 text-sm" { "Join" }
                 }
             }
             (composer(&format!("/c/{}/messages", channel.id), None, &composer_label))
@@ -497,7 +524,15 @@ fn empty_channel(channel: &Channel) -> Markup {
             h2 class="text-xl font-bold" {
                 @match channel.kind {
                     ChannelKind::Public => { "This is the start of #" (channel.name) "." }
+                    ChannelKind::Private => { "This is the start of the private channel #" (channel.name) "." }
                     ChannelKind::Direct => { "This is the start of your conversation with " (channel.name) "." }
+                }
+            }
+            @if channel.kind == ChannelKind::Private {
+                p class="mt-1 text-muted dark:text-haint" {
+                    "Only its members see it. "
+                    a href={ "/c/" (channel.id) "/settings" } class="underline underline-offset-2" { "Add people" }
+                    " in the channel settings."
                 }
             }
             @if channel.kind == ChannelKind::Public {
@@ -522,7 +557,7 @@ fn thread_panel(
             header class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-5 dark:border-night-line" {
                 h2 class="text-lg font-bold" { "Thread" }
                 span class="truncate text-sm text-muted dark:text-haint" {
-                    @if channel.kind == ChannelKind::Public { "#" } (channel.name)
+                    @if channel.kind != ChannelKind::Direct { "#" } (channel.name)
                 }
                 a href={ "/c/" (channel.id) } class="ml-auto rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night-2" aria-label="Close thread" {
                     (icon(icons::X, "h-5 w-5"))
@@ -1048,7 +1083,12 @@ pub fn wide_panel_page(
     app_page(title, shell, &PageData::default(), &main)
 }
 
-pub fn new_channel_page(shell: &Shell<'_>, error: Option<&str>, name: &str) -> Markup {
+pub fn new_channel_page(
+    shell: &Shell<'_>,
+    error: Option<&str>,
+    name: &str,
+    private: bool,
+) -> Markup {
     panel_page(
         "New channel",
         shell,
@@ -1057,6 +1097,13 @@ pub fn new_channel_page(shell: &Shell<'_>, error: Option<&str>, name: &str) -> M
             (form_error(error))
             form method="post" action="/channels" class="max-w-md" {
                 (text_field("Name", "name", "text", name, "off", Some("Lowercase letters, numbers, dashes and underscores, like garden-club.")))
+                label class="mb-5 flex gap-3" {
+                    input type="checkbox" name="private" value="on" checked[private] class="mt-1";
+                    span {
+                        span class="block font-semibold" { "Private" }
+                        span class="block text-sm text-muted dark:text-haint" { "Only people you add can find and read it. Automations can't see it." }
+                    }
+                }
                 button type="submit" class="btn" { "Create channel" }
             }
         },
@@ -1082,65 +1129,6 @@ pub fn section(title: &str, intro: &str, content: &Markup) -> Markup {
             (content)
         }
     }
-}
-
-pub fn channel_settings_page(
-    shell: &Shell<'_>,
-    channel: &Channel,
-    hooks: &[Webhook],
-    base_url: &str,
-) -> Markup {
-    let example = hooks.first().map_or_else(
-        || format!("{base_url}/hooks/…"),
-        |hook| format!("{base_url}/hooks/{}", hook.token),
-    );
-    panel_page(
-        "Channel settings",
-        shell,
-        &html! { (channel_label(channel)) },
-        &html! {
-            (section("Topic", "A short line shown at the top of the channel.", &html! {
-                form method="post" action={ "/c/" (channel.id) "/topic" } class="flex gap-2" {
-                    input name="topic" value=(channel.topic) maxlength="200" aria-label="Topic" class="field" placeholder="What's this channel for?";
-                    button type="submit" class="btn shrink-0" { "Save topic" }
-                }
-            }))
-            (section("Webhooks", "Monitors, CI systems and scripts can post here through a webhook URL. It accepts Slack's incoming-webhook format, so tools like Gatus and Grafana work unchanged.", &html! {
-                @if !hooks.is_empty() {
-                    ul class="mb-5 space-y-4" {
-                        @for hook in hooks {
-                            li class="rounded-xl border border-line p-4 dark:border-night-line" {
-                                div class="mb-2 flex items-center gap-2" {
-                                    (icon(icons::WEBHOOKS_LOGO, "h-5 w-5 text-floor-3 dark:text-haint"))
-                                    span class="font-semibold" { (hook.name) }
-                                    form method="post" action={ "/c/" (channel.id) "/webhooks/" (hook.id) "/delete" } class="ml-auto" {
-                                        button type="submit" class="btn-quiet text-sm" aria-label={ "Delete webhook " (hook.name) } {
-                                            (icon(icons::TRASH, "h-4 w-4")) "Delete"
-                                        }
-                                    }
-                                }
-                                (copy_row(&format!("{base_url}/hooks/{}", hook.token)))
-                            }
-                        }
-                    }
-                }
-                form method="post" action={ "/c/" (channel.id) "/webhooks" } class="flex items-end gap-2" {
-                    div class="flex-1" {
-                        label for="webhook-name" class="field-label" { "Name" }
-                        input id="webhook-name" name="name" required maxlength="80" placeholder="Gatus, Grafana, CI…" class="field";
-                    }
-                    button type="submit" class="btn shrink-0" { "Create webhook" }
-                }
-                details class="mt-5 rounded-xl bg-screen p-4 dark:bg-night-2" {
-                    summary class="cursor-pointer font-semibold" { "Connect Gatus" }
-                    p class="mb-2 mt-2 text-sm" { "Add the webhook URL to Gatus's Slack alert provider:" }
-                    pre class="overflow-x-auto rounded-lg bg-white p-3 text-sm dark:bg-night" {
-                        code { "alerting:\n  slack:\n    webhook-url: \"" (example) "\"" }
-                    }
-                }
-            }))
-        },
-    )
 }
 
 pub fn people_page(

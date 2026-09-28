@@ -371,3 +371,130 @@ async fn admins_grant_rights_and_deactivate_accounts() {
         StatusCode::SEE_OTHER
     );
 }
+
+/// Creates a channel and returns its id.
+async fn create_channel(browser: &Browser, name: &str, private: bool) -> i64 {
+    let mut form = vec![("name", name)];
+    if private {
+        form.push(("private", "on"));
+    }
+    let created = browser.post("/channels", &form).await;
+    assert_eq!(created.status(), StatusCode::SEE_OTHER);
+    common::location(&created)
+        .trim_start_matches("/c/")
+        .parse()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn private_channels_are_for_members_only() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    let outsider = invite(&server, &admin, "Ola Other", "ola").await;
+    let mo = member.user_id().await;
+    let secret = create_channel(&admin, "garden-plans", true).await;
+    assert!(
+        admin
+            .page(&format!("/c/{secret}"))
+            .await
+            .contains("private channel")
+    );
+    assert_eq!(
+        member.get(&format!("/c/{secret}")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert!(
+        !member
+            .page("/channels/browse")
+            .await
+            .contains("garden-plans")
+    );
+
+    // Members add people, who then see it live and in search.
+    admin
+        .post(
+            &format!("/c/{secret}/members"),
+            &[("user_id", &mo.to_string())],
+        )
+        .await;
+    assert!(member.page("/home").await.contains("garden-plans"));
+    let mut member_live = member.live().await;
+    let mut outsider_live = outsider.live().await;
+    admin
+        .send(secret, "Tomatoes go left @ola @channel", None)
+        .await;
+    next_of(&mut member_live, "message").await;
+    assert!(
+        outsider_live
+            .next_event(Duration::from_millis(500))
+            .await
+            .is_none()
+    );
+    assert!(member.page("/search?q=tomatoes").await.contains("Tomatoes"));
+    assert!(
+        !outsider
+            .page("/search?q=tomatoes")
+            .await
+            .contains("Tomatoes")
+    );
+    let message = last_message_id(&admin.page(&format!("/c/{secret}")).await);
+    assert_eq!(
+        outsider
+            .get(&format!("/c/{secret}/m/{message}"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Members leave; the last one can't.
+    member.post(&format!("/c/{secret}/leave"), &[]).await;
+    assert_eq!(
+        member.get(&format!("/c/{secret}")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        admin
+            .post(&format!("/c/{secret}/leave"), &[])
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn public_channels_can_be_left_rejoined_and_muted() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    let noisy = create_channel(&admin, "alerts", false).await;
+    assert!(member.page("/home").await.contains(">alerts<"));
+
+    member.post(&format!("/c/{noisy}/leave"), &[]).await;
+    assert!(!member.page("/home").await.contains(">alerts<"));
+    let directory = member.page("/channels/browse").await;
+    assert!(between(&directory, ">alerts<", "</li>").contains("Join"));
+    assert!(
+        member
+            .page(&format!("/c/{noisy}"))
+            .await
+            .contains("You left #alerts")
+    );
+    member.post(&format!("/c/{noisy}/join"), &[]).await;
+    assert!(member.page("/home").await.contains(">alerts<"));
+
+    // Muted channels never look unread.
+    let muted: Value = fetch_post(&member, &format!("/c/{noisy}/mute"), &[])
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(muted["muted"], true);
+    admin.send(noisy, "Disk almost full", None).await;
+    let home = member.page("/home").await;
+    let link = between(&home, &format!("data-channel-link=\"{noisy}\""), ">");
+    assert!(link.contains("data-muted") && !link.contains("data-unread"));
+    fetch_post(&member, &format!("/c/{noisy}/mute"), &[]).await;
+    let home = member.page("/home").await;
+    assert!(between(&home, &format!("data-channel-link=\"{noisy}\""), ">").contains("data-unread"));
+}

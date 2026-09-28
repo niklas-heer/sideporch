@@ -171,7 +171,7 @@
     const here = app && app.dataset.channel === String(event.channel_id);
     if (!here) {
       const link = document.querySelector(`[data-channel-link="${event.channel_id}"]`);
-      if (link && event.author !== `u:${app?.dataset.me}`) link.dataset.unread = "";
+      if (link && link.dataset.muted === undefined && event.author !== `u:${app?.dataset.me}`) link.dataset.unread = "";
       return;
     }
     if (event.parent_id === null) {

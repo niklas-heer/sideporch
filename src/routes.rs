@@ -28,6 +28,7 @@ use crate::{
 mod account;
 mod admin;
 mod automation;
+mod channels;
 mod gifs;
 mod message;
 mod profile;
@@ -97,6 +98,7 @@ pub fn router(state: AppState) -> Router {
         .merge(account::router())
         .merge(gifs::router())
         .merge(message::router())
+        .merge(channels::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -366,7 +368,7 @@ async fn create_first_account(
                 true,
                 now,
             )?;
-            store::create_channel(&tx, "general", id, now)?;
+            store::create_channel(&tx, "general", false, id, now)?;
             tx.commit()?;
             Ok(Some(id))
         })
@@ -614,6 +616,13 @@ async fn post_message(
         Some(posted) => Some(gifs::resolve(&state, posted).await?),
         None => None,
     };
+    if channel.left {
+        // Writing in a public channel you left brings it back.
+        state
+            .db
+            .call(move |conn| store::set_channel_hidden(conn, user_id, channel_id, false))
+            .await?;
+    }
     let files = files::store_uploads(&state, user_id, input.files).await?;
     let message = messages::post(
         &state,
@@ -813,12 +822,14 @@ async fn new_channel_form(user: CurrentUser, State(state): State<AppState>) -> A
         sidebar: &sidebar,
         current: None,
     };
-    Ok(views::new_channel_page(&shell, None, ""))
+    Ok(views::new_channel_page(&shell, None, "", false))
 }
 
 #[derive(Deserialize)]
 struct ChannelForm {
     name: String,
+    /// A checkbox: present when the channel is private.
+    private: Option<String>,
 }
 
 fn normalize_channel_name(raw: &str) -> Option<String> {
@@ -842,15 +853,16 @@ async fn create_channel(
 ) -> AppResult<Response> {
     let user_id = user.id;
     let now = now_ms();
+    let private = form.private.is_some();
     let result = match normalize_channel_name(&form.name) {
         Some(name) => {
             state
                 .db
                 .call(move |conn| {
-                    if store::public_channel_id(conn, &name)?.is_some() {
+                    if store::channel_name_taken(conn, &name)? {
                         return Ok(Err("A channel with that name already exists."));
                     }
-                    let id = store::create_channel(conn, &name, user_id, now)?;
+                    let id = store::create_channel(conn, &name, private, user_id, now)?;
                     let username: String = conn.query_row(
                         "SELECT username FROM users WHERE id = ?1",
                         [user_id],
@@ -864,14 +876,17 @@ async fn create_channel(
     };
     match result {
         Ok((id, name, username)) => {
-            state.automations.event(automations::Event::ChannelCreated(
-                automations::ChannelEvent {
-                    channel: name,
-                    channel_id: id,
-                    user: user.display_name.clone(),
-                    username,
-                },
-            ));
+            // Automations only hear about channels everyone can see.
+            if !private {
+                state.automations.event(automations::Event::ChannelCreated(
+                    automations::ChannelEvent {
+                        channel: name,
+                        channel_id: id,
+                        user: user.display_name.clone(),
+                        username,
+                    },
+                ));
+            }
             Ok(Redirect::to(&format!("/c/{id}")).into_response())
         }
         Err(error) => {
@@ -883,15 +898,15 @@ async fn create_channel(
             };
             Ok((
                 StatusCode::BAD_REQUEST,
-                views::new_channel_page(&shell, Some(error), &form.name),
+                views::new_channel_page(&shell, Some(error), &form.name, private),
             )
                 .into_response())
         }
     }
 }
 
-/// Loads a public channel the user may manage.
-async fn managed_channel(
+/// Loads a public or private channel the user may manage.
+pub async fn managed_channel(
     state: &AppState,
     user: &CurrentUser,
     channel_id: i64,
@@ -902,10 +917,10 @@ async fn managed_channel(
         .call(move |conn| store::channel_for(conn, channel_id, user_id))
         .await?
         .ok_or(AppError::NotFound)?;
-    if channel.kind == ChannelKind::Public {
-        Ok(channel)
-    } else {
+    if channel.kind == ChannelKind::Direct {
         Err(AppError::NotFound)
+    } else {
+        Ok(channel)
     }
 }
 
@@ -917,12 +932,19 @@ async fn channel_settings(
 ) -> AppResult<Markup> {
     let channel = managed_channel(&state, &user, channel_id).await?;
     let user_id = user.id;
-    let (hooks, sidebar) = state
+    let private = channel.kind == ChannelKind::Private;
+    let (hooks, sidebar, people) = state
         .db
         .call(move |conn| {
+            let people = if private {
+                (store::members(conn, channel_id)?, store::users(conn)?)
+            } else {
+                (Vec::new(), Vec::new())
+            };
             Ok((
                 store::webhooks(conn, channel_id)?,
                 store::sidebar(conn, user_id)?,
+                people,
             ))
         })
         .await?;
@@ -933,9 +955,13 @@ async fn channel_settings(
     };
     Ok(views::channel_settings_page(
         &shell,
-        &channel,
-        &hooks,
-        &base_url(&state, &headers),
+        &views::ChannelSettings {
+            channel: &channel,
+            hooks: &hooks,
+            base_url: &base_url(&state, &headers),
+            members: &people.0,
+            everyone: &people.1,
+        },
     ))
 }
 

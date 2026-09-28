@@ -10,6 +10,8 @@ use crate::{error::AppResult, webhook::Attachment};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChannelKind {
     Public,
+    /// A named channel only its members see.
+    Private,
     Direct,
 }
 
@@ -19,6 +21,11 @@ pub struct Channel {
     pub kind: ChannelKind,
     pub name: String,
     pub topic: String,
+    /// The reader left this public channel, so it is not in their sidebar.
+    pub left: bool,
+    /// The reader muted it.
+    pub muted: bool,
+    pub created_by: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +33,8 @@ pub struct SidebarItem {
     pub channel_id: i64,
     pub label: String,
     pub unread: bool,
+    pub private: bool,
+    pub muted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -429,19 +438,50 @@ pub fn set_admin(conn: &Connection, user_id: i64, is_admin: bool) -> AppResult<(
 
 // Channels
 
-pub fn create_channel(conn: &Connection, name: &str, created_by: i64, now: i64) -> AppResult<i64> {
+/// Whether `?{n}` may read channel `c`: public channels are open to
+/// everyone; private channels and direct messages to their members.
+fn can_read(user_param: u8) -> String {
+    format!(
+        "((c.kind = 'public' AND c.private = 0) OR EXISTS (
+             SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = ?{user_param}))"
+    )
+}
+
+pub fn create_channel(
+    conn: &Connection,
+    name: &str,
+    private: bool,
+    created_by: i64,
+    now: i64,
+) -> AppResult<i64> {
     conn.execute(
-        "INSERT INTO channels (kind, name, created_by, created_at) VALUES ('public', ?1, ?2, ?3)",
-        params![name, created_by, now],
+        "INSERT INTO channels (kind, name, private, created_by, created_at) VALUES ('public', ?1, ?2, ?3, ?4)",
+        params![name, private, created_by, now],
     )?;
-    Ok(conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+    if private {
+        add_member(conn, id, created_by)?;
+    }
+    Ok(id)
+}
+
+/// Whether any channel, public or private, has `name`.
+pub fn channel_name_taken(conn: &Connection, name: &str) -> AppResult<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM channels WHERE kind = 'public' AND name = ?1",
+            [name],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 /// `channel_id` if it is a public channel.
 pub fn public_channel(conn: &Connection, channel_id: i64) -> AppResult<Option<i64>> {
     Ok(conn
         .query_row(
-            "SELECT id FROM channels WHERE kind = 'public' AND id = ?1",
+            "SELECT id FROM channels WHERE kind = 'public' AND private = 0 AND id = ?1",
             [channel_id],
             |row| row.get(0),
         )
@@ -450,8 +490,8 @@ pub fn public_channel(conn: &Connection, channel_id: i64) -> AppResult<Option<i6
 
 /// Names of all public channels, alphabetically.
 pub fn public_channel_names(conn: &Connection) -> AppResult<Vec<String>> {
-    let mut statement =
-        conn.prepare("SELECT name FROM channels WHERE kind = 'public' ORDER BY name")?;
+    let mut statement = conn
+        .prepare("SELECT name FROM channels WHERE kind = 'public' AND private = 0 ORDER BY name")?;
     let names = statement.query_map([], |row| row.get(0))?;
     Ok(names.collect::<Result<_, _>>()?)
 }
@@ -459,7 +499,7 @@ pub fn public_channel_names(conn: &Connection) -> AppResult<Vec<String>> {
 pub fn public_channel_id(conn: &Connection, name: &str) -> AppResult<Option<i64>> {
     Ok(conn
         .query_row(
-            "SELECT id FROM channels WHERE kind = 'public' AND name = ?1",
+            "SELECT id FROM channels WHERE kind = 'public' AND private = 0 AND name = ?1",
             [name],
             |row| row.get(0),
         )
@@ -474,28 +514,35 @@ pub fn set_topic(conn: &Connection, channel_id: i64, topic: &str) -> AppResult<(
     Ok(())
 }
 
-/// Returns the channel if `user_id` may read it. Direct conversations are
-/// visible to their members only.
+/// Returns the channel if `user_id` may read it. Private channels and
+/// direct conversations are visible to their members only.
 pub fn channel_for(conn: &Connection, channel_id: i64, user_id: i64) -> AppResult<Option<Channel>> {
     Ok(conn
         .query_row(
-            "SELECT c.id, c.kind, c.name, c.topic,
+            &format!(
+                "SELECT c.id, c.kind, c.name, c.topic,
                     (SELECT u.display_name FROM channel_members m JOIN users u ON u.id = m.user_id
                      WHERE m.channel_id = c.id AND m.user_id != ?2),
-                    (SELECT u.display_name FROM users u WHERE u.id = ?2)
-             FROM channels c
-             WHERE c.id = ?1 AND (c.kind = 'public' OR EXISTS (
-                 SELECT 1 FROM channel_members m WHERE m.channel_id = c.id AND m.user_id = ?2))",
+                    (SELECT u.display_name FROM users u WHERE u.id = ?2),
+                    c.private, COALESCE(p.hidden, 0), COALESCE(p.muted, 0), c.created_by
+                 FROM channels c
+                 LEFT JOIN channel_prefs p ON p.channel_id = c.id AND p.user_id = ?2
+                 WHERE c.id = ?1 AND {}",
+                can_read(2)
+            ),
             params![channel_id, user_id],
             |row| {
                 let kind: String = row.get(1)?;
                 let name: Option<String> = row.get(2)?;
                 let other: Option<String> = row.get(4)?;
                 let me: Option<String> = row.get(5)?;
+                let private: bool = row.get(6)?;
                 let (kind, name) = if kind == "dm" {
                     let label =
                         other.unwrap_or_else(|| format!("{} (you)", me.unwrap_or_default()));
                     (ChannelKind::Direct, label)
+                } else if private {
+                    (ChannelKind::Private, name.unwrap_or_default())
                 } else {
                     (ChannelKind::Public, name.unwrap_or_default())
                 };
@@ -504,27 +551,118 @@ pub fn channel_for(conn: &Connection, channel_id: i64, user_id: i64) -> AppResul
                     kind,
                     name,
                     topic: row.get(3)?,
+                    left: row.get(7)?,
+                    muted: row.get(8)?,
+                    created_by: row.get(9)?,
                 })
             },
         )
         .optional()?)
 }
 
-/// Members who receive live updates for a direct conversation, or `None`
-/// for a public channel that everyone can read.
+/// Members who receive live updates for a private channel or a direct
+/// conversation, or `None` for a public channel that everyone can read.
 pub fn audience(conn: &Connection, channel_id: i64) -> AppResult<Option<Vec<i64>>> {
-    let kind: String = conn.query_row(
-        "SELECT kind FROM channels WHERE id = ?1",
+    let (kind, private): (String, bool) = conn.query_row(
+        "SELECT kind, private FROM channels WHERE id = ?1",
         [channel_id],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    if kind != "dm" {
+    if kind != "dm" && !private {
         return Ok(None);
     }
-    let mut statement =
-        conn.prepare("SELECT user_id FROM channel_members WHERE channel_id = ?1")?;
-    let members = statement.query_map([channel_id], |row| row.get(0))?;
-    Ok(Some(members.collect::<Result<_, _>>()?))
+    members(conn, channel_id)
+        .map(|members| Some(members.into_iter().map(|member| member.id).collect()))
+}
+
+/// People in a private channel or a direct conversation.
+pub fn members(conn: &Connection, channel_id: i64) -> AppResult<Vec<User>> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT {USER_COLUMNS} FROM users WHERE id IN
+         (SELECT user_id FROM channel_members WHERE channel_id = ?1)
+         ORDER BY display_name COLLATE NOCASE"
+    ))?;
+    let members = statement.query_map([channel_id], user_from_row)?;
+    Ok(members.collect::<Result<_, _>>()?)
+}
+
+pub fn add_member(conn: &Connection, channel_id: i64, user_id: i64) -> AppResult<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?1, ?2)",
+        params![channel_id, user_id],
+    )?;
+    Ok(())
+}
+
+pub fn remove_member(conn: &Connection, channel_id: i64, user_id: i64) -> AppResult<()> {
+    conn.execute(
+        "DELETE FROM channel_members WHERE channel_id = ?1 AND user_id = ?2",
+        params![channel_id, user_id],
+    )?;
+    Ok(())
+}
+
+/// Leaves (hides) or rejoins a public channel for one person.
+pub fn set_channel_hidden(
+    conn: &Connection,
+    user_id: i64,
+    channel_id: i64,
+    hidden: bool,
+) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO channel_prefs (user_id, channel_id, hidden) VALUES (?1, ?2, ?3)
+         ON CONFLICT (user_id, channel_id) DO UPDATE SET hidden = excluded.hidden",
+        params![user_id, channel_id, hidden],
+    )?;
+    Ok(())
+}
+
+pub fn set_channel_muted(
+    conn: &Connection,
+    user_id: i64,
+    channel_id: i64,
+    muted: bool,
+) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO channel_prefs (user_id, channel_id, muted) VALUES (?1, ?2, ?3)
+         ON CONFLICT (user_id, channel_id) DO UPDATE SET muted = excluded.muted",
+        params![user_id, channel_id, muted],
+    )?;
+    Ok(())
+}
+
+/// A channel in the directory.
+pub struct DirectoryEntry {
+    pub id: i64,
+    pub name: String,
+    pub topic: String,
+    pub private: bool,
+    /// For public channels: whether it is in the person's sidebar.
+    pub joined: bool,
+    pub messages: i64,
+}
+
+/// Every public channel, and the private ones `user_id` is in.
+pub fn channel_directory(conn: &Connection, user_id: i64) -> AppResult<Vec<DirectoryEntry>> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT c.id, c.name, c.topic, c.private, NOT COALESCE(p.hidden, 0),
+                (SELECT COUNT(*) FROM messages m WHERE m.channel_id = c.id)
+         FROM channels c LEFT JOIN channel_prefs p ON p.channel_id = c.id AND p.user_id = ?1
+         WHERE c.kind = 'public' AND {}
+         ORDER BY c.name COLLATE NOCASE",
+        can_read(1)
+    ))?;
+    let entries = statement.query_map([user_id], |row| {
+        Ok(DirectoryEntry {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            topic: row.get(2)?,
+            private: row.get(3)?,
+            joined: row.get(4)?,
+            messages: row.get(5)?,
+        })
+    })?;
+    Ok(entries.collect::<Result<_, _>>()?)
 }
 
 /// Finds or creates the direct conversation between two users.
@@ -559,8 +697,13 @@ pub fn direct_channel(conn: &mut Connection, user: i64, other: i64, now: i64) ->
 pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
     let unread = "COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.channel_id = c.id), 0)
                   > COALESCE((SELECT r.last_read_id FROM reads r WHERE r.channel_id = c.id AND r.user_id = ?1), 0)";
+    // Public channels someone left stay out; muted ones never look unread.
     let mut statement = conn.prepare(&format!(
-        "SELECT c.id, c.name, {unread} FROM channels c WHERE c.kind = 'public' ORDER BY c.name COLLATE NOCASE"
+        "SELECT c.id, c.name, {unread} AND NOT COALESCE(p.muted, 0), c.private, COALESCE(p.muted, 0)
+         FROM channels c LEFT JOIN channel_prefs p ON p.channel_id = c.id AND p.user_id = ?1
+         WHERE c.kind = 'public' AND NOT COALESCE(p.hidden, 0) AND {}
+         ORDER BY c.name COLLATE NOCASE",
+        can_read(1)
     ))?;
     let channels = statement
         .query_map([user_id], |row| {
@@ -568,6 +711,8 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
                 channel_id: row.get(0)?,
                 label: row.get(1)?,
                 unread: row.get(2)?,
+                private: row.get(3)?,
+                muted: row.get(4)?,
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -587,6 +732,8 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
                 channel_id: row.get(0)?,
                 label: row.get(1)?,
                 unread: row.get(2)?,
+                private: false,
+                muted: false,
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -597,7 +744,8 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
 pub fn home_channel(conn: &Connection) -> AppResult<Option<i64>> {
     Ok(conn
         .query_row(
-            "SELECT id FROM channels WHERE kind = 'public' ORDER BY name != 'general', id LIMIT 1",
+            "SELECT id FROM channels WHERE kind = 'public' AND private = 0
+             ORDER BY name != 'general', id LIMIT 1",
             [],
             |row| row.get(0),
         )
@@ -1233,7 +1381,7 @@ pub fn readable_file(
                      SELECT 1 FROM message_files mf
                      JOIN messages m ON m.id = mf.message_id
                      JOIN channels c ON c.id = m.channel_id
-                     WHERE mf.file_id = f.id AND (c.kind = 'public' OR EXISTS (
+                     WHERE mf.file_id = f.id AND ((c.kind = 'public' AND c.private = 0) OR EXISTS (
                          SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = ?2))))",
             params![file_id, user_id],
             |row| {
@@ -1508,7 +1656,7 @@ pub fn search(
     let mut statement = conn.prepare(&format!(
         "{MESSAGE_SELECT}, messages_fts f, channels c
          WHERE f.rowid = m.id AND c.id = m.channel_id AND messages_fts MATCH ?1
-           AND (c.kind = 'public' OR EXISTS (
+           AND ((c.kind = 'public' AND c.private = 0) OR EXISTS (
                SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = ?2))
          ORDER BY m.id DESC LIMIT ?3"
     ).replace(
@@ -1656,20 +1804,36 @@ pub fn notification_targets(
         }
     }
     let text = message.body.to_lowercase();
-    let everyone = public && (mentions(&text, "channel") || mentions(&text, "here"));
-    let mut statement =
-        conn.prepare("SELECT id, lower(username) FROM users WHERE deactivated_at IS NULL")?;
-    for user in statement.query_map([], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    let everyone = mentions(&text, "channel") || mentions(&text, "here");
+    // Muted and left channels only notify people mentioned by name.
+    let mut statement = conn.prepare(
+        "SELECT u.id, lower(u.username), COALESCE(p.muted OR p.hidden, 0) FROM users u
+         LEFT JOIN channel_prefs p ON p.user_id = u.id AND p.channel_id = ?1
+         WHERE u.deactivated_at IS NULL",
+    )?;
+    for user in statement.query_map([message.channel_id], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, bool>(2)?,
+        ))
     })? {
-        let (id, username) = user?;
-        if everyone || mentions(&text, &username) {
+        let (id, username, quiet) = user?;
+        if (everyone && !quiet) || mentions(&text, &username) {
             targets.push(id);
         }
     }
     targets.sort_unstable();
     targets.dedup();
     targets.retain(|id| Some(*id) != sender);
+    // Only people who can read the channel hear about it.
+    if !public {
+        let readers: std::collections::HashSet<i64> = audience(conn, message.channel_id)?
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        targets.retain(|id| readers.contains(id));
+    }
     Ok(targets)
 }
 

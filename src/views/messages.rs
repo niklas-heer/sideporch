@@ -86,7 +86,7 @@ pub fn pins_page(
                 p class="text-muted dark:text-haint" {
                     "Nothing is pinned yet. Pin a message from its "
                     (icon(icons::DOTS_THREE, "inline h-4 w-4")) " menu to keep it here for everyone"
-                    @if channel.kind == ChannelKind::Public { " in #" (channel.name) } "."
+                    @if channel.kind != ChannelKind::Direct { " in #" (channel.name) } "."
                 }
             } @else {
                 ol class="-mx-5 space-y-3" {

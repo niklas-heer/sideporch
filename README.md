@@ -15,7 +15,7 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 
 ## Features
 
-- Channels anyone can join, direct messages, and threads one level deep.
+- Public channels anyone can join, **private channels** for the people you add, direct messages, and threads one level deep. Leave channels you don't need, and **mute** noisy ones.
 - Messages appear live over a WebSocket, with unread markers in the sidebar.
 - GitHub-flavored Markdown: headings, lists and task lists, tables, code blocks, quotes and alerts, links, `@mentions`, `:emoji:` codes, and [Mermaid](https://mermaid.js.org) diagrams in ```` ```mermaid ```` blocks. Webhook posts keep Slack's own formatting.
 - **Edit and delete** your messages (↑ in an empty composer edits your last one), **pin** messages to a channel, and **save** messages for later.

@@ -267,6 +267,19 @@ CREATE TABLE password_resets (
     expires_at INTEGER NOT NULL
 );
 ",
+    r"
+ALTER TABLE channels ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
+
+-- Per person: `hidden` for a public channel they left, `muted` for one
+-- that shouldn't draw attention.
+CREATE TABLE channel_prefs (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    hidden INTEGER NOT NULL DEFAULT 0,
+    muted INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, channel_id)
+);
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on
