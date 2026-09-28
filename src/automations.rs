@@ -1,149 +1,167 @@
 //! Automations: small Lua scripts that admins write in the browser.
 //!
-//! Every enabled script runs in its own sandboxed Lua 5.4 state on one
-//! dedicated thread. Scripts react to new messages, reactions, webhook
-//! requests and timers through a `sideporch` table, described in
-//! [`api`]. [`sandbox`] builds the Lua states, [`tooling`] lints and
-//! formats scripts.
+//! Every enabled automation runs on its own thread ([`worker`]) with its own
+//! sandboxed Lua 5.4 state ([`sandbox`]). Scripts react to events, webhook
+//! requests, slash commands and schedules through a `sideporch` table
+//! described in [`api`]; [`tooling`] lints and formats them. Library
+//! automations hold shared code that other scripts `require`.
 //!
 //! Each call has an instruction budget and each state a memory limit, so a
 //! runaway script fails with an error instead of stalling the server.
 //! Messages and reactions from automations never trigger automations.
-//! Calls that print, act, or fail are kept in a per-script run log.
+//! Calls that print, act, or fail are kept in a per-script run log, with
+//! secret values replaced.
 
 pub mod api;
+pub mod cron;
+pub mod events;
+pub mod http;
 pub mod sandbox;
 pub mod tooling;
+pub mod worker;
 
 use std::{
-    collections::HashMap,
-    path::Path,
-    sync::{Arc, Mutex, mpsc},
-    thread,
-    time::{Duration, Instant},
+    collections::{BTreeMap, HashMap},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, RwLock},
+    time::Duration,
 };
 
+use jiff::tz::TimeZone;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc as async_mpsc, oneshot};
 
+pub use events::{
+    ChannelEvent, CommandCall, Event, MemberEvent, MessageEvent, ReactionEvent, WebhookRequest,
+};
+use sandbox::{Action, ChannelRef, Outcome, Script};
+pub use sandbox::{Triggers, WebhookResponse};
+pub use worker::CommandReply;
+use worker::{Job, Worker};
+
 use crate::{
-    AppState, db,
+    AppState,
     error::{AppError, AppResult},
     messages::{self, Draft, Sender},
-    now_ms,
-    store::{self, Author, Message},
+    now_ms, secrets, store,
 };
-pub use sandbox::WebhookResponse;
-use sandbox::{Action, ChannelRef, Identity, Outcome, Script, Sink, Storage};
 
-/// How long a webhook request waits for its script.
-const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a webhook request or command waits for its script.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// A new message, as scripts see it.
-#[derive(Debug, Clone)]
-pub struct MessageEvent {
-    pub id: i64,
-    pub channel_id: i64,
-    pub channel: String,
-    pub text: String,
-    pub author: String,
-    pub username: Option<String>,
-    pub is_bot: bool,
-    pub thread_id: Option<i64>,
+pub const KIND_AUTOMATION: &str = "automation";
+pub const KIND_LIBRARY: &str = "library";
+
+/// Library names: what `require` takes.
+pub fn valid_library_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && name.len() <= 40
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-impl MessageEvent {
-    pub fn new(conn: &Connection, message: &Message) -> AppResult<Self> {
-        let channel: Option<String> = conn.query_row(
-            "SELECT name FROM channels WHERE id = ?1",
-            [message.channel_id],
-            |row| row.get(0),
-        )?;
-        let (author, username, is_bot) = match &message.author {
-            Author::User { id, display_name } => {
-                let username: String =
-                    conn.query_row("SELECT username FROM users WHERE id = ?1", [id], |row| {
-                        row.get(0)
-                    })?;
-                (display_name.clone(), Some(username), false)
-            }
-            Author::Bot { name, .. } => (name.clone(), None, true),
-            Author::Removed => ("Former member".to_owned(), None, false),
-        };
-        Ok(Self {
-            id: message.id,
-            channel_id: message.channel_id,
-            channel: channel.unwrap_or_default(),
-            text: message.body.clone(),
-            author,
-            username,
-            is_bot,
-            thread_id: message.parent_id,
-        })
+/// Instance-wide automation settings.
+#[derive(Debug, Clone)]
+pub struct Settings {
+    /// The default time zone for `sideporch.cron`.
+    pub timezone: String,
+    /// Whether `sideporch.http` may reach private and loopback addresses.
+    pub allow_private_network: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            timezone: "UTC".to_owned(),
+            allow_private_network: false,
+        }
     }
 }
 
-/// Someone added or removed a reaction.
-#[derive(Debug, Clone)]
-pub struct ReactionEvent {
-    pub emoji: String,
-    pub added: bool,
-    pub user: String,
-    pub username: String,
-    pub message: MessageEvent,
+const TIMEZONE_SETTING: &str = "automations.timezone";
+const PRIVATE_NETWORK_SETTING: &str = "automations.allow_private_network";
+
+impl Settings {
+    pub fn load(conn: &Connection) -> AppResult<Self> {
+        Ok(Self {
+            timezone: store::setting(conn, TIMEZONE_SETTING)?.unwrap_or_else(|| "UTC".to_owned()),
+            allow_private_network: store::setting(conn, PRIVATE_NETWORK_SETTING)?.as_deref()
+                == Some("true"),
+        })
+    }
+
+    pub fn save(&self, conn: &Connection) -> AppResult<()> {
+        if TimeZone::get(&self.timezone).is_err() {
+            return Err(AppError::bad_request(format!(
+                "`{}` is not a time zone. Use a name such as Europe/Berlin.",
+                self.timezone
+            )));
+        }
+        store::set_setting(conn, TIMEZONE_SETTING, &self.timezone)?;
+        store::set_setting(
+            conn,
+            PRIVATE_NETWORK_SETTING,
+            if self.allow_private_network {
+                "true"
+            } else {
+                "false"
+            },
+        )
+    }
+
+    pub fn zone(&self) -> TimeZone {
+        TimeZone::get(&self.timezone).unwrap_or(TimeZone::UTC)
+    }
 }
 
-/// An HTTP request to an automation's webhook URL.
-#[derive(Debug, Clone, Default)]
-pub struct WebhookRequest {
-    pub method: String,
-    /// The part of the path after the token, such as `/deploy`, or empty.
-    pub path: String,
-    pub query: Vec<(String, String)>,
-    pub headers: Vec<(String, String)>,
-    pub body: String,
+/// A registered slash command, for `/help`, the composer and MCP.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandInfo {
+    pub name: String,
+    pub description: String,
+    pub usage: String,
+    pub automation_id: i64,
+    pub automation: String,
 }
 
-enum Command {
-    Reload(Vec<store::Automation>, oneshot::Sender<()>),
-    Message(MessageEvent),
-    Reaction(ReactionEvent),
-    Webhook {
-        automation_id: i64,
-        request: WebhookRequest,
-        respond: oneshot::Sender<WebhookResponse>,
-    },
+#[derive(Default)]
+struct Workers {
+    by_id: HashMap<i64, Worker>,
+    commands: BTreeMap<String, CommandInfo>,
 }
 
-/// Handle to the automation thread.
+struct Inner {
+    db_path: PathBuf,
+    workers: RwLock<Workers>,
+    actions: async_mpsc::UnboundedSender<Action>,
+    receiver: Mutex<Option<async_mpsc::UnboundedReceiver<Action>>>,
+}
+
+/// Runs the enabled automations and routes events to them.
 #[derive(Clone)]
 pub struct Automations {
-    commands: mpsc::Sender<Command>,
-    actions: Arc<Mutex<Option<async_mpsc::UnboundedReceiver<Action>>>>,
+    inner: Arc<Inner>,
 }
 
 impl Automations {
-    /// Starts the automation thread. It keeps its own database connection
-    /// for script data and run logs.
-    pub fn start(db_path: &Path) -> AppResult<Self> {
-        let conn = Arc::new(Mutex::new(db::connect(db_path)?));
-        let (commands, receiver) = mpsc::channel();
-        let (actions, action_receiver) = async_mpsc::unbounded_channel();
-        thread::Builder::new()
-            .name("sideporch-automations".into())
-            .spawn(move || run(&receiver, &conn, &actions))
-            .map_err(AppError::internal)?;
-        Ok(Self {
-            commands,
-            actions: Arc::new(Mutex::new(Some(action_receiver))),
-        })
+    pub fn start(db_path: &Path) -> Self {
+        let (actions, receiver) = async_mpsc::unbounded_channel();
+        Self {
+            inner: Arc::new(Inner {
+                db_path: db_path.to_owned(),
+                workers: RwLock::new(Workers::default()),
+                actions,
+                receiver: Mutex::new(Some(receiver)),
+            }),
+        }
     }
 
     /// Carries out what scripts ask for. Call once, after startup.
     pub fn serve(&self, state: AppState) {
         let receiver = self
-            .actions
+            .inner
+            .receiver
             .lock()
             .ok()
             .and_then(|mut receiver| receiver.take());
@@ -156,46 +174,218 @@ impl Automations {
         }
     }
 
-    // Sending fails only if the thread is gone, which shutdown causes.
-
-    pub fn message(&self, event: MessageEvent) {
-        drop(self.commands.send(Command::Message(event)));
+    /// Stops all workers and starts the enabled automations again, with the
+    /// current libraries, secrets and settings. Returns once every script
+    /// has loaded, so load errors are stored.
+    pub async fn reload(&self, state: &AppState) -> AppResult<()> {
+        let vault = Arc::clone(&state.vault);
+        let (automations, secrets, settings) = state
+            .db
+            .call(move |conn| {
+                Ok((
+                    store::automations(conn)?,
+                    secrets::all(conn, &vault)?,
+                    Settings::load(conn)?,
+                ))
+            })
+            .await?;
+        let libraries: HashMap<String, String> = automations
+            .iter()
+            .filter(|automation| automation.kind == KIND_LIBRARY)
+            .map(|library| (library.name.clone(), library.source.clone()))
+            .collect();
+        let shared = worker::Shared {
+            db_path: self.inner.db_path.clone(),
+            actions: self.inner.actions.clone(),
+            libraries: Arc::new(libraries),
+            secrets: Arc::new(secrets),
+            http: Arc::new(http::Http::new(settings.allow_private_network)?),
+            timezone: settings.zone(),
+        };
+        // Oldest first, so an existing command keeps working when a newer
+        // automation tries to register the same name.
+        let mut runnable: Vec<store::Automation> = automations
+            .into_iter()
+            .filter(|automation| automation.enabled && automation.kind == KIND_AUTOMATION)
+            .collect();
+        runnable.sort_by_key(|automation| automation.id);
+        let (workers, conflicts) =
+            tokio::task::spawn_blocking(move || start_all(&runnable, &shared))
+                .await
+                .map_err(AppError::internal)??;
+        if let Ok(mut current) = self.inner.workers.write() {
+            // Dropping the old workers ends their threads.
+            *current = workers;
+        }
+        if !conflicts.is_empty() {
+            state
+                .db
+                .call(move |conn| {
+                    for (id, error) in conflicts {
+                        store::set_automation_error(conn, id, Some(&error))?;
+                        store::record_automation_run(
+                            conn,
+                            id,
+                            "load",
+                            now_ms(),
+                            0,
+                            "",
+                            Some(&error),
+                        )?;
+                    }
+                    Ok(())
+                })
+                .await?;
+        }
+        Ok(())
     }
 
-    pub fn reaction(&self, event: ReactionEvent) {
-        drop(self.commands.send(Command::Reaction(event)));
+    /// Hands `event` to every automation that listens for its kind.
+    pub fn event(&self, event: Event) {
+        let event = Arc::new(event);
+        let Ok(workers) = self.inner.workers.read() else {
+            return;
+        };
+        for worker in workers.by_id.values() {
+            let listens = worker
+                .triggers
+                .lock()
+                .is_ok_and(|triggers| triggers.listens_to(event.kind()));
+            if listens {
+                // Fails only if the worker stopped, which a reload causes.
+                drop(worker.jobs.send(Job::Event(Arc::clone(&event))));
+            }
+        }
     }
 
     /// Hands a request to the automation's webhook handler and waits for
     /// its response.
     pub async fn webhook(&self, automation_id: i64, request: WebhookRequest) -> WebhookResponse {
         let (respond, response) = oneshot::channel();
-        let sent = self.commands.send(Command::Webhook {
-            automation_id,
-            request,
-            respond,
-        });
-        if sent.is_err() {
-            return WebhookResponse::text(503, "Automations are not running.");
+        if !self.send(automation_id, Job::Webhook(request, respond)) {
+            return WebhookResponse::text(
+                503,
+                "This automation is switched off or failed to load.",
+            );
         }
-        match tokio::time::timeout(WEBHOOK_TIMEOUT, response).await {
+        match tokio::time::timeout(ANSWER_TIMEOUT, response).await {
             Ok(Ok(response)) => response,
             _ => WebhookResponse::text(504, "The automation did not answer in time."),
         }
     }
 
-    /// Reloads all scripts from the database and waits until they ran their
-    /// top level, so load errors are stored when this returns.
-    pub async fn reload(&self, state: &AppState) -> AppResult<()> {
-        let automations = state.db.call(|conn| store::automations(conn)).await?;
-        let (done, loaded) = oneshot::channel();
-        self.commands
-            .send(Command::Reload(automations, done))
-            .map_err(|_| AppError::internal("automation thread stopped"))?;
-        // A script that never finishes loading is stopped by its budget.
-        drop(tokio::time::timeout(Duration::from_secs(10), loaded).await);
-        Ok(())
+    fn send(&self, automation_id: i64, job: Job) -> bool {
+        self.inner.workers.read().is_ok_and(|workers| {
+            workers
+                .by_id
+                .get(&automation_id)
+                .is_some_and(|worker| worker.loaded && worker.jobs.send(job).is_ok())
+        })
     }
+
+    /// Runs a slash command. `None` if no automation registered it.
+    pub async fn command(&self, command: CommandCall) -> Option<CommandReply> {
+        let automation_id = self
+            .inner
+            .workers
+            .read()
+            .ok()?
+            .commands
+            .get(&command.name)?
+            .automation_id;
+        let (respond, reply) = oneshot::channel();
+        if !self.send(automation_id, Job::Command(command, respond)) {
+            return None;
+        }
+        Some(match tokio::time::timeout(ANSWER_TIMEOUT, reply).await {
+            Ok(Ok(reply)) => reply,
+            _ => CommandReply {
+                error: Some("The command did not answer in time.".to_owned()),
+                ..CommandReply::default()
+            },
+        })
+    }
+
+    /// The registered slash commands, by name.
+    pub fn commands(&self) -> Vec<CommandInfo> {
+        self.inner
+            .workers
+            .read()
+            .map(|workers| workers.commands.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// What each running automation listens to.
+    pub fn triggers(&self) -> HashMap<i64, Triggers> {
+        self.inner
+            .workers
+            .read()
+            .map(|workers| {
+                workers
+                    .by_id
+                    .iter()
+                    .filter_map(|(id, worker)| Some((*id, worker.triggers.lock().ok()?.clone())))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Runs the live automation against a simulated event; posts,
+    /// reactions and requests really happen.
+    pub async fn run(&self, automation_id: i64, trigger: TestTrigger) -> AppResult<RunReport> {
+        let (respond, report) = oneshot::channel();
+        if !self.send(automation_id, Job::Run(trigger, respond)) {
+            return Err(AppError::bad_request(
+                "The automation is switched off or failed to load.",
+            ));
+        }
+        tokio::time::timeout(ANSWER_TIMEOUT, report)
+            .await
+            .map_err(|_| AppError::bad_request("The automation did not finish in time."))?
+            .map_err(|_| AppError::internal("the automation stopped"))
+    }
+}
+
+/// Starts a worker per automation. Returns the workers and, for commands
+/// that two automations register, an error for the later one.
+fn start_all(
+    automations: &[store::Automation],
+    shared: &worker::Shared,
+) -> AppResult<(Workers, Vec<(i64, String)>)> {
+    let mut workers = Workers::default();
+    let mut conflicts = Vec::new();
+    for automation in automations {
+        let worker = worker::start(automation, shared)?;
+        let commands = worker
+            .triggers
+            .lock()
+            .map(|triggers| triggers.commands.clone())
+            .unwrap_or_default();
+        for command in commands {
+            if let Some(owner) = workers.commands.get(&command.name) {
+                conflicts.push((
+                    automation.id,
+                    format!(
+                        "/{} is already registered by {}",
+                        command.name, owner.automation
+                    ),
+                ));
+                continue;
+            }
+            workers.commands.insert(
+                command.name.clone(),
+                CommandInfo {
+                    name: command.name,
+                    description: command.description,
+                    usage: command.usage,
+                    automation_id: automation.id,
+                    automation: automation.name.clone(),
+                },
+            );
+        }
+        workers.by_id.insert(automation.id, worker);
+    }
+    Ok((workers, conflicts))
 }
 
 async fn perform(state: &AppState, action: Action) {
@@ -277,192 +467,7 @@ async fn post(
     .map(drop)
 }
 
-fn run(
-    commands: &mpsc::Receiver<Command>,
-    conn: &Arc<Mutex<Connection>>,
-    actions: &async_mpsc::UnboundedSender<Action>,
-) {
-    let mut scripts: Vec<Script> = Vec::new();
-    // Which scripts last failed, so quiet successes only write when that changes.
-    let mut failing: HashMap<i64, bool> = HashMap::new();
-    loop {
-        let now = Instant::now();
-        let wait = scripts
-            .iter()
-            .flat_map(|script| script.timers.iter().map(|timer| timer.next))
-            .min()
-            .map_or(Duration::from_secs(60), |next| {
-                next.saturating_duration_since(now)
-            });
-        match commands.recv_timeout(wait) {
-            Ok(Command::Reload(automations, done)) => {
-                (scripts, failing) = load_all(automations, conn, actions);
-                // The caller may have stopped waiting.
-                let _ = done.send(());
-            }
-            Ok(Command::Message(event)) => {
-                for script in &scripts {
-                    for handler in &script.on_message {
-                        let outcome = match sandbox::message_table(&script.lua, &event) {
-                            Ok(table) => sandbox::call(&script.lua, handler, table),
-                            Err(error) => failed(&error),
-                        };
-                        record(conn, &mut failing, script.id, "message", &outcome);
-                    }
-                }
-            }
-            Ok(Command::Reaction(event)) => {
-                for script in &scripts {
-                    for handler in &script.on_reaction {
-                        let outcome = match sandbox::reaction_table(&script.lua, &event) {
-                            Ok(table) => sandbox::call(&script.lua, handler, table),
-                            Err(error) => failed(&error),
-                        };
-                        record(conn, &mut failing, script.id, "reaction", &outcome);
-                    }
-                }
-            }
-            Ok(Command::Webhook {
-                automation_id,
-                request,
-                respond,
-            }) => {
-                let script = scripts.iter().find(|script| script.id == automation_id);
-                let response = answer_webhook(script, &request, conn, &mut failing);
-                // The caller may have timed out.
-                let _ = respond.send(response);
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
-        }
-        let now = Instant::now();
-        for script in &mut scripts {
-            for timer in &mut script.timers {
-                if timer.next <= now {
-                    timer.next = now.checked_add(timer.every).unwrap_or(now);
-                    let outcome = sandbox::call(&script.lua, &timer.callback, ());
-                    record(conn, &mut failing, script.id, "timer", &outcome);
-                }
-            }
-        }
-    }
-}
-
-/// Loads every enabled script, and notes which automations have an error.
-fn load_all(
-    automations: Vec<store::Automation>,
-    conn: &Arc<Mutex<Connection>>,
-    actions: &async_mpsc::UnboundedSender<Action>,
-) -> (Vec<Script>, HashMap<i64, bool>) {
-    let mut failing: HashMap<i64, bool> = automations
-        .iter()
-        .map(|automation| (automation.id, automation.last_error.is_some()))
-        .collect();
-    let scripts = automations
-        .into_iter()
-        .filter(|automation| automation.enabled)
-        .filter_map(|automation| {
-            let identity = Identity {
-                id: automation.id,
-                name: automation.name,
-            };
-            let (script, outcome) = sandbox::load(
-                &identity,
-                &automation.source,
-                Storage::Live(Arc::clone(conn)),
-                &Sink::Live(actions.clone()),
-            );
-            record(conn, &mut failing, identity.id, "load", &outcome);
-            script
-        })
-        .collect();
-    (scripts, failing)
-}
-
-fn answer_webhook(
-    script: Option<&Script>,
-    request: &WebhookRequest,
-    conn: &Arc<Mutex<Connection>>,
-    failing: &mut HashMap<i64, bool>,
-) -> WebhookResponse {
-    let Some(script) = script else {
-        return WebhookResponse::text(503, "This automation is switched off or failed to load.");
-    };
-    let Some(handler) = &script.on_webhook else {
-        return WebhookResponse::text(404, "This automation has no webhook handler.");
-    };
-    let (mut outcome, response) = sandbox::call_webhook(&script.lua, handler, request);
-    outcome
-        .log
-        .insert(0, format!("{} {}", request.method, display_path(request)));
-    failing.insert(script.id, outcome.error.is_some());
-    record_always(conn, script.id, "webhook", &outcome);
-    response.unwrap_or_else(|| WebhookResponse::text(500, "The automation failed."))
-}
-
-fn display_path(request: &WebhookRequest) -> String {
-    if request.path.is_empty() {
-        "/".to_owned()
-    } else {
-        request.path.clone()
-    }
-}
-
-fn failed(error: &mlua::Error) -> Outcome {
-    Outcome {
-        error: Some(sandbox::clean_error(error)),
-        ..Outcome::default()
-    }
-}
-
-/// Stores the script's status, and the call in the run log if it printed,
-/// acted, or failed.
-fn record(
-    conn: &Arc<Mutex<Connection>>,
-    failing: &mut HashMap<i64, bool>,
-    id: i64,
-    trigger: &str,
-    outcome: &Outcome,
-) {
-    let failed_before = failing.insert(id, outcome.error.is_some()).unwrap_or(false);
-    if outcome.log.is_empty() && outcome.error.is_none() {
-        // A quiet success only clears an earlier error.
-        if failed_before
-            && let Ok(conn) = conn.lock()
-            && let Err(error) = store::set_automation_error(&conn, id, None)
-        {
-            tracing::warn!(?error, "could not record automation status");
-        }
-        return;
-    }
-    record_always(conn, id, trigger, outcome);
-}
-
-fn record_always(conn: &Arc<Mutex<Connection>>, id: i64, trigger: &str, outcome: &Outcome) {
-    if let Some(error) = &outcome.error {
-        tracing::warn!(automation = id, trigger, %error, "automation failed");
-    }
-    let Ok(conn) = conn.lock() else {
-        return;
-    };
-    let duration = i64::try_from(outcome.duration.as_micros()).unwrap_or(i64::MAX);
-    let result = store::set_automation_error(&conn, id, outcome.error.as_deref()).and_then(|()| {
-        store::record_automation_run(
-            &conn,
-            id,
-            trigger,
-            now_ms(),
-            duration,
-            &outcome.log.join("\n"),
-            outcome.error.as_deref(),
-        )
-    });
-    if let Err(error) = result {
-        tracing::warn!(?error, "could not record automation run");
-    }
-}
-
-/// What a dry run should simulate.
+/// What a dry or live run should simulate.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TestTrigger {
@@ -486,6 +491,21 @@ pub enum TestTrigger {
         #[serde(default = "default_channel")]
         channel: String,
     },
+    MemberJoined {
+        #[serde(default = "default_author")]
+        user: String,
+    },
+    ChannelCreated {
+        #[serde(default = "default_new_channel")]
+        channel: String,
+    },
+    /// `/name args`, typed in `channel`.
+    Command {
+        #[serde(default)]
+        text: String,
+        #[serde(default = "default_channel")]
+        channel: String,
+    },
     Webhook {
         #[serde(default = "default_method")]
         method: String,
@@ -494,12 +514,15 @@ pub enum TestTrigger {
         #[serde(default)]
         body: String,
     },
-    /// Calls every timer once.
+    /// Calls every schedule once.
     Timer,
 }
 
 fn default_channel() -> String {
     "general".to_owned()
+}
+fn default_new_channel() -> String {
+    "new-channel".to_owned()
 }
 fn default_author() -> String {
     "Test Person".to_owned()
@@ -519,10 +542,14 @@ const fn yes() -> bool {
 pub struct TestReport {
     pub ok: bool,
     pub error: Option<String>,
-    /// Printed lines and would-be actions, in order.
+    /// Printed lines, requests and would-be actions, in order.
     pub log: Vec<String>,
-    /// Handlers the script registered.
-    pub handlers: Handlers,
+    /// Private answers from a command.
+    pub responses: Vec<String>,
+    /// What the script registered.
+    pub triggers: Triggers,
+    /// For a library, the names its module exports.
+    pub exports: Vec<String>,
     /// How many handlers the simulated event reached.
     pub called: usize,
     pub response: Option<WebhookResponse>,
@@ -530,70 +557,111 @@ pub struct TestReport {
     pub duration_ms: f64,
 }
 
-#[derive(Debug, Default, Serialize)]
-pub struct Handlers {
-    pub message: usize,
-    pub reaction: usize,
-    pub webhook: bool,
-    pub timers: usize,
+/// The result of running a live automation.
+#[derive(Debug, Serialize)]
+pub struct RunReport {
+    pub ok: bool,
+    pub error: Option<String>,
+    pub log: Vec<String>,
+    pub responses: Vec<String>,
+    pub called: usize,
+    pub response: Option<WebhookResponse>,
+}
+
+/// What a dry run may use.
+pub struct TestContext {
+    pub data: HashMap<String, String>,
+    pub libraries: HashMap<String, String>,
+    pub secrets: BTreeMap<String, String>,
+    pub settings: Settings,
+    /// Whether HTTP requests really go out.
+    pub http: bool,
+}
+
+impl TestContext {
+    /// Loads what a dry run of `automation_id` needs.
+    pub fn load(
+        conn: &Connection,
+        vault: &secrets::Vault,
+        automation_id: Option<i64>,
+        http: bool,
+    ) -> AppResult<Self> {
+        let libraries = store::automations(conn)?
+            .into_iter()
+            .filter(|automation| automation.kind == KIND_LIBRARY)
+            .map(|library| (library.name, library.source))
+            .collect();
+        Ok(Self {
+            data: automation_id
+                .map(|id| store::automation_values(conn, id))
+                .transpose()?
+                .unwrap_or_default(),
+            libraries,
+            secrets: secrets::all(conn, vault)?,
+            settings: Settings::load(conn)?,
+            http,
+        })
+    }
 }
 
 /// Runs `source` in a fresh sandbox against a simulated event. Posts and
-/// reactions are only described, and `sideporch.set` changes a copy of
-/// `data`, so nothing in Sideporch changes. Blocks; run it off the async
-/// threads.
-pub fn test(
-    name: &str,
-    source: &str,
-    data: HashMap<String, String>,
-    trigger: &TestTrigger,
-) -> TestReport {
-    let identity = Identity {
-        id: 0,
-        name: name.to_owned(),
+/// reactions are only described and `sideporch.set` changes a copy of the
+/// saved data, so nothing in Sideporch changes. HTTP requests are real
+/// when the context allows them. Blocks, and needs to be called from a
+/// thread that belongs to the Tokio runtime's blocking pool.
+pub fn test(name: &str, source: &str, context: TestContext, trigger: &TestTrigger) -> TestReport {
+    let http = if context.http {
+        http::Http::new(context.settings.allow_private_network)
+            .ok()
+            .map(Arc::new)
+    } else {
+        None
     };
-    let (script, mut outcome) = sandbox::load(
-        &identity,
-        source,
-        Storage::Dry(Arc::new(Mutex::new(data))),
-        &Sink::Dry(Arc::default()),
+    let secrets = Arc::new(context.secrets);
+    let environment = sandbox::dry_environment(
+        name,
+        context.data,
+        Arc::new(context.libraries),
+        Arc::clone(&secrets),
+        http,
+        context.settings.zone(),
     );
+    let (script, mut outcome) = sandbox::load(&environment, source);
     let mut report = TestReport {
         ok: false,
         error: None,
         log: Vec::new(),
-        handlers: Handlers::default(),
+        responses: Vec::new(),
+        triggers: Triggers::default(),
+        exports: Vec::new(),
         called: 0,
         response: None,
         instructions: 0,
         duration_ms: 0.0,
     };
     if let Some(script) = &script {
-        report.handlers = Handlers {
-            message: script.on_message.len(),
-            reaction: script.on_reaction.len(),
-            webhook: script.on_webhook.is_some(),
-            timers: script.timers.len(),
-        };
+        report.triggers = script.triggers();
+        report.exports.clone_from(&script.exports);
         if outcome.error.is_none() {
-            simulate(script, trigger, &mut outcome, &mut report);
+            let (simulated, response, called) = simulate(script, trigger);
+            outcome.absorb(simulated);
+            report.response = response;
+            report.called = called;
         }
     }
+    worker::redact(&mut outcome, &secrets);
     report.ok = outcome.error.is_none();
     report.error = outcome.error;
     report.log = outcome.log;
+    report.responses = outcome.responses;
     report.instructions = outcome.instructions;
     report.duration_ms = outcome.duration.as_secs_f64() * 1000.0;
     report
 }
 
-fn simulate(
-    script: &Script,
-    trigger: &TestTrigger,
-    outcome: &mut Outcome,
-    report: &mut TestReport,
-) {
-    let lua = &script.lua;
+/// Fires a simulated event at a loaded script. Returns what happened, the
+/// webhook response if any, and how many handlers ran.
+fn simulate(script: &Script, trigger: &TestTrigger) -> (Outcome, Option<WebhookResponse>, usize) {
     let message = |text: &str, channel: &str, author: &str| MessageEvent {
         id: 1,
         channel_id: 1,
@@ -604,16 +672,13 @@ fn simulate(
         is_bot: false,
         thread_id: None,
     };
-    let mut each = |handlers: &[mlua::Function], args: &dyn Fn() -> mlua::Result<mlua::Table>| {
-        for handler in handlers {
-            if outcome.error.is_some() {
-                return;
-            }
-            report.called = report.called.saturating_add(1);
-            outcome.absorb(match args() {
-                Ok(table) => sandbox::call(lua, handler, table),
-                Err(error) => failed(&error),
-            });
+    let mut outcome = Outcome::default();
+    let mut called = 0_usize;
+    let mut response = None;
+    let mut run_event = |event: &Event, outcome: &mut Outcome| {
+        for part in sandbox::dispatch(script, event) {
+            called = called.saturating_add(1);
+            outcome.absorb(part);
         }
     };
     match trigger {
@@ -622,44 +687,58 @@ fn simulate(
             text,
             channel,
             author,
-        } => {
-            let event = message(text, channel, author);
-            each(&script.on_message, &|| sandbox::message_table(lua, &event));
-        }
+        } => run_event(
+            &Event::Message(message(text, channel, author)),
+            &mut outcome,
+        ),
         TestTrigger::Reaction {
             emoji,
             added,
             text,
             channel,
-        } => {
-            let event = ReactionEvent {
+        } => run_event(
+            &Event::Reaction(ReactionEvent {
                 emoji: emoji.trim_matches(':').to_owned(),
                 added: *added,
                 user: default_author(),
                 username: "test".to_owned(),
                 message: message(text, channel, "Someone"),
-            };
-            each(&script.on_reaction, &|| {
-                sandbox::reaction_table(lua, &event)
-            });
+            }),
+            &mut outcome,
+        ),
+        TestTrigger::MemberJoined { user } => run_event(
+            &Event::MemberJoined(MemberEvent {
+                user: user.clone(),
+                username: "test".to_owned(),
+            }),
+            &mut outcome,
+        ),
+        TestTrigger::ChannelCreated { channel } => run_event(
+            &Event::ChannelCreated(ChannelEvent {
+                channel: channel.trim_start_matches('#').to_owned(),
+                channel_id: 2,
+                user: default_author(),
+                username: "test".to_owned(),
+            }),
+            &mut outcome,
+        ),
+        TestTrigger::Command { text, channel } => {
+            let (part, ran) = simulate_command(script, text, channel);
+            called = ran;
+            outcome.absorb(part);
         }
         TestTrigger::Timer => {
-            let callbacks: Vec<mlua::Function> = script
-                .timers
-                .iter()
-                .map(|timer| timer.callback.clone())
-                .collect();
-            for callback in &callbacks {
+            for timer in &script.timers {
                 if outcome.error.is_some() {
                     break;
                 }
-                report.called = report.called.saturating_add(1);
-                outcome.absorb(sandbox::call(lua, callback, ()));
+                called = called.saturating_add(1);
+                outcome.absorb(sandbox::call(&script.lua, &timer.callback, ()));
             }
         }
         TestTrigger::Webhook { method, path, body } => {
-            if let Some(handler) = &script.on_webhook {
-                report.called = 1;
+            if let Some(handler) = &script.webhook {
+                called = 1;
                 let request = WebhookRequest {
                     method: method.to_uppercase(),
                     path: path.clone(),
@@ -667,35 +746,92 @@ fn simulate(
                     headers: vec![("content-type".to_owned(), "application/json".to_owned())],
                     body: body.clone(),
                 };
-                let (called, response) = sandbox::call_webhook(lua, handler, &request);
-                outcome.absorb(called);
-                report.response = response;
+                let (part, answer) = sandbox::call_webhook(&script.lua, handler, &request);
+                outcome.absorb(part);
+                response = answer;
             }
         }
     }
+    (outcome, response, called)
+}
+
+/// Runs a typed command, such as `/deploy garden`, against `script`.
+fn simulate_command(script: &Script, text: &str, channel: &str) -> (Outcome, usize) {
+    let typed = if text.trim_start().starts_with('/') {
+        text.to_owned()
+    } else {
+        format!("/{text}")
+    };
+    let Some((name, args)) = CommandCall::parse(&typed) else {
+        return (
+            Outcome {
+                error: Some(format!("`{typed}` is not a command")),
+                ..Outcome::default()
+            },
+            0,
+        );
+    };
+    let call = CommandCall {
+        name,
+        text: args,
+        user: default_author(),
+        username: "test".to_owned(),
+        channel: channel.trim_start_matches('#').to_owned(),
+        channel_id: 1,
+        thread_id: None,
+    };
+    sandbox::run_command(script, &call)
+        .map_or_else(|| (Outcome::default(), 0), |outcome| (outcome, 1))
 }
 
 /// The script a new automation starts with.
-pub const EXAMPLE: &str = r#"-- Runs for every new message in a public channel.
-sideporch.on_message(function(msg)
-  if msg.text == "!ping" then
-    sideporch.reply(msg, "pong")
-  end
+pub const EXAMPLE: &str = r#"-- Answers !ping in a thread.
+sideporch.on("message", { pattern = "^!ping" }, function(msg)
+  sideporch.reply(msg, "pong")
 end)
 
--- Keeps a count between runs.
-sideporch.on_message(function(msg)
-  if msg.text == "!count" then
-    local count = tonumber(sideporch.get("count") or "0") + 1
-    sideporch.set("count", count)
-    sideporch.reply(msg, "I've been asked " .. count .. " times.")
-  end
+-- Counts how often someone asked, across restarts.
+sideporch.command("count", { description = "Count how often you asked" }, function(cmd)
+  local count = tonumber(sideporch.get("count") or "0") + 1
+  sideporch.set("count", count)
+  sideporch.respond(cmd, "I've been asked " .. count .. " times.")
 end)
+
+-- Says good morning on weekdays at 9:00.
+sideporch.cron("0 9 * * mon-fri", function()
+  sideporch.post("general", "Good morning, porch! :sunny:")
+end)
+"#;
+
+/// The script a new library starts with.
+pub const LIBRARY_EXAMPLE: &str = r#"-- Other automations use this library with require("name").
+local M = {}
+
+-- Fetches a JSON document and returns it as a table.
+function M.fetch(url)
+  local response = sideporch.http.get(url)
+  if not response.ok then
+    error("request failed with status " .. response.status)
+  end
+  return response.json
+end
+
+return M
 "#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn context(data: HashMap<String, String>) -> TestContext {
+        TestContext {
+            data,
+            libraries: HashMap::new(),
+            secrets: BTreeMap::from([("TOKEN".to_owned(), "s3cret-value".to_owned())]),
+            settings: Settings::default(),
+            http: false,
+        }
+    }
 
     #[test]
     fn dry_runs_describe_actions_without_saving() {
@@ -705,11 +841,10 @@ mod tests {
   print("seen", n)
   sideporch.reply(msg, "#" .. msg.channel .. " " .. msg.text)
 end)"##;
-        let data = HashMap::from([("n".to_owned(), "4".to_owned())]);
         let report = test(
             "Echo",
             source,
-            data,
+            context(HashMap::from([("n".to_owned(), "4".to_owned())])),
             &TestTrigger::Message {
                 text: "hi".to_owned(),
                 channel: "#garden".to_owned(),
@@ -725,11 +860,11 @@ end)"##;
     }
 
     #[test]
-    fn dry_runs_report_errors_and_handlers() {
+    fn dry_runs_report_errors_and_hide_secrets() {
         let report = test(
             "Broken",
-            "sideporch.on_reaction(function(e) error('nope: ' .. e.emoji) end)",
-            HashMap::new(),
+            "sideporch.on_reaction(function(e) error('nope: ' .. e.emoji .. ' ' .. sideporch.secret('TOKEN')) end)",
+            context(HashMap::new()),
             &TestTrigger::Reaction {
                 emoji: ":tada:".to_owned(),
                 added: true,
@@ -738,7 +873,37 @@ end)"##;
             },
         );
         assert!(!report.ok);
-        assert_eq!(report.handlers.reaction, 1);
-        assert_eq!(report.error.as_deref(), Some("line 1: nope: tada"));
+        assert_eq!(report.triggers.events.len(), 2);
+        assert_eq!(
+            report.error.as_deref(),
+            Some("line 1: nope: tada [secret TOKEN]")
+        );
+    }
+
+    #[test]
+    fn dry_runs_commands() {
+        let report = test(
+            "Example",
+            EXAMPLE,
+            context(HashMap::new()),
+            &TestTrigger::Command {
+                text: "/count".to_owned(),
+                channel: default_channel(),
+            },
+        );
+        assert!(report.ok, "{report:?}");
+        assert_eq!(report.responses, ["I've been asked 1 times."]);
+        assert_eq!(report.triggers.commands[0].name, "count");
+        assert_eq!(report.triggers.schedules.len(), 1);
+    }
+
+    #[test]
+    fn checks_library_names() {
+        assert!(valid_library_name("github") && valid_library_name("home_assistant2"));
+        assert!(
+            !valid_library_name("GitHub")
+                && !valid_library_name("my-lib")
+                && !valid_library_name("2x")
+        );
     }
 }

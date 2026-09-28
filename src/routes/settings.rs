@@ -1,9 +1,10 @@
-//! Admin settings for the AI provider and MCP API tokens.
+//! Admin settings: the AI provider, MCP API tokens, secrets, and
+//! automation settings.
 
 use axum::{
     Form, Router,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
@@ -15,8 +16,9 @@ use crate::{
     AppState,
     ai::{self, Protocol, Provider},
     auth::{self, CurrentUser},
+    automations,
     error::{AppError, AppResult},
-    mcp, now_ms, store,
+    mcp, now_ms, secrets, store,
     views::{self, Shell},
 };
 
@@ -27,7 +29,174 @@ pub fn router() -> Router<AppState> {
         .route("/settings/mcp", get(mcp_page))
         .route("/settings/mcp/tokens", post(create_token))
         .route("/settings/mcp/tokens/{token_id}/delete", post(delete_token))
+        .route("/settings/secrets", get(secrets_page).post(save_secret))
+        .route("/settings/secrets/{name}/delete", post(delete_secret))
+        .route(
+            "/settings/automations",
+            get(automation_settings).post(save_automation_settings),
+        )
         .route("/mcp", post(mcp::endpoint))
+}
+
+async fn render_secrets(
+    state: &AppState,
+    user: &CurrentUser,
+    error: Option<&str>,
+    saved: Option<&str>,
+) -> AppResult<Markup> {
+    let (sidebar, (list, automations)) = tokio::try_join!(
+        shell_data(state, user.id),
+        state
+            .db
+            .call(|conn| Ok((secrets::list(conn)?, store::automations(conn)?))),
+    )?;
+    let shell = Shell {
+        user,
+        sidebar: &sidebar,
+        current: None,
+    };
+    // Which automations mention each secret, as a hint for cleaning up.
+    let listed: Vec<(secrets::SecretInfo, Vec<String>)> = list
+        .into_iter()
+        .map(|secret| {
+            let quoted = format!("\"{}\"", secret.name);
+            let users = automations
+                .iter()
+                .filter(|automation| automation.source.contains(&quoted))
+                .map(|automation| automation.name.clone())
+                .collect();
+            (secret, users)
+        })
+        .collect();
+    Ok(views::settings::secrets_page(&shell, &listed, error, saved))
+}
+
+async fn secrets_page(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
+    require_admin(&user)?;
+    render_secrets(&state, &user, None, None).await
+}
+
+#[derive(Deserialize)]
+struct SecretForm {
+    name: String,
+    value: String,
+}
+
+async fn save_secret(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Form(form): Form<SecretForm>,
+) -> AppResult<Response> {
+    require_admin(&user)?;
+    let name = form.name.trim().to_owned();
+    let vault = std::sync::Arc::clone(&state.vault);
+    let user_id = user.id;
+    let now = now_ms();
+    let stored = name.clone();
+    let result = state
+        .db
+        .call(
+            move |conn| match secrets::set(conn, &vault, &stored, &form.value, user_id, now) {
+                Ok(()) => Ok(Ok(())),
+                Err(AppError::BadRequest(message)) => Ok(Err(message)),
+                Err(other) => Err(other),
+            },
+        )
+        .await?;
+    match result {
+        Ok(()) => {
+            state.automations.reload(&state).await?;
+            Ok(render_secrets(&state, &user, None, Some(&name))
+                .await?
+                .into_response())
+        }
+        Err(error) => Ok((
+            StatusCode::BAD_REQUEST,
+            render_secrets(&state, &user, Some(&error), None).await?,
+        )
+            .into_response()),
+    }
+}
+
+async fn delete_secret(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> AppResult<Response> {
+    require_admin(&user)?;
+    state
+        .db
+        .call(move |conn| secrets::delete(conn, &name))
+        .await?;
+    state.automations.reload(&state).await?;
+    Ok(Redirect::to("/settings/secrets").into_response())
+}
+
+async fn render_automation_settings(
+    state: &AppState,
+    user: &CurrentUser,
+    error: Option<&str>,
+    saved: bool,
+) -> AppResult<Markup> {
+    let (sidebar, settings) = tokio::try_join!(
+        shell_data(state, user.id),
+        state.db.call(|conn| automations::Settings::load(conn)),
+    )?;
+    let shell = Shell {
+        user,
+        sidebar: &sidebar,
+        current: None,
+    };
+    Ok(views::settings::automation_settings_page(
+        &shell, &settings, error, saved,
+    ))
+}
+
+async fn automation_settings(
+    user: CurrentUser,
+    State(state): State<AppState>,
+) -> AppResult<Markup> {
+    require_admin(&user)?;
+    render_automation_settings(&state, &user, None, false).await
+}
+
+#[derive(Deserialize)]
+struct AutomationSettingsForm {
+    timezone: String,
+    allow_private_network: Option<String>,
+}
+
+async fn save_automation_settings(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Form(form): Form<AutomationSettingsForm>,
+) -> AppResult<Response> {
+    require_admin(&user)?;
+    let settings = automations::Settings {
+        timezone: form.timezone.trim().to_owned(),
+        allow_private_network: form.allow_private_network.is_some(),
+    };
+    let result = state
+        .db
+        .call(move |conn| match settings.save(conn) {
+            Ok(()) => Ok(Ok(())),
+            Err(AppError::BadRequest(message)) => Ok(Err(message)),
+            Err(other) => Err(other),
+        })
+        .await?;
+    match result {
+        Ok(()) => {
+            state.automations.reload(&state).await?;
+            Ok(render_automation_settings(&state, &user, None, true)
+                .await?
+                .into_response())
+        }
+        Err(error) => Ok((
+            StatusCode::BAD_REQUEST,
+            render_automation_settings(&state, &user, Some(&error), false).await?,
+        )
+            .into_response()),
+    }
 }
 
 const fn require_admin(user: &CurrentUser) -> AppResult<()> {
@@ -46,7 +215,10 @@ async fn render_ai(
 ) -> AppResult<Markup> {
     let (sidebar, provider) = tokio::try_join!(
         shell_data(state, user.id),
-        state.db.call(|conn| ai::provider(conn)),
+        state.db.call({
+            let vault = std::sync::Arc::clone(&state.vault);
+            move |conn| ai::provider(conn, &vault)
+        }),
     )?;
     let shell = Shell {
         user,
@@ -103,12 +275,13 @@ async fn save_ai(
             .into_response());
     };
     let new_key = form.api_key.trim().to_owned();
+    let vault = std::sync::Arc::clone(&state.vault);
     state
         .db
         .call(move |conn| {
             // An empty key field keeps the saved key.
             let api_key = if new_key.is_empty() {
-                ai::provider(conn)?
+                ai::provider(conn, &vault)?
                     .map(|provider| provider.api_key)
                     .unwrap_or_default()
             } else {
@@ -116,6 +289,7 @@ async fn save_ai(
             };
             ai::save_provider(
                 conn,
+                &vault,
                 &Provider {
                     protocol,
                     base_url: if base_url.is_empty() {

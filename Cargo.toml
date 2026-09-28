@@ -11,6 +11,7 @@ keywords = ["chat", "self-hosted", "slack", "webhooks"]
 categories = ["web-programming::http-server"]
 
 [dependencies]
+aes-gcm = "0.11.1"
 argon2 = "0.6.0"
 axum = { version = "0.8.9", features = ["multipart", "ws"] }
 base64ct = { version = "1.8.3", features = ["alloc"] }
@@ -21,7 +22,7 @@ getrandom = "0.4.3"
 http-body-util = "0.1.5"
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["ring", "webpki-roots", "http1", "http2", "tls12"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "http2", "tokio"] }
-jiff = "0.2.37"
+jiff = { version = "0.2.37", features = ["tzdb-bundle-always"] }
 maud = { version = "0.27.0", features = ["axum"] }
 mlua = { version = "0.12.1", features = ["lua54", "vendored", "send", "serde"] }
 phosphor-svgs = "0.5.0"
@@ -34,6 +35,7 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 stylua = { version = "2.5.2", default-features = false, features = ["lua54"] }
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
+tower-service = "0.3.3"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 web-push-native = "0.5.0"

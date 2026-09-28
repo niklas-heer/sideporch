@@ -1072,10 +1072,12 @@ pub struct Automation {
     pub updated_at: i64,
     /// The secret part of the automation's webhook URL.
     pub hook_token: String,
+    /// `automation`, or `library` for code other scripts `require`.
+    pub kind: String,
 }
 
 const AUTOMATION_COLUMNS: &str =
-    "id, name, source, enabled, last_error, updated_at, COALESCE(hook_token, '')";
+    "id, name, source, enabled, last_error, updated_at, COALESCE(hook_token, ''), kind";
 
 fn automation_from_row(row: &Row<'_>) -> rusqlite::Result<Automation> {
     Ok(Automation {
@@ -1086,6 +1088,7 @@ fn automation_from_row(row: &Row<'_>) -> rusqlite::Result<Automation> {
         last_error: row.get(4)?,
         updated_at: row.get(5)?,
         hook_token: row.get(6)?,
+        kind: row.get(7)?,
     })
 }
 
@@ -1134,6 +1137,8 @@ pub struct AutomationEdit<'a> {
     pub user_id: i64,
     /// `editor`, `AI`, `restore`, or `MCP: <token name>`.
     pub saved_with: &'a str,
+    /// Only used when creating: `automation` or `library`.
+    pub kind: &'a str,
 }
 
 /// Versions kept per automation.
@@ -1156,9 +1161,9 @@ pub fn save_automation(
         id
     } else {
         tx.execute(
-            "INSERT INTO automations (name, source, enabled, created_by, created_at, updated_at, hook_token)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5, lower(hex(randomblob(20))))",
-            params![edit.name, edit.source, edit.enabled, edit.user_id, now],
+            "INSERT INTO automations (name, source, enabled, created_by, created_at, updated_at, hook_token, kind)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, lower(hex(randomblob(20))), ?6)",
+            params![edit.name, edit.source, edit.enabled, edit.user_id, now, edit.kind],
         )?;
         tx.last_insert_rowid()
     };
@@ -1183,6 +1188,18 @@ pub fn save_automation(
     }
     tx.commit()?;
     Ok(id)
+}
+
+/// Whether another library than `except` is called `name`.
+pub fn library_name_taken(conn: &Connection, name: &str, except: Option<i64>) -> AppResult<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM automations WHERE kind = 'library' AND name = ?1 AND id IS NOT ?2",
+            params![name, except],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 pub fn delete_automation(conn: &Connection, id: i64) -> AppResult<()> {

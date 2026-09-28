@@ -167,6 +167,84 @@
     });
   }
 
+  // Suggests slash commands while the message is just `/name`.
+  let commandList = null;
+  function setupCommandSuggestions(form, textarea) {
+    const box = document.createElement("ul");
+    box.className = "absolute bottom-full left-4 z-10 mb-2 hidden w-full max-w-md overflow-hidden rounded-xl border border-line bg-white py-1 shadow-xl dark:border-night-line dark:bg-night-2";
+    box.setAttribute("role", "listbox");
+    form.classList.add("relative");
+    form.append(box);
+    let matches = [];
+    let chosen = 0;
+    const close = () => {
+      box.classList.add("hidden");
+      matches = [];
+    };
+    const render = () => {
+      box.replaceChildren(
+        ...matches.map((command, index) => {
+          const item = document.createElement("li");
+          item.setAttribute("role", "option");
+          item.setAttribute("aria-selected", index === chosen ? "true" : "false");
+          item.className = "cursor-pointer px-3 py-1.5 text-sm aria-selected:bg-haint-2 dark:aria-selected:bg-floor-2";
+          const name = document.createElement("span");
+          name.className = "font-mono font-semibold";
+          name.textContent = `/${command.name}${command.usage ? ` ${command.usage}` : ""}`;
+          const about = document.createElement("span");
+          about.className = "ml-2 text-muted dark:text-haint";
+          about.textContent = command.description;
+          item.append(name, about);
+          item.addEventListener("mousedown", (event) => {
+            event.preventDefault();
+            chosen = index;
+            accept();
+          });
+          return item;
+        }),
+      );
+      box.classList.toggle("hidden", matches.length === 0);
+    };
+    const accept = () => {
+      const command = matches[chosen];
+      if (!command) return;
+      textarea.value = `/${command.name} `;
+      textarea.dispatchEvent(new Event("input"));
+      close();
+    };
+    textarea.addEventListener("input", async () => {
+      const typed = /^\/([a-z0-9_-]*)$/i.exec(textarea.value);
+      if (!typed) return close();
+      commandList ||= fetch("/commands").then((response) => (response.ok ? response.json() : []));
+      const all = await commandList.catch(() => []);
+      matches = all.filter((command) => command.name.startsWith(typed[1].toLowerCase())).slice(0, 8);
+      chosen = 0;
+      render();
+    });
+    textarea.addEventListener("blur", () => setTimeout(close, 150));
+    return {
+      handleKey(event) {
+        if (matches.length === 0) return false;
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          chosen = (chosen + (event.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length;
+          render();
+          return true;
+        }
+        if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+          event.preventDefault();
+          accept();
+          return true;
+        }
+        if (event.key === "Escape") {
+          close();
+          return true;
+        }
+        return false;
+      },
+    };
+  }
+
   function setupComposer(form) {
     const textarea = form.querySelector("textarea");
     const button = form.querySelector("button[type=submit]");
@@ -200,7 +278,9 @@
     };
     fileInput?.addEventListener("change", showFiles);
 
+    const suggestions = setupCommandSuggestions(form, textarea);
     textarea.addEventListener("keydown", (event) => {
+      if (suggestions.handleKey(event)) return;
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         form.requestSubmit();
@@ -222,6 +302,19 @@
         if (!response.ok) {
           const reason = response.status === 413 ? "Those files are too large." : await response.text();
           throw new Error(reason.includes("<") ? "" : reason);
+        }
+        // A slash command answers privately instead of posting.
+        if (response.headers.get("content-type")?.includes("application/json")) {
+          const { ephemeral = [] } = await response.json();
+          const thread = form.elements.parent_id?.value;
+          const list = document.getElementById(thread ? "replies" : "messages");
+          const scroller = document.getElementById(thread ? "thread-scroller" : "scroller");
+          for (const html of ephemeral) {
+            const template = document.createElement("template");
+            template.innerHTML = html.trim();
+            if (list && template.content.firstElementChild) list.append(template.content.firstElementChild);
+          }
+          scrollToEnd(scroller);
         }
         textarea.value = "";
         if (fileInput) fileInput.value = "";

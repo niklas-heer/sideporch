@@ -204,6 +204,17 @@ CREATE TABLE api_tokens (
     last_used_at INTEGER
 );
 ",
+    r"
+ALTER TABLE automations ADD COLUMN kind TEXT NOT NULL DEFAULT 'automation';
+
+CREATE TABLE secrets (
+    name TEXT PRIMARY KEY,
+    nonce BLOB NOT NULL,
+    value BLOB NOT NULL,
+    updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    updated_at INTEGER NOT NULL
+);
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on

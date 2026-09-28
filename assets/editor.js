@@ -12,6 +12,7 @@
   const INDENT = "  ";
   const api = JSON.parse(document.getElementById("lua-api")?.textContent || "[]");
   const automationId = form.dataset.automationId ? Number(form.dataset.automationId) : null;
+  const isLibrary = form.dataset.kind === "library";
   const nameInput = document.getElementById("automation-name");
 
   // Layout: a gutter with line numbers, and the textarea over a highlighted copy.
@@ -639,6 +640,12 @@
       trigger.path = fields.path.value;
       trigger.body = fields.body.value;
     }
+    if (kind === "command") {
+      trigger.text = fields.command.value;
+      trigger.channel = fields.channel.value;
+    }
+    if (kind === "member_joined") trigger.user = fields.user.value;
+    if (kind === "channel_created") trigger.channel = fields.new_channel.value;
     testOutput.replaceChildren(element("p", "text-sm text-muted", "Running…"));
     try {
       const report = await postJson("/automations/test", {
@@ -646,16 +653,16 @@
         name: nameInput?.value || "",
         automation_id: automationId,
         trigger,
+        http: fields.http.checked,
       });
       const parts = [];
-      const handlers = report.handlers;
-      const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+      const triggers = report.triggers;
       const registered = [
-        handlers.message && count(handlers.message, "message handler", "message handlers"),
-        handlers.reaction && count(handlers.reaction, "reaction handler", "reaction handlers"),
-        handlers.webhook && "a webhook handler",
-        handlers.timers && count(handlers.timers, "timer", "timers"),
-      ].filter(Boolean);
+        ...triggers.events.map((event) => `on ${event.description}`),
+        ...triggers.schedules.map((schedule) => schedule.description),
+        ...triggers.commands.map((command) => `/${command.name}`),
+        ...(triggers.webhook ? ["a webhook"] : []),
+      ];
       const cost =
         report.instructions < 1000
           ? "under 1,000 instructions"
@@ -669,7 +676,13 @@
             : "✗ The script failed",
         ),
       );
-      const handlerText = registered.length ? `Registers ${registered.join(", ")}` : "Registers no handlers";
+      const handlerText = isLibrary
+        ? report.exports.length
+          ? `Exports ${report.exports.join(", ")}`
+          : "Exports nothing: return a table from the library"
+        : registered.length
+          ? `Listens to ${registered.join("; ")}`
+          : "Listens to nothing";
       parts.push(element("p", "test-meta", `${handlerText}; used ${cost}.`));
       if (report.ok && report.called === 0 && kind !== "load") {
         parts.push(element("p", "test-meta", "No handler matched this event."));
@@ -680,6 +693,9 @@
           log.append(element("span", line.startsWith("→ ") ? "test-action" : "", line), "\n");
         }
         parts.push(log);
+      }
+      for (const text of report.responses) {
+        parts.push(element("p", "test-meta", "Private answer to the person who ran the command"), element("pre", "test-log", text));
       }
       if (report.error) parts.push(errorLine(report.error));
       if (report.response) {
@@ -716,6 +732,8 @@
         prompt: aiForm.elements.prompt.value,
         source: textarea.value,
         name: nameInput?.value || "",
+        kind: form.dataset.kind,
+        automation_id: automationId,
       });
       const parts = [];
       if (draft.explanation) parts.push(element("p", "text-sm", draft.explanation));

@@ -19,6 +19,7 @@ mod push;
 mod realtime;
 mod routes;
 mod search;
+mod secrets;
 mod store;
 mod views;
 mod webhook;
@@ -32,7 +33,7 @@ use axum::Router;
 use sha2::{Digest, Sha256};
 
 pub use crate::error::AppError as Error;
-use crate::{ai::Ai, automations::Automations, db::Db, push::Push, realtime::Hub};
+use crate::{ai::Ai, automations::Automations, db::Db, push::Push, realtime::Hub, secrets::Vault};
 
 /// Where Sideporch keeps its data and how people reach it.
 #[derive(Debug, Clone)]
@@ -58,6 +59,7 @@ pub(crate) struct AppState {
     hub: Hub,
     push: Arc<Push>,
     ai: Arc<Ai>,
+    vault: Arc<Vault>,
     automations: Automations,
     public_url: Option<String>,
     secure_cookies: bool,
@@ -146,7 +148,8 @@ impl Sideporch {
             hub: Hub::default(),
             push: Arc::new(push),
             ai: Arc::new(Ai::new()?),
-            automations: Automations::start(&db_path)?,
+            vault: Arc::new(Vault::open(&config.data_dir)?),
+            automations: Automations::start(&db_path),
             secure_cookies: public_url
                 .as_deref()
                 .is_some_and(|url| url.starts_with("https://")),

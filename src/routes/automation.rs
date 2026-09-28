@@ -66,7 +66,8 @@ async fn list(user: CurrentUser, State(state): State<AppState>) -> AppResult<Mar
         sidebar: &sidebar,
         current: None,
     };
-    Ok(views::automations::list_page(&shell, &list))
+    let triggers = state.automations.triggers();
+    Ok(views::automations::list_page(&shell, &list, &triggers))
 }
 
 async fn render_editor(
@@ -83,12 +84,27 @@ async fn render_editor(
     Ok(views::automations::editor_page(&shell, editor))
 }
 
-async fn new(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
+#[derive(Deserialize)]
+struct NewQuery {
+    kind: Option<String>,
+}
+
+async fn new(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Query(query): Query<NewQuery>,
+) -> AppResult<Markup> {
     require_admin(&user)?;
     let ai_ready = ai_ready(&state).await?;
+    let library = query.kind.as_deref() == Some(automations::KIND_LIBRARY);
     let editor = views::automations::Editor {
-        source: automations::EXAMPLE,
-        enabled: true,
+        source: if library {
+            automations::LIBRARY_EXAMPLE
+        } else {
+            automations::EXAMPLE
+        },
+        enabled: !library,
+        library,
         ai_ready,
         ..views::automations::Editor::default()
     };
@@ -110,10 +126,11 @@ async fn edit(
                 automation,
                 store::automation_runs(conn, automation_id, SHOWN_RUNS)?,
                 store::automation_versions(conn, automation_id)?,
-                ai::provider(conn)?.is_some(),
+                ai::configured(conn)?,
             ))
         })
         .await?;
+    let triggers = state.automations.triggers().remove(&automation_id);
     let hook_url = format!(
         "{}/hooks/automations/{}",
         base_url(&state, &headers),
@@ -130,6 +147,8 @@ async fn edit(
         runs: &runs,
         versions: &versions,
         ai_ready,
+        library: automation.kind == automations::KIND_LIBRARY,
+        triggers: triggers.as_ref(),
     };
     render_editor(&state, &user, &editor).await
 }
@@ -139,6 +158,77 @@ struct AutomationForm {
     name: String,
     source: String,
     enabled: Option<String>,
+    /// Only read when creating.
+    kind: Option<String>,
+}
+
+/// A change to an automation, from the editor, a restore, or MCP.
+pub struct Change {
+    pub id: Option<i64>,
+    pub name: String,
+    pub source: String,
+    /// `None` keeps an existing automation's switch; new ones start off.
+    pub enabled: Option<bool>,
+    /// Only used when creating.
+    pub kind: String,
+    pub user_id: i64,
+    pub saved_with: String,
+}
+
+/// Checks and saves a change, then restarts the automations. Returns the
+/// automation's id, or why the change was refused.
+pub async fn apply_change(state: &AppState, change: Change) -> AppResult<Result<i64, String>> {
+    let name: String = change.name.trim().chars().take(80).collect();
+    if name.is_empty() {
+        return Ok(Err("Give the automation a name.".to_owned()));
+    }
+    if change.source.len() > MAX_SOURCE_BYTES {
+        return Ok(Err("Keep the script under 100 kB.".to_owned()));
+    }
+    let now = now_ms();
+    let saved = state
+        .db
+        .call(move |conn| {
+            let (kind, enabled) = match change.id {
+                Some(id) => {
+                    let current = store::automation(conn, id)?.ok_or(AppError::NotFound)?;
+                    (current.kind, change.enabled.unwrap_or(current.enabled))
+                }
+                None if change.kind == automations::KIND_LIBRARY => {
+                    (change.kind, false)
+                }
+                None => (automations::KIND_AUTOMATION.to_owned(), change.enabled.unwrap_or(false)),
+            };
+            if kind == automations::KIND_LIBRARY {
+                if !automations::valid_library_name(&name) {
+                    return Ok(Err(
+                        "Name libraries like Lua modules: lowercase letters, digits and underscores, starting with a letter, such as github_api.".to_owned(),
+                    ));
+                }
+                if store::library_name_taken(conn, &name, change.id)? {
+                    return Ok(Err(format!("There is already a library named {name}.")));
+                }
+            }
+            Ok(Ok(store::save_automation(
+                conn,
+                change.id,
+                &AutomationEdit {
+                    name: &name,
+                    source: &change.source,
+                    // Libraries never run on their own.
+                    enabled: enabled && kind != automations::KIND_LIBRARY,
+                    user_id: change.user_id,
+                    saved_with: &change.saved_with,
+                    kind: &kind,
+                },
+                now,
+            )?))
+        })
+        .await?;
+    if saved.is_ok() {
+        state.automations.reload(state).await?;
+    }
+    Ok(saved)
 }
 
 async fn save(
@@ -148,46 +238,45 @@ async fn save(
     form: AutomationForm,
 ) -> AppResult<Response> {
     require_admin(user)?;
-    let name: String = form.name.trim().chars().take(80).collect();
     let enabled = form.enabled.is_some();
-    if name.is_empty() || form.source.len() > MAX_SOURCE_BYTES {
-        let editor = views::automations::Editor {
-            id,
-            name: &name,
-            source: &form.source,
-            enabled,
-            form_error: Some("Give the automation a name, and keep the script under 100 kB."),
-            ai_ready: ai_ready(state).await?,
-            ..views::automations::Editor::default()
-        };
-        let page = render_editor(state, user, &editor).await?;
-        return Ok((StatusCode::BAD_REQUEST, page).into_response());
-    }
-    let user_id = user.id;
-    let now = now_ms();
-    let source = form.source;
-    let saved = state
-        .db
-        .call(move |conn| {
-            if let Some(id) = id {
-                store::automation(conn, id)?.ok_or(AppError::NotFound)?;
-            }
-            store::save_automation(
-                conn,
+    let library = form.kind.as_deref() == Some(automations::KIND_LIBRARY);
+    let change = Change {
+        id,
+        name: form.name.clone(),
+        source: form.source.clone(),
+        enabled: Some(enabled),
+        kind: form
+            .kind
+            .clone()
+            .unwrap_or_else(|| automations::KIND_AUTOMATION.to_owned()),
+        user_id: user.id,
+        saved_with: "editor".to_owned(),
+    };
+    match apply_change(state, change).await? {
+        Ok(saved) => Ok(Redirect::to(&format!("/automations/{saved}")).into_response()),
+        Err(error) => {
+            let library = match id {
+                Some(id) => state
+                    .db
+                    .call(move |conn| store::automation(conn, id))
+                    .await?
+                    .is_some_and(|automation| automation.kind == automations::KIND_LIBRARY),
+                None => library,
+            };
+            let editor = views::automations::Editor {
                 id,
-                &AutomationEdit {
-                    name: &name,
-                    source: &source,
-                    enabled,
-                    user_id,
-                    saved_with: "editor",
-                },
-                now,
-            )
-        })
-        .await?;
-    state.automations.reload(state).await?;
-    Ok(Redirect::to(&format!("/automations/{saved}")).into_response())
+                name: &form.name,
+                source: &form.source,
+                enabled,
+                library,
+                form_error: Some(&error),
+                ai_ready: ai_ready(state).await?,
+                ..views::automations::Editor::default()
+            };
+            let page = render_editor(state, user, &editor).await?;
+            Ok((StatusCode::BAD_REQUEST, page).into_response())
+        }
+    }
 }
 
 async fn create(
@@ -221,15 +310,15 @@ async fn delete(
     Ok(Redirect::to("/automations").into_response())
 }
 
-async fn restore(
-    user: CurrentUser,
-    State(state): State<AppState>,
-    Path((automation_id, version_id)): Path<(i64, i64)>,
-) -> AppResult<Response> {
-    require_admin(&user)?;
-    let user_id = user.id;
-    let now = now_ms();
-    state
+/// Saves an earlier version of an automation's script as its newest.
+pub async fn restore_version(
+    state: &AppState,
+    automation_id: i64,
+    version_id: i64,
+    user_id: i64,
+    saved_with: &str,
+) -> AppResult<()> {
+    let (automation, version) = state
         .db
         .call(move |conn| {
             let automation = store::automation(conn, automation_id)?.ok_or(AppError::NotFound)?;
@@ -237,21 +326,33 @@ async fn restore(
                 .into_iter()
                 .find(|version| version.id == version_id)
                 .ok_or(AppError::NotFound)?;
-            store::save_automation(
-                conn,
-                Some(automation_id),
-                &AutomationEdit {
-                    name: &automation.name,
-                    source: &version.source,
-                    enabled: automation.enabled,
-                    user_id,
-                    saved_with: "restore",
-                },
-                now,
-            )
+            Ok((automation, version))
         })
         .await?;
-    state.automations.reload(&state).await?;
+    apply_change(
+        state,
+        Change {
+            id: Some(automation_id),
+            name: automation.name,
+            source: version.source,
+            enabled: None,
+            kind: automation.kind,
+            user_id,
+            saved_with: saved_with.to_owned(),
+        },
+    )
+    .await?
+    .map_err(AppError::bad_request)?;
+    Ok(())
+}
+
+async fn restore(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path((automation_id, version_id)): Path<(i64, i64)>,
+) -> AppResult<Response> {
+    require_admin(&user)?;
+    restore_version(&state, automation_id, version_id, user.id, "restore").await?;
     Ok(Redirect::to(&format!("/automations/{automation_id}")).into_response())
 }
 
@@ -334,6 +435,13 @@ struct TestInput {
     /// Uses this automation's saved data, without changing it.
     automation_id: Option<i64>,
     trigger: TestTrigger,
+    /// Whether HTTP requests really go out.
+    #[serde(default = "yes")]
+    http: bool,
+}
+
+const fn yes() -> bool {
+    true
 }
 
 async fn test(
@@ -350,43 +458,39 @@ async fn test(
             input.name,
             input.source,
             input.trigger,
+            input.http,
         )
         .await?,
     ))
 }
 
 /// Dry-runs `source`, with the saved data of `automation_id` if given.
+/// HTTP requests go out when `http` is set.
 pub async fn run_test(
     state: &AppState,
     automation_id: Option<i64>,
     name: String,
     source: String,
     trigger: TestTrigger,
+    http: bool,
 ) -> AppResult<automations::TestReport> {
-    let data = match automation_id {
-        Some(id) => {
-            state
-                .db
-                .call(move |conn| store::automation_values(conn, id))
-                .await?
-        }
-        None => std::collections::HashMap::new(),
-    };
+    let vault = std::sync::Arc::clone(&state.vault);
+    let context = state
+        .db
+        .call(move |conn| automations::TestContext::load(conn, &vault, automation_id, http))
+        .await?;
     let name = if name.trim().is_empty() {
         "Automation".to_owned()
     } else {
         name
     };
-    tokio::task::spawn_blocking(move || automations::test(&name, &source, data, &trigger))
+    tokio::task::spawn_blocking(move || automations::test(&name, &source, context, &trigger))
         .await
         .map_err(AppError::internal)
 }
 
 async fn ai_ready(state: &AppState) -> AppResult<bool> {
-    state
-        .db
-        .call(|conn| Ok(ai::provider(conn)?.is_some()))
-        .await
+    state.db.call(|conn| ai::configured(conn)).await
 }
 
 #[derive(Deserialize)]
@@ -396,6 +500,9 @@ struct AiInput {
     source: String,
     #[serde(default)]
     name: String,
+    /// `library` when writing a library.
+    kind: Option<String>,
+    automation_id: Option<i64>,
 }
 
 async fn write_with_ai(
@@ -411,17 +518,34 @@ async fn write_with_ai(
             "Describe what the script should do, in up to 4,000 characters.",
         ));
     }
-    let (provider, channels) = state
+    let vault = std::sync::Arc::clone(&state.vault);
+    let editing = input.automation_id;
+    let (provider, channels, automations) = state
         .db
-        .call(|conn| Ok((ai::provider(conn)?, store::public_channel_names(conn)?)))
+        .call(move |conn| {
+            Ok((
+                ai::provider(conn, &vault)?,
+                store::public_channel_names(conn)?,
+                store::automations(conn)?,
+            ))
+        })
         .await?;
     let provider =
         provider.ok_or_else(|| AppError::bad_request("No AI provider is connected yet."))?;
+    let libraries = automations
+        .into_iter()
+        .filter(|automation| {
+            automation.kind == automations::KIND_LIBRARY && Some(automation.id) != editing
+        })
+        .map(|library| (library.name, library.source))
+        .collect();
     let request = ai::ScriptRequest {
         prompt: prompt.to_owned(),
         name: input.name,
         source: input.source,
         channels,
+        libraries,
+        library: input.kind.as_deref() == Some(automations::KIND_LIBRARY),
     };
     Ok(Json(
         ai::write_script(&state.ai, &provider, &request).await?,

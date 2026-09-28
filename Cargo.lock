@@ -1664,6 +1664,7 @@ dependencies = [
  "defmt",
  "jiff-core",
  "jiff-static",
+ "jiff-tzdb",
  "jiff-tzdb-platform",
  "log",
  "portable-atomic",
@@ -2976,6 +2977,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 name = "sideporch"
 version = "0.1.1"
 dependencies = [
+ "aes-gcm 0.11.1",
  "argon2",
  "axum",
  "base64ct",
@@ -3003,6 +3005,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite",
+ "tower-service",
  "tracing",
  "tracing-subscriber",
  "web-push-native",

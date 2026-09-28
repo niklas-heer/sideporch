@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use axum::{
     Form, Router,
     body::Bytes,
@@ -13,6 +15,7 @@ use serde::Deserialize;
 use crate::{
     AppState, Setup, assets,
     auth::{self, CurrentUser},
+    automations,
     error::{AppError, AppResult},
     files::{self, MessageInput},
     messages::{self, Draft, Sender},
@@ -25,7 +28,7 @@ use crate::{
 mod automation;
 mod settings;
 
-pub use automation::run_test;
+pub use automation::{Change, apply_change, restore_version, run_test};
 
 /// Messages shown per page of channel history.
 const PAGE_SIZE: usize = 100;
@@ -61,6 +64,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/emoji/{name}/delete", post(files::delete_emoji))
         .route("/search", get(search::search))
+        .route("/commands", get(commands))
         .route("/push/key", get(push::public_key))
         .route("/push/subscriptions", post(push::subscribe))
         .route("/push/unsubscribe", post(push::unsubscribe))
@@ -422,6 +426,12 @@ async fn join(
         .await?;
     match created {
         Ok(user_id) => {
+            state
+                .automations
+                .event(automations::Event::MemberJoined(automations::MemberEvent {
+                    user: account.display_name,
+                    username: account.username,
+                }));
             let cookie = auth::start_session(&state, user_id).await?;
             redirect_with_cookie("/", &cookie)
         }
@@ -546,11 +556,23 @@ async fn post_message(
         ));
     }
     let user_id = user.id;
-    state
+    let channel = state
         .db
         .call(move |conn| store::channel_for(conn, channel_id, user_id))
         .await?
         .ok_or(AppError::NotFound)?;
+    if input.files.is_empty()
+        && let Some((name, text)) = automations::CommandCall::parse(&body)
+        && let Some(answers) =
+            run_command(&state, &user, &channel, input.parent_id, name, text).await?
+    {
+        return Ok(command_answer(
+            &headers,
+            channel_id,
+            input.parent_id,
+            &answers,
+        ));
+    }
     let files = files::store_uploads(&state, user_id, input.files).await?;
     let message = messages::post(
         &state,
@@ -572,6 +594,121 @@ async fn post_message(
         |parent| format!("/c/{channel_id}/t/{parent}"),
     );
     Ok(Redirect::to(&target).into_response())
+}
+
+/// Runs a slash command and returns its private answers, or `None` if no
+/// automation registered the command, so the text is posted as a message.
+async fn run_command(
+    state: &AppState,
+    user: &CurrentUser,
+    channel: &store::Channel,
+    thread_id: Option<i64>,
+    name: String,
+    text: String,
+) -> AppResult<Option<Vec<String>>> {
+    let commands = state.automations.commands();
+    if name == "help" && !commands.iter().any(|command| command.name == "help") {
+        let mut help = String::from("**Commands**\n");
+        if commands.is_empty() {
+            help.push_str(
+                "There are none yet. Admins add them in automations with `sideporch.command`.",
+            );
+        }
+        for command in &commands {
+            let usage = if command.usage.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", command.usage)
+            };
+            let description = if command.description.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", command.description)
+            };
+            // Writing to a String cannot fail.
+            let _ = writeln!(
+                help,
+                "- `/{}{usage}`{description} ({})",
+                command.name, command.automation
+            );
+        }
+        return Ok(Some(vec![help]));
+    }
+    let user_id = user.id;
+    let username = state
+        .db
+        .call(move |conn| {
+            Ok(conn.query_row(
+                "SELECT username FROM users WHERE id = ?1",
+                [user_id],
+                |row| row.get::<_, String>(0),
+            )?)
+        })
+        .await?;
+    let call = automations::CommandCall {
+        name: name.clone(),
+        text,
+        user: user.display_name.clone(),
+        username,
+        channel: if channel.kind == ChannelKind::Public {
+            channel.name.clone()
+        } else {
+            String::new()
+        },
+        channel_id: channel.id,
+        thread_id,
+    };
+    let Some(reply) = state.automations.command(call).await else {
+        return Ok(None);
+    };
+    let mut answers = reply.responses;
+    if let Some(error) = reply.error {
+        answers.push(format!("The `/{name}` command failed: {error}"));
+    }
+    Ok(Some(answers))
+}
+
+/// Shows command answers to the person who ran the command only.
+fn command_answer(
+    headers: &HeaderMap,
+    channel_id: i64,
+    parent_id: Option<i64>,
+    answers: &[String],
+) -> Response {
+    if wants_no_content(headers) {
+        let notices: Vec<String> = answers
+            .iter()
+            .map(|answer| views::ephemeral_notice(answer).into_string())
+            .collect();
+        return axum::Json(serde_json::json!({ "ephemeral": notices })).into_response();
+    }
+    let target = parent_id.map_or_else(
+        || format!("/c/{channel_id}"),
+        |parent| format!("/c/{channel_id}/t/{parent}"),
+    );
+    Redirect::to(&target).into_response()
+}
+
+/// Slash commands for the composer's suggestions.
+async fn commands(_: CurrentUser, State(state): State<AppState>) -> axum::Json<serde_json::Value> {
+    let mut list: Vec<serde_json::Value> = state
+        .automations
+        .commands()
+        .into_iter()
+        .map(|command| {
+            serde_json::json!({
+                "name": command.name,
+                "usage": command.usage,
+                "description": command.description,
+            })
+        })
+        .collect();
+    if !list.iter().any(|command| command["name"] == "help") {
+        list.push(
+            serde_json::json!({ "name": "help", "usage": "", "description": "List the commands" }),
+        );
+    }
+    axum::Json(serde_json::Value::Array(list))
 }
 
 async fn react_page(
@@ -662,14 +799,30 @@ async fn create_channel(
                     if store::public_channel_id(conn, &name)?.is_some() {
                         return Ok(Err("A channel with that name already exists."));
                     }
-                    Ok(Ok(store::create_channel(conn, &name, user_id, now)?))
+                    let id = store::create_channel(conn, &name, user_id, now)?;
+                    let username: String = conn.query_row(
+                        "SELECT username FROM users WHERE id = ?1",
+                        [user_id],
+                        |row| row.get(0),
+                    )?;
+                    Ok(Ok((id, name, username)))
                 })
                 .await?
         }
         None => Err("Use 1 to 40 lowercase letters, numbers, dashes or underscores."),
     };
     match result {
-        Ok(id) => Ok(Redirect::to(&format!("/c/{id}")).into_response()),
+        Ok((id, name, username)) => {
+            state.automations.event(automations::Event::ChannelCreated(
+                automations::ChannelEvent {
+                    channel: name,
+                    channel_id: id,
+                    user: user.display_name.clone(),
+                    username,
+                },
+            ));
+            Ok(Redirect::to(&format!("/c/{id}")).into_response())
+        }
         Err(error) => {
             let sidebar = shell_data(&state, user.id).await?;
             let shell = Shell {

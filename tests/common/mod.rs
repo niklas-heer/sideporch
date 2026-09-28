@@ -123,6 +123,19 @@ impl Browser {
             .status()
     }
 
+    /// Types a message the way app.js sends it and returns the response,
+    /// which is JSON with private notices when it ran a slash command.
+    pub async fn type_message(&self, channel_id: i64, body: &str) -> reqwest::Response {
+        self.client
+            .post(self.url(&format!("/c/{channel_id}/messages")))
+            .header("cookie", &self.cookie)
+            .header("x-sideporch-fetch", "1")
+            .form(&[("body", body)])
+            .send()
+            .await
+            .unwrap()
+    }
+
     /// Posts a message with files, the way app.js does.
     pub async fn upload(
         &self,

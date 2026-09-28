@@ -22,7 +22,7 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 - **File uploads**: images show inline; other files download. Files live in the same database as everything else.
 - **Reactions** with emoji, and **custom emoji** anyone can add, like Slack's.
 - **Push notifications** for direct messages, thread replies and mentions, sent by Sideporch itself through Web Push. On iPhone and iPad, add Sideporch to the home screen first.
-- **Automations**: admins write small Lua scripts that answer messages, react to reactions, receive webhooks, post on a schedule, and remember data, in an editor with a linter, formatter, test runs and version history. AI can write them, from the editor or through MCP. They run sandboxed, with limits on time, memory and posts.
+- **Automations**: Lua scripts that react to events, run on cron schedules, answer slash commands and webhooks, call APIs with encrypted secrets, and share code through libraries. They are written in an editor with a linter, formatter, test runs and version history, and AI can write them, from the editor or through MCP.
 - Set up in the browser: the first visitor creates the admin account, then invites everyone else. No email needed.
 - Slack-compatible incoming webhooks per channel, tested against the payloads Gatus sends.
 - Works on phones, in dark mode, and without JavaScript (pages reload instead of updating live).
@@ -105,58 +105,67 @@ The web interface is rendered on the server with [maud](https://maud.lambda.xyz)
 
 ## Automations
 
-Open the lightning icon in the sidebar (admins only) and create an automation. Scripts are Lua 5.4 and react to messages, reactions, webhook requests and timers:
+Admins write automations in Lua under the lightning icon in the sidebar. Like Slack workflows, each one says what should happen when something happens, but with a real language:
 
 ```lua
--- Answers !ping in a thread.
-sideporch.on_message(function(msg)
-  if msg.text == "!ping" then
-    sideporch.reply(msg, "pong")
-  end
+-- Events, narrowed down with filters.
+sideporch.on("message", { channel = "alerts", pattern = "^!ack" }, function(msg)
+  sideporch.react(msg, "white_check_mark")
 end)
 
--- Acknowledges alerts that someone is looking at.
-sideporch.on_reaction(function(event)
-  if event.added and event.emoji == "eyes" and event.message.channel == "alerts" then
-    sideporch.reply(event.message, event.user .. " is on it")
-    sideporch.react(event.message, "white_check_mark")
-  end
+sideporch.on("member_joined", function(event)
+  sideporch.post("general", "Welcome to the porch, " .. event.user .. "!")
 end)
 
--- Receives POST requests at the automation's own webhook URL.
+-- Schedules, in cron syntax and your time zone.
+sideporch.cron("0 9 * * mon-fri", function()
+  sideporch.post("standup", "Good morning! What are you working on today?")
+end)
+
+-- Slash commands, answered privately.
+sideporch.command("weather", { description = "Today's weather", usage = "<city>" }, function(cmd)
+  local weather = require("weather") -- a library, see below
+  local today = weather.today(cmd.args[1] or "Berlin")
+  sideporch.respond(cmd, "**" .. today.summary .. "**, " .. today.temperature .. " °C")
+end)
+
+-- Webhooks: each automation has its own URL.
 sideporch.on_webhook(function(request)
-  local service = request.json and request.json.service or "something"
-  sideporch.post("deploys", "Deploying *" .. service .. "*")
+  sideporch.post("deploys", "Deploying **" .. request.json.service .. "**")
   return { json = { ok = true } }
-end)
-
-sideporch.every(24 * 60 * 60, function()
-  sideporch.post("general", "Good morning, porch! :sunny:")
 end)
 ```
 
-Scripts can also keep data (`sideporch.get`, `sideporch.set`) and read and write JSON (`sideporch.json`). They run sandboxed, with limits on instructions, memory and posts, and cannot read files or reach the network. The editor lists the full API.
+- **Events**: `message`, `reaction_added`, `reaction_removed`, `member_joined` and `channel_created`, with filters for the channel, a text pattern, the emoji, the person, and threads.
+- **Schedules**: `sideporch.cron` with standard five-field expressions (`*/15 * * * *`, `@daily`, `mon-fri`) in the instance's time zone or one you name, and `sideporch.every(seconds, …)`.
+- **Slash commands**: `/name` in any channel runs the automation that registered it. Answers from `sideporch.respond` are visible only to the person who typed the command; `/help` lists all commands, and the composer suggests them.
+- **Outgoing HTTP**: `sideporch.http.get`, `.post` and `.request` call APIs and parse JSON. Requests to private, loopback and link-local addresses are refused unless an admin allows them under *Settings*, so scripts cannot probe the server's network.
+- **Secrets**: API tokens live under *Secrets*, encrypted in the database with a key kept outside it (`secret.key` in the data directory, or `SIDEPORCH_SECRET_KEY`). Environment variables named `SIDEPORCH_SECRET_<NAME>` work too. Scripts read them with `sideporch.secret("NAME")`, and their values are hidden in run logs.
+- **Libraries**: a library is shared code, for example a client for an API, that automations load with `require("name")`.
+- **Data and messages**: `sideporch.get`/`set` keep data between runs, `sideporch.json` reads and writes JSON, and messages are GitHub-flavored Markdown.
 
-The editor is made for writing and debugging them:
+Each automation runs on its own thread in a sandbox, with limits on instructions, memory, posts and requests per run, and no file or process access. The editor lists the full API.
+
+The editor is made for writing and debugging automations:
 
 - Syntax highlighting, completions for the `sideporch` API, and auto-indentation.
 - A linter ([selene](https://github.com/Kampfkarren/selene)) that knows the sandbox, and a formatter ([StyLua](https://github.com/JohnnyMorganz/StyLua)).
-- **Test runs** against a simulated message, reaction, webhook request or timer. They show what the script prints and would post, without changing anything.
-- A **run log** of what each automation printed, posted and answered, a **history** of every saved version with one-click restore, and each automation's **webhook URL**.
+- **Test runs** against a simulated message, reaction, command, webhook request, schedule, new member or new channel. They show what the script prints, posts and answers, without changing anything in Sideporch.
+- What each automation **listens to**, with its next scheduled runs, a **run log**, a **history** of every saved version with one-click restore, and its **webhook URL**.
 
-Everything, including scripts, their history and their data, lives in the SQLite database, so a backup of it covers automations too.
+Scripts, libraries, their history and their data all live in the SQLite database, so a backup of it covers automations too. Keep `secret.key` with it.
 
 ### Let AI write automations
 
-- **In the editor**: an admin connects a model under *Automations → AI provider*, either Anthropic's API or any OpenAI-compatible one (OpenAI, OpenRouter, Ollama, …). Then *Ask AI* writes or changes the script from a description. Sideporch lints and test-loads the answer, sends problems back to the model, and shows the result for review; nothing is saved until you choose to.
-- **From your own agent**: Sideporch is an [MCP](https://modelcontextprotocol.io) server at `/mcp`. Create a token under *Automations → MCP for AI agents*, then connect, for example with Claude Code:
+- **In the editor**: an admin connects a model under *Automations → AI provider*, either Anthropic's API or any OpenAI-compatible one (OpenAI, OpenRouter, Ollama, …). Then *Ask AI* writes or changes the script from a description, using your libraries. Sideporch lints and test-loads the answer, sends problems back to the model, and shows the result for review; nothing is saved until you choose to.
+- **From your own agent**: Sideporch is an [MCP](https://modelcontextprotocol.io) server at `/mcp`. Create a token under *Automations → MCP*, then connect, for example with Claude Code:
 
   ```sh
   claude mcp add --transport http sideporch https://chat.example.com/mcp \
     --header "Authorization: Bearer sp_…"
   ```
 
-  The agent can read the API reference, lint, format and test scripts, read run logs, and create or change automations. Automations it creates start switched off, and every change it makes is kept in the history.
+  Agents get what a developer needs: the API reference, channels and recent messages, lint, format, dry-run tests and live runs, run logs, versions and restore, saved data, write-only secrets, settings, and cron previews. Scripts are also available as MCP resources. Automations an agent creates start switched off, and every change is kept in the history under the token's name.
 
 ## Decisions
 

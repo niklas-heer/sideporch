@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use crate::{
     automations::{self, TestTrigger, api, tooling},
     error::{AppError, AppResult},
+    secrets::Vault,
     store,
 };
 
@@ -87,25 +88,42 @@ const BASE_URL: &str = "ai.base_url";
 const MODEL: &str = "ai.model";
 const API_KEY: &str = "ai.api_key";
 
-pub fn provider(conn: &Connection) -> AppResult<Option<Provider>> {
+/// Whether a provider is connected, without decrypting its key.
+pub fn configured(conn: &Connection) -> AppResult<bool> {
+    Ok(store::setting(conn, PROTOCOL)?
+        .and_then(|key| Protocol::from_key(&key))
+        .is_some())
+}
+
+/// The connected provider. Its key is stored encrypted with the secrets.
+pub fn provider(conn: &Connection, vault: &Vault) -> AppResult<Option<Provider>> {
     let Some(protocol) = store::setting(conn, PROTOCOL)?.and_then(|key| Protocol::from_key(&key))
     else {
         return Ok(None);
+    };
+    let api_key = match store::setting(conn, API_KEY)? {
+        Some(sealed) if !sealed.is_empty() => vault.open_text(API_KEY, &sealed)?,
+        _ => String::new(),
     };
     Ok(Some(Provider {
         protocol,
         base_url: store::setting(conn, BASE_URL)?
             .unwrap_or_else(|| protocol.default_base_url().to_owned()),
         model: store::setting(conn, MODEL)?.unwrap_or_default(),
-        api_key: store::setting(conn, API_KEY)?.unwrap_or_default(),
+        api_key,
     }))
 }
 
-pub fn save_provider(conn: &Connection, provider: &Provider) -> AppResult<()> {
+pub fn save_provider(conn: &Connection, vault: &Vault, provider: &Provider) -> AppResult<()> {
     store::set_setting(conn, PROTOCOL, provider.protocol.key())?;
     store::set_setting(conn, BASE_URL, &provider.base_url)?;
     store::set_setting(conn, MODEL, &provider.model)?;
-    store::set_setting(conn, API_KEY, &provider.api_key)
+    let sealed = if provider.api_key.is_empty() {
+        String::new()
+    } else {
+        vault.seal_text(API_KEY, &provider.api_key)?
+    };
+    store::set_setting(conn, API_KEY, &sealed)
 }
 
 pub fn remove_provider(conn: &Connection) -> AppResult<()> {
@@ -263,6 +281,10 @@ pub struct ScriptRequest {
     pub name: String,
     pub source: String,
     pub channels: Vec<String>,
+    /// Library automations by name, which the script may `require`.
+    pub libraries: std::collections::HashMap<String, String>,
+    /// Whether the script is itself a library.
+    pub library: bool,
 }
 
 /// A proposed script, for the admin to review.
@@ -307,8 +329,27 @@ fn user_prompt(request: &ScriptRequest) -> String {
     } else {
         request.name.as_str()
     };
+    let mut libraries: Vec<(&String, &String)> = request.libraries.iter().collect();
+    libraries.sort();
+    let libraries = if libraries.is_empty() {
+        "There are no libraries yet.".to_owned()
+    } else {
+        let listed: Vec<String> = libraries
+            .into_iter()
+            .map(|(name, source)| {
+                let source: String = source.chars().take(4_000).collect();
+                format!("Library `{name}` (use `require(\"{name}\")`):\n```lua\n{source}\n```")
+            })
+            .collect();
+        listed.join("\n\n")
+    };
+    let kind = if request.library {
+        "This script is a library: it returns a module table that other automations use with `require`, and it should not register handlers itself."
+    } else {
+        "This script is an automation."
+    };
     format!(
-        "Automation name: {name}\nPublic channels: {channels}\n\n{current}\n\nRequest: {}",
+        "Automation name: {name}\n{kind}\nPublic channels: {channels}\n\n{libraries}\n\n{current}\n\nRequest: {}",
         request.prompt
     )
 }
@@ -335,19 +376,24 @@ fn split_answer(answer: &str) -> (Option<String>, String) {
 }
 
 /// Lints the script and runs its top level in a dry run.
-async fn check(source: String) -> AppResult<(Vec<tooling::Diagnostic>, Option<String>)> {
+/// Lints the script and loads it in a dry run without network access.
+async fn check(
+    source: String,
+    libraries: std::collections::HashMap<String, String>,
+) -> AppResult<(Vec<tooling::Diagnostic>, Option<String>)> {
     tokio::task::spawn_blocking(move || {
         let diagnostics = tooling::lint(&source);
         let load_error = if tooling::has_errors(&diagnostics) {
             None
         } else {
-            automations::test(
-                "Automation",
-                &source,
-                std::collections::HashMap::new(),
-                &TestTrigger::Load,
-            )
-            .error
+            let context = automations::TestContext {
+                data: std::collections::HashMap::new(),
+                libraries,
+                secrets: std::collections::BTreeMap::new(),
+                settings: automations::Settings::default(),
+                http: false,
+            };
+            automations::test("Automation", &source, context, &TestTrigger::Load).error
         };
         (diagnostics, load_error)
     })
@@ -385,7 +431,7 @@ pub async fn write_script(
                 explanation.chars().take(500).collect::<String>()
             )));
         };
-        let (diagnostics, load_error) = check(code.clone()).await?;
+        let (diagnostics, load_error) = check(code.clone(), request.libraries.clone()).await?;
         let feedback = problems(&diagnostics, load_error.as_deref());
         if feedback.is_none() || round >= REPAIR_ROUNDS {
             let source = if feedback.is_none() {

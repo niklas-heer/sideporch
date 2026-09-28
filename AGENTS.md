@@ -9,9 +9,10 @@ Sideporch is a self-hosted team chat shipped as a single Rust binary. See [READM
 - `src/messages.rs`: the one pipeline every new message takes (store, index, live update, push, automations).
 - `src/webhook.rs`: Slack-compatible webhook parsing. `src/realtime.rs`: WebSocket fan-out and presence.
 - `src/files.rs`: uploads, downloads, custom emoji. `src/search.rs`: FTS5 search. `src/push.rs`: Web Push.
-- `src/automations.rs`: the automation thread. `src/automations/sandbox.rs`: the Lua sandbox and `sideporch` API. `src/automations/api.rs`: the API described once, feeding the linter, editor completions, the in-page reference, the AI prompt and MCP. `src/automations/tooling.rs`: linting (selene) and formatting (StyLua).
+- `src/automations.rs`: starts one worker per automation and routes events, webhooks, commands and live runs to them; also dry runs. In `src/automations/`: `worker.rs` (a script's thread), `sandbox.rs` (the Lua state and the `sideporch` API), `events.rs`, `cron.rs`, `http.rs` (outgoing requests with the internal-address guard), `tooling.rs` (lint with selene, format with StyLua), and `api.rs`, the API described once for the linter, editor completions, reference, AI prompt and MCP.
+- `src/secrets.rs`: encrypted secrets and their key. `src/markdown.rs`: GitHub-flavored Markdown for messages (`src/markup.rs` stays for Slack-format webhooks).
 - `src/ai.rs`: AI providers that write scripts. `src/mcp.rs`: the MCP server. `src/routes/automation.rs` and `src/routes/settings.rs`: their pages and endpoints.
-- `assets/`: the page script, the automation editor (`editor.js`), service worker, base CSS, logo, and fonts. `build.rs` compiles utility classes with encre-css using `encre-css.toml`.
+- `assets/`: the page script, the automation editor (`editor.js`), vendored Mermaid (`vendor/`, see its README), service worker, base CSS, logo, and fonts. `build.rs` compiles utility classes with encre-css using `encre-css.toml`.
 - `tests/`: end-to-end tests against a real server on a random port. `tests/fixtures/gatus/` holds captured Gatus payloads.
 
 ## Commands
@@ -29,7 +30,7 @@ Releases: bump `version` in `Cargo.toml`, then push a matching `vX.Y.Z` tag. Lin
 - Never edit a released migration in `src/db.rs`; append a new one.
 - Write utility classes as literal strings in `class="…"` so encre-css finds them, and check the generated CSS for utilities you haven't used before. encre-css differs from Tailwind in places (see the frontend decision record).
 - Import new icons through `src/icons.rs` only.
-- A new `sideporch.*` function goes into `src/automations/api.rs` as well as the sandbox, so the linter, completions, reference, AI prompt and MCP know it. Automation writes use `BEGIN IMMEDIATE` transactions, because the automation thread writes on its own connection.
+- A new `sideporch.*` function goes into `src/automations/api.rs` as well as the sandbox, so the linter, completions, reference, AI prompt and MCP know it. Write transactions use `BEGIN IMMEDIATE`, because each automation worker writes on its own connection.
 
 ## Decisions
 

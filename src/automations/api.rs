@@ -83,6 +83,46 @@ impl Function {
 
 pub const FUNCTIONS: &[Function] = &[
     Function {
+        name: "sideporch.on",
+        args: &[
+            arg("event", Kind::String),
+            arg("filter_or_handler", Kind::Any),
+            optional("handler", Kind::Function),
+        ],
+        snippet: "on(\"message\", { channel = \"$0\" }, function(msg)\n  \nend)",
+        doc: "Calls `handler(event)` when `event` happens: `\"message\"` (new messages in public channels), `\"reaction_added\"`, `\"reaction_removed\"`, `\"reaction\"` (both), `\"member_joined\"` or `\"channel_created\"`. An optional filter table between them narrows it down: `channel` (name), `pattern` (a Lua pattern the message text must match), `emoji`, `user` (username) and `thread` (`true` for replies in threads, `false` for the rest). Posts and reactions from automations never trigger handlers. The event table's `event` field names the event.",
+        must_use: false,
+    },
+    Function {
+        name: "sideporch.cron",
+        args: &[
+            arg("expression", Kind::String),
+            arg("options_or_handler", Kind::Any),
+            optional("handler", Kind::Function),
+        ],
+        snippet: "cron(\"0 9 * * mon-fri\", function()\n  $0\nend)",
+        doc: "Calls `handler()` on a cron schedule: `minute hour day-of-month month day-of-week`, with ranges, lists, steps (`*/15`), names (`mon-fri`, `jan`) and shortcuts such as `@hourly` and `@daily`. Times are in the instance's automation time zone, or pass `{ timezone = \"Europe/Berlin\" }` before the handler.",
+        must_use: false,
+    },
+    Function {
+        name: "sideporch.command",
+        args: &[
+            arg("name", Kind::String),
+            arg("options_or_handler", Kind::Any),
+            optional("handler", Kind::Function),
+        ],
+        snippet: "command(\"$0\", { description = \"\", usage = \"\" }, function(cmd)\n  sideporch.respond(cmd, \"\")\nend)",
+        doc: "Registers the slash command `/name`, which people type in any channel. `handler(cmd)` gets `cmd.text` (everything after the name), `cmd.args` (its words), `cmd.user`, `cmd.username`, `cmd.channel` and `cmd.channel_id`. Answer privately with `sideporch.respond`, or publicly with `sideporch.post` or `sideporch.reply(cmd, …)`. Options: `description` and `usage` for `/help` and the composer's suggestions. Each command name belongs to one automation.",
+        must_use: false,
+    },
+    Function {
+        name: "sideporch.respond",
+        args: &[arg("cmd", Kind::Table), arg("text", Kind::String)],
+        snippet: "respond(cmd, \"$0\")",
+        doc: "Answers a slash command with Markdown that only the person who typed it sees.",
+        must_use: false,
+    },
+    Function {
         name: "sideporch.on_message",
         args: &[arg("handler", Kind::Function)],
         snippet: "on_message(function(msg)\n  $0\nend)",
@@ -157,6 +197,45 @@ pub const FUNCTIONS: &[Function] = &[
         must_use: true,
     },
     Function {
+        name: "sideporch.http.get",
+        args: &[arg("url", Kind::String), optional("options", Kind::Table)],
+        snippet: "http.get(\"$0\")",
+        doc: "Sends a GET request and returns the response: `status`, `ok` (true for 2xx), `headers` (lower-case names), `body`, and `json` when the body is JSON. Options: `headers` and `timeout` (seconds, default 10, at most 30). Network errors raise an error; use `pcall` to handle them. Redirects are not followed. Private and loopback addresses are refused unless an admin allows them.",
+        must_use: true,
+    },
+    Function {
+        name: "sideporch.http.post",
+        args: &[
+            arg("url", Kind::String),
+            optional("body", Kind::Any),
+            optional("options", Kind::Table),
+        ],
+        snippet: "http.post(\"$0\", {})",
+        doc: "Sends a POST request. A table body is sent as JSON; a string as is. Returns the same response table as `sideporch.http.get`.",
+        must_use: false,
+    },
+    Function {
+        name: "sideporch.http.request",
+        args: &[arg("options", Kind::Table)],
+        snippet: "http.request({ method = \"PUT\", url = \"$0\", headers = {}, json = {} })",
+        doc: "Sends any request: `method`, `url`, `headers`, and `body` (a string) or `json` (a table), plus `timeout`. A call may make 10 requests.",
+        must_use: false,
+    },
+    Function {
+        name: "sideporch.secret",
+        args: &[arg("name", Kind::String)],
+        snippet: "secret(\"$0\")",
+        doc: "Returns the secret `name`, such as an API token, or `nil`. Admins store secrets under Automations → Secrets, or set `SIDEPORCH_SECRET_<NAME>` in the environment. Secret values are replaced in run logs.",
+        must_use: true,
+    },
+    Function {
+        name: "require",
+        args: &[arg("name", Kind::String)],
+        snippet: "require(\"$0\")",
+        doc: "Loads the library automation `name` once and returns what it returns, usually a table of functions. Libraries use the same `sideporch` API, acting for the automation that loaded them.",
+        must_use: true,
+    },
+    Function {
         name: "sideporch.json.encode",
         args: &[arg("value", Kind::Any)],
         snippet: "json.encode($0)",
@@ -198,6 +277,48 @@ pub const EVENTS: &[(&str, &[(&str, &str)])] = &[
                 "thread_id",
                 "id of the thread's first message, or `nil` outside threads",
             ),
+        ],
+    ),
+    (
+        "event (member_joined)",
+        &[
+            ("user", "display name of the new member"),
+            ("username", "their username"),
+        ],
+    ),
+    (
+        "event (channel_created)",
+        &[
+            ("channel", "the new channel's name"),
+            ("channel_id", "its id"),
+            ("user", "display name of who created it"),
+            ("username", "their username"),
+        ],
+    ),
+    (
+        "cmd (command)",
+        &[
+            ("name", "the command, without `/`"),
+            ("text", "everything typed after the name"),
+            ("args", "the words of `text`, as a list"),
+            ("user", "display name of who typed it"),
+            ("username", "their username"),
+            (
+                "channel",
+                "the channel's name, or `\"\"` in direct messages",
+            ),
+            ("channel_id", "the channel's id"),
+            ("thread_id", "the thread it was typed in, or `nil`"),
+        ],
+    ),
+    (
+        "response (sideporch.http)",
+        &[
+            ("status", "HTTP status code"),
+            ("ok", "`true` for 2xx statuses"),
+            ("headers", "table of headers, names in lower case"),
+            ("body", "the body as a string"),
+            ("json", "the body parsed, when it is JSON"),
         ],
     ),
     (
@@ -251,15 +372,14 @@ pub const REMOVED: &[&str] = &[
     "module",
     "os",
     "package",
-    "require",
     "setfenv",
     "string.dump",
     "unpack",
 ];
 
-pub const LIMITS: &str = "Each handler call may run 2,000,000 Lua instructions and post 20 messages; each script may use 16 MB of memory. \
-Scripts have Lua 5.4's `string`, `table`, `math`, `utf8` and `coroutine` libraries and the base functions, but no file, process or network access. \
-`print(...)` writes to the automation's run log.";
+pub const LIMITS: &str = "Each handler call may run 2,000,000 Lua instructions, post 20 messages or reactions and make 10 HTTP requests; each script may use 16 MB of memory. \
+Scripts have Lua 5.4's `string`, `table`, `math`, `utf8` and `coroutine` libraries, the base functions and `require` for libraries, but no file or process access; the network is reachable only through `sideporch.http`. \
+Messages are GitHub-flavored Markdown. `print(...)` writes to the automation's run log.";
 
 /// The reference as Markdown, for people, the AI prompt and MCP.
 pub fn reference() -> String {
@@ -285,6 +405,7 @@ pub fn completions() -> Value {
     Value::Array(
         FUNCTIONS
             .iter()
+            .filter(|function| function.name.starts_with("sideporch."))
             .map(|function| {
                 json!({
                     "name": function.name.trim_start_matches("sideporch."),

@@ -3,10 +3,10 @@ schema_version = 1
 id = "01M3J6PYXDJY1DJVFKX0DN39AP"
 title = "Run admin-written Lua automations in a bounded sandbox"
 date = "2026-09-27"
-status = "accepted"
+status = "superseded"
 tags = ["automations", "security"]
 supersedes = []
-superseded_by = []
+superseded_by = ["01M3M77KF4V6HX4AC84FV21HM3"]
 depends_on = []
 related_to = []
 +++

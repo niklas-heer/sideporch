@@ -4,7 +4,7 @@
 
 use crate::{
     AppState,
-    automations::{MessageEvent, ReactionEvent},
+    automations::{Event, MessageEvent, ReactionEvent},
     error::{AppError, AppResult},
     markup, now_ms, push, realtime,
     store::{self, Message, NewMessage},
@@ -143,7 +143,7 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
     );
     push::notify(state, &posted.message, posted.notify);
     if let Some(event) = posted.automation_event {
-        state.automations.message(event);
+        state.automations.event(Event::Message(event));
     }
     Ok(posted.message)
 }
@@ -194,7 +194,7 @@ pub async fn toggle_reaction(
         .await?;
     publish_reactions(state, audience, &message, &ctx);
     if let Some(event) = event {
-        state.automations.reaction(event);
+        state.automations.event(Event::Reaction(event));
     }
     Ok(())
 }

@@ -219,7 +219,7 @@ end)"#,
         )
         .await;
     let editor = admin.wait_for(&path, "→ react :eyes: to message").await;
-    assert!(editor.contains(">reaction<"));
+    assert!(editor.contains(">reaction_added<"));
 }
 
 #[tokio::test]

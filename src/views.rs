@@ -819,6 +819,16 @@ pub fn panel_page(title: &str, shell: &Shell<'_>, heading: &Markup, content: &Ma
     app_page(title, shell, &PageData::default(), &main)
 }
 
+/// A command's answer, shown only to the person who ran it.
+pub fn ephemeral_notice(text: &str) -> Markup {
+    html! {
+        li class="ephemeral mx-3 my-2 rounded-lg border border-dashed border-line bg-screen px-4 py-2 dark:border-night-line dark:bg-night-2" data-ephemeral {
+            p class="mb-1 text-xs font-semibold text-muted dark:text-haint" { "Only visible to you" }
+            div class="rich" { (PreEscaped(crate::markdown::render(text, &Context::default()))) }
+        }
+    }
+}
+
 /// A panel page with room for side-by-side tools, such as the script editor.
 pub fn wide_panel_page(
     title: &str,
