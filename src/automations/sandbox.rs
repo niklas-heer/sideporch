@@ -56,6 +56,14 @@ pub enum Action {
         channel: ChannelRef,
         text: String,
         thread: Option<i64>,
+        buttons: Vec<crate::store::Button>,
+    },
+    /// Changes the text or buttons of a message the automation posted.
+    Update {
+        automation_id: i64,
+        message_id: i64,
+        text: Option<String>,
+        buttons: Option<Vec<crate::store::Button>>,
     },
     React {
         automation_id: i64,
@@ -80,6 +88,7 @@ impl Action {
                 channel,
                 text,
                 thread,
+                buttons,
                 ..
             } => {
                 let place = match channel {
@@ -88,13 +97,80 @@ impl Action {
                     ChannelRef::Id(id, None) => format!("channel {id}"),
                 };
                 let thread = thread.map_or_else(String::new, |id| format!(" (thread {id})"));
-                format!("→ post in {place}{thread}: {text}")
+                format!(
+                    "→ post in {place}{thread}: {text}{}",
+                    describe_buttons(buttons)
+                )
             }
+            Self::Update {
+                message_id,
+                text,
+                buttons,
+                ..
+            } => format!(
+                "→ update message {message_id}: {}{}",
+                text.as_deref().unwrap_or("(same text)"),
+                buttons
+                    .as_deref()
+                    .map_or_else(String::new, describe_buttons)
+            ),
             Self::React {
                 message_id, emoji, ..
             } => format!("→ react :{emoji}: to message {message_id}"),
         }
     }
+}
+
+fn describe_buttons(buttons: &[crate::store::Button]) -> String {
+    if buttons.is_empty() {
+        return String::new();
+    }
+    let labels: Vec<String> = buttons
+        .iter()
+        .map(|button| format!("[{}]", button.label))
+        .collect();
+    format!(" {}", labels.join(" "))
+}
+
+/// Buttons from `options.buttons`: up to five `{ label, value, style }`.
+fn buttons_from(options: Option<&Table>) -> mlua::Result<Option<Vec<crate::store::Button>>> {
+    let Some(list) = options
+        .map(|options| options.get::<Option<Table>>("buttons"))
+        .transpose()?
+        .flatten()
+    else {
+        return Ok(None);
+    };
+    let mut buttons = Vec::new();
+    for entry in list.sequence_values::<Table>() {
+        let entry = entry?;
+        let label: String = entry.get("label")?;
+        let value: Option<String> = entry.get("value")?;
+        let style: Option<String> = entry.get("style")?;
+        let style = style.unwrap_or_default();
+        if !matches!(style.as_str(), "" | "primary" | "danger") {
+            return Err(mlua::Error::runtime(
+                "button style is \"primary\", \"danger\" or nothing",
+            ));
+        }
+        let label = label.trim().chars().take(40).collect::<String>();
+        if label.is_empty() {
+            return Err(mlua::Error::runtime("every button needs a label"));
+        }
+        buttons.push(crate::store::Button {
+            value: value
+                .unwrap_or_else(|| label.clone())
+                .chars()
+                .take(200)
+                .collect(),
+            label,
+            style,
+        });
+    }
+    if buttons.len() > 5 {
+        return Err(mlua::Error::runtime("a message can have at most 5 buttons"));
+    }
+    Ok(Some(buttons))
 }
 
 /// Where a script's actions go.
@@ -1011,7 +1087,11 @@ fn act(lua: &Lua, sink: &Sink, action: Action) -> mlua::Result<()> {
 fn register_actions(lua: &Lua, api: &Table, identity: &Identity, sink: &Sink) -> mlua::Result<()> {
     let poster = |sink: Sink| {
         let identity = identity.clone();
-        move |lua: &Lua, channel: ChannelRef, text: String, thread: Option<i64>| {
+        move |lua: &Lua,
+              channel: ChannelRef,
+              text: String,
+              thread: Option<i64>,
+              buttons: Vec<crate::store::Button>| {
             let text = text.trim();
             if text.is_empty() {
                 return Err(mlua::Error::runtime("sideporch.post: the text is empty"));
@@ -1025,6 +1105,7 @@ fn register_actions(lua: &Lua, api: &Table, identity: &Identity, sink: &Sink) ->
                     channel,
                     text: text.chars().take(10_000).collect(),
                     thread,
+                    buttons,
                 },
             )
         }
@@ -1035,25 +1116,31 @@ fn register_actions(lua: &Lua, api: &Table, identity: &Identity, sink: &Sink) ->
         lua.create_function(
             move |lua, (channel, text, options): (String, String, Option<Table>)| {
                 let thread = options
+                    .as_ref()
                     .map(|options| options.get::<Option<i64>>("thread"))
                     .transpose()?
                     .flatten();
-                post(lua, ChannelRef::Name(channel), text, thread)
+                let buttons = buttons_from(options.as_ref())?.unwrap_or_default();
+                post(lua, ChannelRef::Name(channel), text, thread, buttons)
             },
         )?,
     )?;
     let reply = poster(sink.clone());
     api.set(
         "reply",
-        lua.create_function(move |lua, (message, text): (Table, String)| {
-            let channel: i64 = message.get("channel_id")?;
-            let thread = message
-                .get::<Option<i64>>("thread_id")?
-                .or(message.get::<Option<i64>>("id")?);
-            let name = message.get::<Option<String>>("channel")?;
-            reply(lua, ChannelRef::Id(channel, name), text, thread)
-        })?,
+        lua.create_function(
+            move |lua, (message, text, options): (Table, String, Option<Table>)| {
+                let channel: i64 = message.get("channel_id")?;
+                let thread = message
+                    .get::<Option<i64>>("thread_id")?
+                    .or(message.get::<Option<i64>>("id")?);
+                let name = message.get::<Option<String>>("channel")?;
+                let buttons = buttons_from(options.as_ref())?.unwrap_or_default();
+                reply(lua, ChannelRef::Id(channel, name), text, thread, buttons)
+            },
+        )?,
     )?;
+    register_update(lua, api, identity, sink)?;
     let react_sink = sink.clone();
     let automation_id = identity.id;
     api.set(
@@ -1075,6 +1162,11 @@ fn register_actions(lua: &Lua, api: &Table, identity: &Identity, sink: &Sink) ->
             )
         })?,
     )?;
+    register_respond(lua, api)
+}
+
+/// `respond`: private answers to slash commands.
+fn register_respond(lua: &Lua, api: &Table) -> mlua::Result<()> {
     api.set(
         "respond",
         lua.create_function(|lua, (_command, text): (Table, String)| {
@@ -1099,6 +1191,33 @@ fn register_actions(lua: &Lua, api: &Table, identity: &Identity, sink: &Sink) ->
             Ok(())
         })?,
     )
+}
+
+/// `update`, for changing the automation's own messages.
+fn register_update(lua: &Lua, api: &Table, identity: &Identity, sink: &Sink) -> mlua::Result<()> {
+    let update_sink = sink.clone();
+    let updater = identity.id;
+    api.set(
+        "update",
+        lua.create_function(
+            move |lua, (message, text, options): (Table, Option<String>, Option<Table>)| {
+                let text = text
+                    .map(|text| text.trim().chars().take(10_000).collect::<String>())
+                    .filter(|text| !text.is_empty());
+                act(
+                    lua,
+                    &update_sink,
+                    Action::Update {
+                        automation_id: updater,
+                        message_id: message.get("id")?,
+                        text,
+                        buttons: buttons_from(options.as_ref())?,
+                    },
+                )
+            },
+        )?,
+    )?;
+    Ok(())
 }
 
 /// `get` and `set`, stored per automation.
@@ -1368,6 +1487,15 @@ fn event_table(lua: &Lua, event: &Event) -> mlua::Result<Table> {
         | Event::MessageDeleted(message) => message_table(lua, message)?,
         Event::Reaction(reaction) => reaction_table(lua, reaction)?,
         Event::MemberJoined(member) => member_table(lua, member)?,
+        Event::Button(click) => {
+            let table = lua.create_table()?;
+            table.set("value", click.value.as_str())?;
+            table.set("label", click.label.as_str())?;
+            table.set("user", click.user.as_str())?;
+            table.set("username", click.username.as_str())?;
+            table.set("message", message_table(lua, &click.message)?)?;
+            table
+        }
         Event::ChannelCreated(channel) => channel_table(lua, channel)?,
     };
     table.set("event", event.kind().name())?;

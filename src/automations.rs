@@ -33,7 +33,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc as async_mpsc, oneshot};
 
 pub use events::{
-    ChannelEvent, CommandCall, Event, MemberEvent, MessageEvent, ReactionEvent, WebhookRequest,
+    ButtonEvent, ChannelEvent, CommandCall, Event, MemberEvent, MessageEvent, ReactionEvent,
+    WebhookRequest,
 };
 use sandbox::{Action, ChannelRef, Outcome, Script};
 pub use sandbox::{Triggers, WebhookResponse};
@@ -258,6 +259,21 @@ impl Automations {
         }
     }
 
+    /// Hands `event` to one automation, if it listens for its kind.
+    pub fn event_for(&self, automation_id: i64, event: Event) {
+        let Ok(workers) = self.inner.workers.read() else {
+            return;
+        };
+        if let Some(worker) = workers.by_id.get(&automation_id)
+            && worker
+                .triggers
+                .lock()
+                .is_ok_and(|triggers| triggers.listens_to(event.kind()))
+        {
+            drop(worker.jobs.send(Job::Event(Arc::new(event))));
+        }
+    }
+
     /// Hands a request to the automation's webhook handler and waits for
     /// its response.
     pub async fn webhook(&self, automation_id: i64, request: WebhookRequest) -> WebhookResponse {
@@ -396,9 +412,19 @@ async fn perform(state: &AppState, action: Action) {
             channel,
             text,
             thread,
+            buttons,
         } => (
             automation_id,
-            post(state, automation_id, name, channel, text, thread).await,
+            post(state, automation_id, name, channel, (text, buttons), thread).await,
+        ),
+        Action::Update {
+            automation_id,
+            message_id,
+            text,
+            buttons,
+        } => (
+            automation_id,
+            update(state, automation_id, message_id, text, buttons).await,
         ),
         Action::React {
             automation_id,
@@ -433,12 +459,36 @@ async fn perform(state: &AppState, action: Action) {
     }
 }
 
+/// Changes a message the automation posted.
+async fn update(
+    state: &AppState,
+    automation_id: i64,
+    message_id: i64,
+    text: Option<String>,
+    buttons: Option<Vec<store::Button>>,
+) -> AppResult<()> {
+    state
+        .db
+        .call(move |conn| {
+            let message = store::message(conn, message_id)?
+                .filter(|message| message.automation_id == Some(automation_id))
+                .ok_or_else(|| {
+                    AppError::bad_request(
+                        "sideporch.update: automations can only change their own messages",
+                    )
+                })?;
+            store::update_bot_message(conn, message.id, text.as_deref(), buttons.as_deref())
+        })
+        .await?;
+    messages::refresh(state, message_id).await
+}
+
 async fn post(
     state: &AppState,
     automation_id: i64,
     name: String,
     channel: ChannelRef,
-    text: String,
+    (text, buttons): (String, Vec<store::Button>),
     thread: Option<i64>,
 ) -> AppResult<()> {
     let channel_id = state
@@ -462,6 +512,8 @@ async fn post(
             attachments: Vec::new(),
             files: Vec::new(),
             gif: None,
+            poll: Vec::new(),
+            buttons,
         },
     )
     .await

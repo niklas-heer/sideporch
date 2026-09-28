@@ -454,6 +454,8 @@ impl Importer<'_> {
                 attachments: &[],
                 files: &[],
                 gif: None,
+                poll: &[],
+                buttons: &[],
                 created_at: millis(&message.ts),
             },
         )?;

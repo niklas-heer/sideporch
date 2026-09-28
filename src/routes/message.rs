@@ -31,6 +31,8 @@ pub fn router() -> Router<AppState> {
         .route("/c/{channel_id}/m/{message_id}/delete", post(delete))
         .route("/c/{channel_id}/m/{message_id}/pin", post(pin))
         .route("/c/{channel_id}/m/{message_id}/save", post(save))
+        .route("/c/{channel_id}/m/{message_id}/vote", post(vote))
+        .route("/c/{channel_id}/m/{message_id}/buttons", post(click))
         .route(
             "/c/{channel_id}/m/{message_id}/preview/remove",
             post(remove_preview),
@@ -325,5 +327,85 @@ async fn activity(user: CurrentUser, State(state): State<AppState>) -> AppResult
         &shell,
         &items,
         &Render::for_user(&ctx, user.id),
+    ))
+}
+
+#[derive(Deserialize)]
+struct VoteForm {
+    option: i64,
+}
+
+async fn vote(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path((channel_id, message_id)): Path<(i64, i64)>,
+    headers: HeaderMap,
+    Form(form): Form<VoteForm>,
+) -> AppResult<Response> {
+    let message = readable(&state, &user, channel_id, message_id).await?;
+    let options = message.poll.as_ref().map_or(0, |poll| poll.options.len());
+    if usize::try_from(form.option).map_or(true, |option| option >= options) || message.deleted {
+        return Err(AppError::bad_request("That poll has no such option."));
+    }
+    let user_id = user.id;
+    let now = now_ms();
+    state
+        .db
+        .call(move |conn| store::vote(conn, message_id, user_id, form.option, now))
+        .await?;
+    messages::refresh(&state, message_id).await?;
+    Ok(done(
+        &headers,
+        &message_href(&message),
+        serde_json::Value::Null,
+    ))
+}
+
+#[derive(Deserialize)]
+struct ButtonForm {
+    index: usize,
+}
+
+/// Tells the automation that posted a message that someone clicked one of
+/// its buttons.
+async fn click(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path((channel_id, message_id)): Path<(i64, i64)>,
+    headers: HeaderMap,
+    Form(form): Form<ButtonForm>,
+) -> AppResult<Response> {
+    let user_id = user.id;
+    let (message, event) = state
+        .db
+        .call(move |conn| {
+            let message = store::readable_message(conn, user_id, channel_id, message_id)?
+                .filter(|message| !message.deleted)
+                .ok_or(AppError::NotFound)?;
+            let button = message
+                .buttons
+                .get(form.index)
+                .cloned()
+                .ok_or_else(|| AppError::bad_request("That button is gone."))?;
+            let person = store::user(conn, user_id)?.ok_or(AppError::NotFound)?;
+            let event = crate::automations::ButtonEvent {
+                value: button.value,
+                label: button.label,
+                user: person.display_name,
+                username: person.username,
+                message: crate::automations::MessageEvent::new(conn, &message)?,
+            };
+            Ok((message, event))
+        })
+        .await?;
+    if let Some(automation_id) = message.automation_id {
+        state
+            .automations
+            .event_for(automation_id, crate::automations::Event::Button(event));
+    }
+    Ok(done(
+        &headers,
+        &message_href(&message),
+        serde_json::Value::Null,
     ))
 }

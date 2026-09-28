@@ -985,3 +985,170 @@ async fn slack_exports_import_once() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+async fn vote(who: &Browser, channel: i64, poll: i64, option: &str) -> reqwest::Response {
+    fetch_post(
+        who,
+        &format!("/c/{channel}/m/{poll}/vote"),
+        &[("option", option)],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn polls_count_one_vote_per_person() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    let help: Value = admin
+        .type_message(general, "/poll just one")
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        help["ephemeral"][0]
+            .as_str()
+            .unwrap()
+            .contains("2 to 10 options")
+    );
+    assert_eq!(
+        admin
+            .send(general, "/poll Lunch? | Pizza | Tacos | Soup", None)
+            .await,
+        StatusCode::NO_CONTENT
+    );
+    let page = admin.page(&format!("/c/{general}")).await;
+    let poll = last_message_id(&page);
+    assert!(page.contains("Lunch?") && page.contains("Tacos") && page.contains("0 votes"));
+
+    assert_eq!(
+        vote(&admin, general, poll, "1").await.status(),
+        StatusCode::NO_CONTENT
+    );
+    vote(&member, general, poll, "1").await;
+    vote(&member, general, poll, "0").await;
+    let page = admin.page(&format!("/c/{general}")).await;
+    assert!(page.contains("2 votes"));
+    let tacos = between(&page, "value=\"1\"", "</button>");
+    assert!(tacos.contains("aria-pressed=\"true\"") && tacos.contains("width: 50%"));
+    // Picking your option again takes the vote back.
+    vote(&admin, general, poll, "1").await;
+    assert!(
+        admin
+            .page(&format!("/c/{general}"))
+            .await
+            .contains("1 vote.")
+    );
+    assert_eq!(
+        vote(&admin, general, poll, "7").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn automation_buttons_reach_their_automation() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let saved = admin
+        .post(
+            "/automations",
+            &[
+                ("name", "Approver"),
+                ("enabled", "on"),
+                (
+                    "source",
+                    r#"sideporch.on("message", { pattern = "^deploy" }, function(msg)
+  sideporch.reply(msg, "Deploy?", { buttons = {
+    { label = "Approve", value = "yes", style = "primary" },
+    { label = "Cancel", value = "no", style = "danger" },
+  } })
+end)
+sideporch.on("button", function(click)
+  sideporch.update(click.message, "Approved by " .. click.user, { buttons = {} })
+end)"#,
+                ),
+            ],
+        )
+        .await;
+    assert_eq!(saved.status(), StatusCode::SEE_OTHER);
+    admin.send(general, "deploy garden", None).await;
+    let root = last_message_id(&admin.page(&format!("/c/{general}")).await);
+    let thread = admin
+        .wait_for(&format!("/c/{general}/t/{root}"), "Deploy?")
+        .await;
+    assert!(thread.contains(">Approve<") && thread.contains(">Cancel<"));
+    let replies = between(&thread, r#"id="replies""#, "</ol>");
+    let question: i64 = between(replies, r#"data-message-id=""#, "\"")
+        .parse()
+        .unwrap();
+    let clicked = fetch_post(
+        &admin,
+        &format!("/c/{general}/m/{question}/buttons"),
+        &[("index", "0")],
+    )
+    .await;
+    assert_eq!(clicked.status(), StatusCode::NO_CONTENT);
+    let thread = admin
+        .wait_for(&format!("/c/{general}/t/{root}"), "Approved by Ada Admin")
+        .await;
+    assert!(!thread.contains(">Approve<"));
+}
+
+#[tokio::test]
+async fn outgoing_webhooks_send_messages_and_post_answers() {
+    use axum::{Json, Router, routing::post};
+    let (sent, mut received) = tokio::sync::mpsc::unbounded_channel::<Value>();
+    let app = Router::new().route(
+        "/hook",
+        post(move |Json(body): Json<Value>| {
+            let sent = sent.clone();
+            async move {
+                sent.send(body).unwrap();
+                Json(json!({ "text": "Deploying now", "username": "Deployer", "response_type": "comment" }))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/hook", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    // Local services need the automations' private network setting.
+    admin
+        .post(
+            "/settings/automations",
+            &[("timezone", "UTC"), ("allow_private_network", "on")],
+        )
+        .await;
+    let added = admin
+        .post(
+            &format!("/c/{general}/outgoing"),
+            &[("name", "CI"), ("url", &url), ("triggers", "!deploy")],
+        )
+        .await;
+    assert_eq!(added.status(), StatusCode::SEE_OTHER);
+    admin.send(general, "just chatting", None).await;
+    admin.send(general, "!deploy garden", None).await;
+    let body = tokio::time::timeout(Duration::from_secs(5), received.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(body["text"], "!deploy garden");
+    assert_eq!(body["trigger_word"], "!deploy");
+    assert_eq!(body["user_name"], "ada");
+    let settings = admin.page(&format!("/c/{general}/settings")).await;
+    assert!(settings.contains(body["token"].as_str().unwrap()));
+    let page = admin.wait_for(&format!("/c/{general}"), "1 reply").await;
+    let root = last_message_id(&page);
+    let thread = admin
+        .wait_for(&format!("/c/{general}/t/{root}"), "Deploying now")
+        .await;
+    assert!(thread.contains("Deployer"));
+    // Only the trigger word sent anything.
+    assert!(received.try_recv().is_err());
+}

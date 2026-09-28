@@ -90,7 +90,7 @@ pub const FUNCTIONS: &[Function] = &[
             optional("handler", Kind::Function),
         ],
         snippet: "on(\"message\", { channel = \"$0\" }, function(msg)\n  \nend)",
-        doc: "Calls `handler(event)` when `event` happens: `\"message\"` (new messages in public channels), `\"message_changed\"` (edited; the table has the new text), `\"message_deleted\"` (the table has what it said), `\"reaction_added\"`, `\"reaction_removed\"`, `\"reaction\"` (both), `\"member_joined\"` or `\"channel_created\"`. An optional filter table between them narrows it down: `channel` (name), `pattern` (a Lua pattern the message text must match), `emoji`, `user` (username) and `thread` (`true` for replies in threads, `false` for the rest). Posts and reactions from automations never trigger handlers. The event table's `event` field names the event.",
+        doc: "Calls `handler(event)` when `event` happens: `\"message\"` (new messages in public channels), `\"message_changed\"` (edited; the table has the new text), `\"message_deleted\"` (the table has what it said), `\"reaction_added\"`, `\"reaction_removed\"`, `\"reaction\"` (both), `\"member_joined\"`, `\"channel_created\"` or `\"button\"` (someone clicked a button under one of this automation's messages; only the automation that posted it hears about it, and `pattern` matches the button's value). An optional filter table between them narrows it down: `channel` (name), `pattern` (a Lua pattern the message text must match), `emoji`, `user` (username) and `thread` (`true` for replies in threads, `false` for the rest). Posts and reactions from automations never trigger handlers. The event table's `event` field names the event.",
         must_use: false,
     },
     Function {
@@ -158,14 +158,29 @@ pub const FUNCTIONS: &[Function] = &[
             optional("options", Kind::Table),
         ],
         snippet: "post(\"$0\", \"\")",
-        doc: "Posts `text` to the public channel named `channel` (with or without `#`), under the automation's name. `options.thread` is a message id to answer in that thread. Text is GitHub-flavored Markdown, such as `**bold**`, `[a link](https://example.com)`, tables, and ```` ```mermaid ```` diagrams.",
+        doc: "Posts `text` to the public channel named `channel` (with or without `#`), under the automation's name. `options.thread` is a message id to answer in that thread; `options.buttons` adds up to five buttons, each `{ label = \"Approve\", value = \"approve\", style = \"primary\" }` (style is `primary`, `danger` or left out), which people click to trigger `sideporch.on(\"button\", …)`. Text is GitHub-flavored Markdown, such as `**bold**`, `[a link](https://example.com)`, tables, and ```` ```mermaid ```` diagrams.",
         must_use: false,
     },
     Function {
         name: "sideporch.reply",
-        args: &[arg("message", Kind::Table), arg("text", Kind::String)],
+        args: &[
+            arg("message", Kind::Table),
+            arg("text", Kind::String),
+            optional("options", Kind::Table),
+        ],
         snippet: "reply(msg, \"$0\")",
-        doc: "Answers `message` in its thread. `message` is a message table from `on_message` or a reaction event's `message`.",
+        doc: "Answers `message` in its thread. `message` is a message table from `on_message` or a reaction event's `message`. `options.buttons` works as for `sideporch.post`.",
+        must_use: false,
+    },
+    Function {
+        name: "sideporch.update",
+        args: &[
+            arg("message", Kind::Table),
+            optional("text", Kind::String),
+            optional("options", Kind::Table),
+        ],
+        snippet: "update(click.message, \"$0\", { buttons = {} })",
+        doc: "Changes a message this automation posted, such as `click.message` in a button handler: new text (or `nil` to keep it), and `options.buttons` to replace its buttons (`{}` removes them).",
         must_use: false,
     },
     Function {
@@ -309,6 +324,16 @@ pub const EVENTS: &[(&str, &[(&str, &str)])] = &[
             ),
             ("channel_id", "the channel's id"),
             ("thread_id", "the thread it was typed in, or `nil`"),
+        ],
+    ),
+    (
+        "click (button)",
+        &[
+            ("value", "the button's value"),
+            ("label", "the button's label"),
+            ("user", "display name of who clicked it"),
+            ("username", "their username"),
+            ("message", "the message with the button, as a `msg` table"),
         ],
     ),
     (

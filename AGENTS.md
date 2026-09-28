@@ -4,13 +4,14 @@ Sideporch is a self-hosted team chat shipped as a single Rust binary. See [READM
 
 ## Layout
 
-- `src/routes.rs`: HTTP handlers. `src/store.rs`: SQL queries. `src/db.rs`: connection and migrations.
+- `src/routes.rs`: HTTP handlers, with more in `src/routes/`: `message.rs` (edit, delete, pin, save, vote, buttons, Activity), `channels.rs` (directory, join, leave, mute, private members, outgoing webhooks), `account.rs` (passwords, reset links, deactivation), `later.rs` (reminders and scheduled messages), `backups.rs` (backups and Slack import). `src/store.rs`: SQL queries. `src/db.rs`: connection and migrations.
 - `src/views.rs`: maud templates. `src/markup.rs`: Slack-style message formatting to safe HTML.
 - `src/messages.rs`: the one pipeline every new message takes (store, index, live update, push, automations).
 - `src/webhook.rs`: Slack-compatible webhook parsing. `src/realtime.rs`: WebSocket fan-out and presence.
 - `src/files.rs`: uploads, downloads, custom emoji; `src/blobs.rs` keeps file contents on disk by SHA-256. `src/search.rs`: FTS5 search. `src/push.rs`: Web Push.
 - `src/emoji.rs`: every standard emoji from gemoji (`assets/vendor/emoji.tsv`). `src/gifs.rs`: GIF settings (local library by default, GIPHY searched by the server, KLIPY searched by the browser) and the GIPHY client. `src/system.rs`: resource sampling for the admin's system page. `src/routes/profile.rs`, `src/routes/admin.rs` and `src/routes/gifs.rs`: profiles, the system page, and the GIF library, search and settings.
 - `src/automations.rs`: starts one worker per automation and routes events, webhooks, commands and live runs to them; also dry runs. In `src/automations/`: `worker.rs` (a script's thread), `sandbox.rs` (the Lua state and the `sideporch` API), `events.rs`, `cron.rs`, `http.rs` (outgoing requests with the internal-address guard), `tooling.rs` (lint with selene, format with StyLua), and `api.rs`, the API described once for the linter, editor completions, reference, AI prompt and MCP.
+- `src/later.rs`: time phrases in each person's time zone, `/remind`, and the task that delivers reminders and scheduled messages. `src/previews.rs`: link previews through the guarded HTTP client. `src/outgoing.rs`: outgoing webhooks. `src/backup.rs`: backup archives, schedules and `sideporch restore`. `src/import.rs`: Slack export import.
 - `src/secrets.rs`: encrypted secrets and their key. `src/markdown.rs`: GitHub-flavored Markdown for messages (`src/markup.rs` stays for Slack-format webhooks).
 - `src/ai.rs`: AI providers that write scripts. `src/mcp.rs`: the MCP server. `src/routes/automation.rs` and `src/routes/settings.rs`: their pages and endpoints.
 - `assets/`: the page script, the automation editor (`editor.js`), vendored Mermaid (`vendor/`, see its README), service worker, base CSS, logo, and fonts. `build.rs` compiles utility classes with encre-css using `encre-css.toml`.

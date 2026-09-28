@@ -32,7 +32,8 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 - **Automations**: Lua scripts that react to events, run on cron schedules, answer slash commands and webhooks, call APIs with encrypted secrets, and share code through libraries. They are written in an editor with a linter, formatter, test runs and version history, and AI can write them, from the editor or through MCP.
 - **Move from Slack**: import a workspace export with its people, channels, direct messages, threads and reactions.
 - Set up in the browser: the first visitor creates the admin account, then invites everyone else. No email needed: admins hand out password reset links, make other people admins, and deactivate accounts.
-- Slack-compatible incoming webhooks per channel, tested against the payloads Gatus sends.
+- Slack-compatible incoming webhooks per channel, tested against the payloads Gatus sends, and **outgoing webhooks** that send people's messages (optionally only those starting with a trigger word) to another service and post its answer.
+- **Polls** with `/poll Where do we eat? | Pizza | Tacos`, one vote per person.
 - Works on phones, in dark mode, and without JavaScript (pages reload instead of updating live).
 
 ## Install
@@ -154,7 +155,8 @@ sideporch.on_webhook(function(request)
 end)
 ```
 
-- **Events**: `message`, `reaction_added`, `reaction_removed`, `member_joined` and `channel_created`, with filters for the channel, a text pattern, the emoji, the person, and threads.
+- **Events**: `message`, `message_changed`, `message_deleted`, `reaction_added`, `reaction_removed`, `member_joined` and `channel_created`, with filters for the channel, a text pattern, the emoji, the person, and threads. Automations see public channels only.
+- **Buttons**: `sideporch.post` and `sideporch.reply` can put up to five buttons under a message; clicks arrive as `button` events for that automation, which can change its message with `sideporch.update`, for approvals and the like.
 - **Schedules**: `sideporch.cron` with standard five-field expressions (`*/15 * * * *`, `@daily`, `mon-fri`) in the instance's time zone or one you name, and `sideporch.every(seconds, …)`.
 - **Slash commands**: `/name` in any channel runs the automation that registered it. Answers from `sideporch.respond` are visible only to the person who typed the command; `/help` lists all commands, and the composer suggests them.
 - **Outgoing HTTP**: `sideporch.http.get`, `.post` and `.request` call APIs and parse JSON. Requests to private, loopback and link-local addresses are refused unless an admin allows them under *Settings*, so scripts cannot probe the server's network.

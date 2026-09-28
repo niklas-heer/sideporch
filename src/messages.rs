@@ -24,8 +24,12 @@ pub enum Sender {
         id: i64,
         name: String,
     },
-    /// Sideporch itself, such as for reminders.
-    System(String),
+    /// A named bot without an account: reminders, and answers to outgoing
+    /// webhooks. `icon` is an emoji code or an image URL.
+    Bot {
+        name: String,
+        icon: Option<String>,
+    },
 }
 
 pub struct Draft {
@@ -36,6 +40,9 @@ pub struct Draft {
     pub attachments: Vec<Attachment>,
     pub files: Vec<i64>,
     pub gif: Option<store::Gif>,
+    /// A poll's options; the body is the question.
+    pub poll: Vec<String>,
+    pub buttons: Vec<store::Button>,
 }
 
 struct Posted {
@@ -73,8 +80,8 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
                 Sender::Automation { id, name } => {
                     (None, None, Some(*id), Some(name.as_str()), None)
                 }
-                Sender::System(name) => {
-                    (None, None, None, Some(name.as_str()), Some(":alarm_clock:"))
+                Sender::Bot { name, icon } => {
+                    (None, None, None, Some(name.as_str()), icon.as_deref())
                 }
             };
             if let Some(user_id) = user_id {
@@ -98,6 +105,8 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
                     attachments: &draft.attachments,
                     files: &draft.files,
                     gif: draft.gif.as_ref(),
+                    poll: &draft.poll,
+                    buttons: &draft.buttons,
                     created_at: now,
                 },
             )?;
@@ -141,6 +150,11 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
     if matches!(message.author, store::Author::User { .. }) && message.body.contains("http") {
         crate::previews::attach(state, &state.links, message.id, &message.body);
     }
+    crate::outgoing::dispatch(
+        state,
+        &message,
+        state.public_url.clone().unwrap_or_default(),
+    );
     if let Some(event) = automation_event {
         state.automations.event(Event::Message(event));
     }

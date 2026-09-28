@@ -325,6 +325,35 @@ ALTER TABLE messages ADD COLUMN import_id TEXT;
 CREATE UNIQUE INDEX messages_by_import_id ON messages (import_id) WHERE import_id IS NOT NULL;
 ALTER TABLE messages ADD COLUMN slack_format INTEGER NOT NULL DEFAULT 0;
 ",
+    r"
+-- A poll's question and options; votes are one per person.
+ALTER TABLE messages ADD COLUMN poll TEXT;
+CREATE TABLE poll_votes (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    option INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (message_id, user_id)
+);
+
+-- Buttons under an automation's message.
+ALTER TABLE messages ADD COLUMN buttons TEXT;
+
+CREATE TABLE outgoing_webhooks (
+    id INTEGER PRIMARY KEY,
+    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    triggers TEXT NOT NULL DEFAULT '',
+    token TEXT NOT NULL,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    last_at INTEGER,
+    last_status INTEGER,
+    last_error TEXT
+);
+CREATE INDEX outgoing_webhooks_by_channel ON outgoing_webhooks (channel_id);
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on

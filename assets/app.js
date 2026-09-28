@@ -616,6 +616,19 @@
     });
   }
 
+  // Poll votes and automation buttons post in the background; the live
+  // update redraws the message.
+  document.addEventListener("submit", (event) => {
+    const form = event.target.closest("form[data-background]");
+    if (!form) return;
+    event.preventDefault();
+    fetch(form.action, { method: "POST", headers: { "x-sideporch-fetch": "1" }, body: new URLSearchParams(new FormData(form)) })
+      .then((response) => {
+        if (!response.ok) toast("That didn't work. Try again.");
+      })
+      .catch(() => toast("That didn't work. Check your connection."));
+  });
+
   // Reaction chips toggle in the background; the live update redraws them.
   function setupReactions() {
     document.addEventListener("submit", (event) => {

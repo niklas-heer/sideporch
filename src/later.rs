@@ -268,6 +268,8 @@ pub async fn deliver_due(state: &AppState) -> AppResult<()> {
             attachments: Vec::new(),
             files: Vec::new(),
             gif: None,
+            poll: Vec::new(),
+            buttons: Vec::new(),
         };
         if let Err(error) = messages::post(state, draft).await {
             tracing::warn!(?error, "could not send a scheduled message");
@@ -311,11 +313,16 @@ async fn send_reminder(state: &AppState, reminder: &store::Reminder) -> AppResul
         Draft {
             channel_id,
             parent_id: None,
-            sender: Sender::System("Reminder".to_owned()),
+            sender: Sender::Bot {
+                name: "Reminder".to_owned(),
+                icon: Some(":alarm_clock:".to_owned()),
+            },
             body,
             attachments: Vec::new(),
             files: Vec::new(),
             gif: None,
+            poll: Vec::new(),
+            buttons: Vec::new(),
         },
     )
     .await

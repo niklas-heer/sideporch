@@ -32,6 +32,78 @@ pub fn router() -> Router<AppState> {
             "/c/{channel_id}/members/{user_id}/remove",
             post(remove_member),
         )
+        .route("/c/{channel_id}/outgoing", post(add_outgoing))
+        .route(
+            "/c/{channel_id}/outgoing/{hook_id}/delete",
+            post(delete_outgoing),
+        )
+}
+
+#[derive(Deserialize)]
+struct OutgoingForm {
+    name: String,
+    url: String,
+    #[serde(default)]
+    triggers: String,
+}
+
+async fn add_outgoing(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path(channel_id): Path<i64>,
+    Form(form): Form<OutgoingForm>,
+) -> AppResult<Redirect> {
+    managed_channel(&state, &user, channel_id).await?;
+    let name: String = form.name.trim().chars().take(80).collect();
+    let url = form.url.trim().to_owned();
+    if name.is_empty() {
+        return Err(AppError::bad_request("Give the webhook a name."));
+    }
+    if !(url.starts_with("https://") || url.starts_with("http://")) || url.len() > 2_000 {
+        return Err(AppError::bad_request("Enter an http or https URL."));
+    }
+    let triggers: Vec<String> = form
+        .triggers
+        .split([',', ' '])
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+        .map(|word| word.chars().take(40).collect())
+        .take(10)
+        .collect();
+    let token = crate::auth::random_token()?;
+    let user_id = user.id;
+    let now = crate::now_ms();
+    state
+        .db
+        .call(move |conn| {
+            store::create_outgoing_webhook(
+                conn,
+                &store::NewOutgoingWebhook {
+                    channel_id,
+                    name: &name,
+                    url: &url,
+                    triggers: &triggers,
+                    token: &token,
+                },
+                user_id,
+                now,
+            )
+        })
+        .await?;
+    Ok(Redirect::to(&format!("/c/{channel_id}/settings")))
+}
+
+async fn delete_outgoing(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path((channel_id, hook_id)): Path<(i64, i64)>,
+) -> AppResult<Redirect> {
+    managed_channel(&state, &user, channel_id).await?;
+    state
+        .db
+        .call(move |conn| store::delete_outgoing_webhook(conn, channel_id, hook_id))
+        .await?;
+    Ok(Redirect::to(&format!("/c/{channel_id}/settings")))
 }
 
 async fn directory(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {

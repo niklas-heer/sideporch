@@ -621,6 +621,17 @@ async fn post_message(
     }
     if input.files.is_empty()
         && let Some((name, text)) = automations::CommandCall::parse(&body)
+        && name == "poll"
+        && !state
+            .automations
+            .commands()
+            .iter()
+            .any(|command| command.name == "poll")
+    {
+        return post_poll(&state, &user, channel_id, input.parent_id, &text, &headers).await;
+    }
+    if input.files.is_empty()
+        && let Some((name, text)) = automations::CommandCall::parse(&body)
         && let Some(answers) =
             run_command(&state, &user, &channel, input.parent_id, name, text).await?
     {
@@ -653,6 +664,8 @@ async fn post_message(
             attachments: Vec::new(),
             files,
             gif,
+            poll: Vec::new(),
+            buttons: Vec::new(),
         },
     )
     .await?;
@@ -664,6 +677,64 @@ async fn post_message(
         |parent| format!("/c/{channel_id}/t/{parent}"),
     );
     Ok(Redirect::to(&target).into_response())
+}
+
+/// Reads `/poll Question? | One | Two` or `/poll "Question?" "One" "Two"`.
+fn parse_poll(text: &str) -> Option<(String, Vec<String>)> {
+    let parts: Vec<String> = if text.contains('|') {
+        text.split('|').map(|part| part.trim().to_owned()).collect()
+    } else {
+        text.split(['"', '“', '”'])
+            .skip(1)
+            .step_by(2)
+            .map(|part| part.trim().to_owned())
+            .collect()
+    };
+    let mut parts = parts.into_iter().filter(|part| !part.is_empty());
+    let question = parts.next()?;
+    let options: Vec<String> = parts
+        .map(|option| option.chars().take(100).collect())
+        .collect();
+    ((2..=10).contains(&options.len()) && question.chars().count() <= 300)
+        .then_some((question, options))
+}
+
+/// Posts a poll from `/poll`, or explains how to write one.
+async fn post_poll(
+    state: &AppState,
+    user: &CurrentUser,
+    channel_id: i64,
+    parent_id: Option<i64>,
+    text: &str,
+    headers: &HeaderMap,
+) -> AppResult<Response> {
+    let Some((question, options)) = parse_poll(text) else {
+        return Ok(command_answer(
+            headers,
+            channel_id,
+            parent_id,
+            &["Write a poll like `/poll Where do we eat? | Pizza | Tacos` or `/poll \"Where do we eat?\" \"Pizza\" \"Tacos\"`, with 2 to 10 options.".to_owned()],
+        ));
+    };
+    messages::post(
+        state,
+        Draft {
+            channel_id,
+            parent_id,
+            sender: Sender::User(user.id),
+            body: question,
+            attachments: Vec::new(),
+            files: Vec::new(),
+            gif: None,
+            poll: options,
+            buttons: Vec::new(),
+        },
+    )
+    .await?;
+    if wants_no_content(headers) {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+    Ok(Redirect::to(&format!("/c/{channel_id}")).into_response())
 }
 
 /// Runs a slash command and returns its private answers, or `None` if no
@@ -778,6 +849,11 @@ fn command_answer(
 const BUILT_IN_COMMANDS: &[(&str, &str, &str)] = &[
     ("help", "", "List the commands"),
     ("remind", "me <when> to <what>", "Remind yourself later"),
+    (
+        "poll",
+        "Question? | Option | Option",
+        "Ask everyone to vote",
+    ),
 ];
 
 /// Slash commands for the composer's suggestions.
@@ -984,12 +1060,16 @@ async fn channel_settings(
                 (Vec::new(), Vec::new())
             };
             Ok((
-                store::webhooks(conn, channel_id)?,
+                (
+                    store::webhooks(conn, channel_id)?,
+                    store::outgoing_webhooks(conn, channel_id)?,
+                ),
                 store::sidebar(conn, user_id)?,
                 people,
             ))
         })
         .await?;
+    let (hooks, outgoing) = hooks;
     let shell = Shell {
         user: &user,
         sidebar: &sidebar,
@@ -1003,6 +1083,7 @@ async fn channel_settings(
             base_url: &base_url(&state, &headers),
             members: &people.0,
             everyone: &people.1,
+            outgoing: &outgoing,
         },
     ))
 }
@@ -1116,6 +1197,8 @@ async fn incoming_webhook(
         attachments: parsed.attachments,
         files: Vec::new(),
         gif: None,
+        poll: Vec::new(),
+        buttons: Vec::new(),
     };
     match messages::post(&state, draft).await {
         Ok(_) => (StatusCode::OK, "ok").into_response(),

@@ -19,10 +19,11 @@ pub enum EventKind {
     ReactionRemoved,
     MemberJoined,
     ChannelCreated,
+    Button,
 }
 
 impl EventKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Message,
         Self::MessageChanged,
         Self::MessageDeleted,
@@ -30,6 +31,7 @@ impl EventKind {
         Self::ReactionRemoved,
         Self::MemberJoined,
         Self::ChannelCreated,
+        Self::Button,
     ];
 
     pub const fn name(self) -> &'static str {
@@ -41,6 +43,7 @@ impl EventKind {
             Self::ReactionRemoved => "reaction_removed",
             Self::MemberJoined => "member_joined",
             Self::ChannelCreated => "channel_created",
+            Self::Button => "button",
         }
     }
 
@@ -128,6 +131,17 @@ pub struct ChannelEvent {
     pub username: String,
 }
 
+/// Someone clicked a button under an automation's message. Only that
+/// automation hears about it.
+#[derive(Debug, Clone)]
+pub struct ButtonEvent {
+    pub value: String,
+    pub label: String,
+    pub user: String,
+    pub username: String,
+    pub message: MessageEvent,
+}
+
 #[derive(Debug, Clone)]
 pub enum Event {
     Message(MessageEvent),
@@ -138,6 +152,7 @@ pub enum Event {
     Reaction(ReactionEvent),
     MemberJoined(MemberEvent),
     ChannelCreated(ChannelEvent),
+    Button(ButtonEvent),
 }
 
 impl Event {
@@ -150,6 +165,7 @@ impl Event {
             Self::Reaction(_) => EventKind::ReactionRemoved,
             Self::MemberJoined(_) => EventKind::MemberJoined,
             Self::ChannelCreated(_) => EventKind::ChannelCreated,
+            Self::Button(_) => EventKind::Button,
         }
     }
 
@@ -160,6 +176,7 @@ impl Event {
             | Self::MessageChanged(message)
             | Self::MessageDeleted(message) => Some(&message.channel),
             Self::Reaction(reaction) => Some(&reaction.message.channel),
+            Self::Button(click) => Some(&click.message.channel),
             Self::ChannelCreated(channel) => Some(&channel.channel),
             Self::MemberJoined(_) => None,
         }
@@ -172,6 +189,7 @@ impl Event {
             | Self::MessageChanged(message)
             | Self::MessageDeleted(message) => message.username.as_deref(),
             Self::Reaction(reaction) => Some(&reaction.username),
+            Self::Button(click) => Some(&click.username),
             Self::MemberJoined(member) => Some(&member.username),
             Self::ChannelCreated(channel) => Some(&channel.username),
         }
@@ -184,6 +202,8 @@ impl Event {
             | Self::MessageChanged(message)
             | Self::MessageDeleted(message) => Some(&message.text),
             Self::Reaction(reaction) => Some(&reaction.message.text),
+            // `pattern` filters match the button's value.
+            Self::Button(click) => Some(&click.value),
             Self::MemberJoined(_) | Self::ChannelCreated(_) => None,
         }
     }
@@ -202,6 +222,7 @@ impl Event {
             | Self::MessageChanged(message)
             | Self::MessageDeleted(message) => Some(message.thread_id.is_some()),
             Self::Reaction(reaction) => Some(reaction.message.thread_id.is_some()),
+            Self::Button(click) => Some(click.message.thread_id.is_some()),
             Self::MemberJoined(_) | Self::ChannelCreated(_) => None,
         }
     }

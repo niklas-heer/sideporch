@@ -691,6 +691,8 @@ pub fn message_item(
                 }
                 @if message.deleted {
                     p class="italic text-muted dark:text-haint" { "This message was deleted." }
+                } @else if let Some(poll) = &message.poll {
+                    (poll_card(message, poll, render))
                 } @else if !message.body.is_empty() {
                     div class="rich" data-body { (render.body(message)) }
                 }
@@ -702,6 +704,9 @@ pub fn message_item(
                 }
                 @if let Some(preview) = &message.preview {
                     (preview_card(preview))
+                }
+                @if !message.buttons.is_empty() && !message.deleted {
+                    (button_row(message))
                 }
                 @for attachment in &message.attachments {
                     (attachment_card(attachment, render))
@@ -755,6 +760,57 @@ fn gif_card(gif: &Gif) -> Markup {
                 class="block h-auto max-h-64 w-auto max-w-full rounded-lg bg-screen dark:bg-night-2";
             @if let Some(credit) = credit {
                 figcaption class="mt-0.5 text-xs text-muted dark:text-haint" { (credit) }
+            }
+        }
+    }
+}
+
+/// A poll: the question, then an option per button with a bar for its
+/// share of the votes. Buttons carry their voters, so app.js marks the
+/// viewer's own vote in live updates.
+fn poll_card(message: &Message, poll: &crate::store::Poll, render: &Render<'_>) -> Markup {
+    let total = poll.total();
+    let action = format!("/c/{}/m/{}/vote", message.channel_id, message.id);
+    html! {
+        div data-poll class="mt-1 max-w-md rounded-xl border border-line p-3 dark:border-night-line" {
+            div class="rich mb-2 font-bold" data-body { (render.body(message)) }
+            @for (index, option) in poll.options.iter().enumerate() {
+                @let share = option.voters.len().saturating_mul(100).checked_div(total).unwrap_or(0);
+                @let mine = render.viewer.is_some_and(|viewer| option.voters.contains(&viewer));
+                form method="post" action=(action) data-background class="mb-1.5" {
+                    input type="hidden" name="option" value=(index);
+                    button type="submit" data-users=(option.voters.iter().map(ToString::to_string).collect::<Vec<_>>().join(","))
+                        aria-pressed=(if mine { "true" } else { "false" }) title=(option.names.join(", "))
+                        class="relative block w-full overflow-hidden rounded-lg border border-line text-left hover:border-floor-3 aria-pressed:border-floor-3 dark:border-night-line" {
+                        span class="absolute inset-y-0 left-0 bg-haint-2 dark:bg-floor-2" style={ "width: " (share) "%" } {}
+                        span class="relative flex items-center justify-between gap-2 px-3 py-1.5" {
+                            span { (option.label) }
+                            span class="text-sm font-semibold" { (option.voters.len()) }
+                        }
+                    }
+                }
+            }
+            p class="mt-2 text-xs text-muted dark:text-haint" {
+                (total) (if total == 1 { " vote" } else { " votes" }) ". Pick again to take your vote back."
+            }
+        }
+    }
+}
+
+/// Buttons an automation put under its message.
+fn button_row(message: &Message) -> Markup {
+    let action = format!("/c/{}/m/{}/buttons", message.channel_id, message.id);
+    html! {
+        div class="mt-1.5 flex flex-wrap gap-2" {
+            @for (index, button) in message.buttons.iter().enumerate() {
+                form method="post" action=(action) data-background {
+                    input type="hidden" name="index" value=(index);
+                    button type="submit" class=(match button.style.as_str() {
+                        "primary" => "btn px-3 py-1 text-sm",
+                        "danger" => "btn-quiet px-3 py-1 text-sm text-red-700 dark:text-red-300",
+                        _ => "btn-quiet px-3 py-1 text-sm",
+                    }) { (button.label) }
+                }
             }
         }
     }

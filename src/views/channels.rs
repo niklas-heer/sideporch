@@ -6,7 +6,7 @@ use maud::{Markup, html};
 use super::{Context, Shell, avatar, channel_label, copy_row, panel_page, section, user_author};
 use crate::{
     icons::{self, icon},
-    store::{Channel, ChannelKind, DirectoryEntry, User, Webhook},
+    store::{Channel, ChannelKind, DirectoryEntry, OutgoingWebhook, User, Webhook},
 };
 
 pub struct ChannelSettings<'a> {
@@ -17,6 +17,7 @@ pub struct ChannelSettings<'a> {
     pub members: &'a [User],
     /// Everyone, to add to a private channel.
     pub everyone: &'a [User],
+    pub outgoing: &'a [OutgoingWebhook],
 }
 
 pub fn channel_settings_page(shell: &Shell<'_>, settings: &ChannelSettings<'_>) -> Markup {
@@ -36,6 +37,7 @@ pub fn channel_settings_page(shell: &Shell<'_>, settings: &ChannelSettings<'_>) 
                 (members_section(shell, settings))
             }
             (webhooks_section(settings))
+            (outgoing_section(settings))
             (section("Leave", leave_intro(channel), &html! {
                 form method="post" action={ "/c/" (channel.id) "/leave" } {
                     button type="submit" class="btn-quiet" { (icon(icons::SIGN_OUT, "h-4 w-4")) "Leave #" (channel.name) }
@@ -89,6 +91,60 @@ fn members_section(shell: &Shell<'_>, settings: &ChannelSettings<'_>) -> Markup 
                     }
                     button type="submit" class="btn shrink-0" { "Add" }
                 }
+            }
+        },
+    )
+}
+
+fn outgoing_section(settings: &ChannelSettings<'_>) -> Markup {
+    let channel = settings.channel;
+    section(
+        "Outgoing webhooks",
+        "Send people's messages here to another service as JSON, like Slack's and Mattermost's outgoing webhooks. With trigger words, only messages that start with one go out. If the service answers with JSON that has \"text\", it is posted here.",
+        &html! {
+            @if !settings.outgoing.is_empty() {
+                ul class="mb-5 space-y-4" {
+                    @for hook in settings.outgoing {
+                        li class="rounded-xl border border-line p-4 dark:border-night-line" {
+                            div class="mb-2 flex items-center gap-2" {
+                                (icon(icons::PAPER_PLANE_RIGHT, "h-5 w-5 text-floor-3 dark:text-haint"))
+                                span class="font-semibold" { (hook.name) }
+                                form method="post" action={ "/c/" (channel.id) "/outgoing/" (hook.id) "/delete" } class="ml-auto" {
+                                    button type="submit" class="btn-quiet text-sm" aria-label={ "Delete outgoing webhook " (hook.name) } {
+                                        (icon(icons::TRASH, "h-4 w-4")) "Delete"
+                                    }
+                                }
+                            }
+                            p class="truncate font-mono text-sm" { (hook.url) }
+                            p class="mt-1 text-sm text-muted dark:text-haint" {
+                                @if hook.triggers.is_empty() { "Every message" } @else { "Messages starting with " (hook.triggers.join(", ")) }
+                                " · token " code { (hook.token) }
+                            }
+                            @if let Some(at) = hook.last_at {
+                                p class="mt-1 text-sm" {
+                                    "Last sent " (super::timestamp_date(at)) ": "
+                                    @if let Some(error) = &hook.last_error { span class="text-red-700 dark:text-red-300" { (error) } }
+                                    @else { "OK" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            form method="post" action={ "/c/" (channel.id) "/outgoing" } class="grid gap-3 sm:grid-cols-2" {
+                div {
+                    label for="outgoing-name" class="field-label" { "Name" }
+                    input id="outgoing-name" name="name" required maxlength="80" placeholder="Deploy bot" class="field";
+                }
+                div {
+                    label for="outgoing-triggers" class="field-label" { "Trigger words (optional)" }
+                    input id="outgoing-triggers" name="triggers" maxlength="200" placeholder="!deploy, !status" class="field";
+                }
+                div class="sm:col-span-2" {
+                    label for="outgoing-url" class="field-label" { "URL" }
+                    input id="outgoing-url" name="url" type="url" required placeholder="https://example.com/hooks/sideporch" class="field font-mono text-sm";
+                }
+                div { button type="submit" class="btn" { "Add outgoing webhook" } }
             }
         },
     )

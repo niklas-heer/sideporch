@@ -218,6 +218,41 @@ pub struct Message {
     pub pinned_by: Option<String>,
     /// What its first link shows.
     pub preview: Option<LinkPreview>,
+    pub poll: Option<Poll>,
+    /// Buttons an automation put under its message.
+    pub buttons: Vec<Button>,
+    /// The automation that posted it.
+    pub automation_id: Option<i64>,
+}
+
+/// A poll: the message text is its question.
+#[derive(Debug, Clone, Default)]
+pub struct Poll {
+    pub options: Vec<PollOption>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PollOption {
+    pub label: String,
+    pub voters: Vec<i64>,
+    pub names: Vec<String>,
+}
+
+impl Poll {
+    pub fn total(&self) -> usize {
+        self.options.iter().map(|option| option.voters.len()).sum()
+    }
+}
+
+/// A button under an automation's message. Clicking it tells the
+/// automation, with `value`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct Button {
+    pub label: String,
+    pub value: String,
+    /// `primary`, `danger`, or empty.
+    #[serde(default)]
+    pub style: String,
 }
 
 /// The title, description and image of a linked page.
@@ -279,6 +314,9 @@ pub struct NewMessage<'a> {
     pub attachments: &'a [Attachment],
     pub files: &'a [i64],
     pub gif: Option<&'a Gif>,
+    /// A poll's options; the body is its question.
+    pub poll: &'a [String],
+    pub buttons: &'a [Button],
     pub created_at: i64,
 }
 
@@ -785,11 +823,11 @@ const MESSAGE_SELECT: &str = "SELECT m.id, m.channel_id, m.parent_id, m.user_id,
         m.edited_at, m.deleted_at IS NOT NULL,
         CASE WHEN m.pinned_at IS NULL THEN NULL
              ELSE COALESCE((SELECT p.display_name FROM users p WHERE p.id = m.pinned_by), 'Someone') END,
-        m.preview
+        m.preview, m.poll, m.buttons, m.automation_id
     FROM messages m LEFT JOIN users u ON u.id = m.user_id";
 
 /// How many columns [`MESSAGE_SELECT`] reads; queries add theirs after.
-const MESSAGE_COLUMNS: usize = 19;
+const MESSAGE_COLUMNS: usize = 22;
 
 fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
     let user_id: Option<i64> = row.get(3)?;
@@ -832,7 +870,54 @@ fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
         preview: row
             .get::<_, Option<String>>(18)?
             .and_then(|json| serde_json::from_str(&json).ok()),
+        poll: row
+            .get::<_, Option<String>>(19)?
+            .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
+            .map(|labels| Poll {
+                options: labels
+                    .into_iter()
+                    .map(|label| PollOption {
+                        label,
+                        ..PollOption::default()
+                    })
+                    .collect(),
+            }),
+        buttons: row
+            .get::<_, Option<String>>(20)?
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default(),
+        automation_id: row.get(21)?,
     })
+}
+
+/// Loads poll votes for already loaded messages.
+fn hydrate_votes(conn: &Connection, messages: &mut [Message], ids: &str) -> AppResult<()> {
+    let mut statement = conn.prepare(
+        "SELECT v.message_id, v.option, v.user_id, COALESCE(u.display_name, 'Someone')
+         FROM poll_votes v LEFT JOIN users u ON u.id = v.user_id
+         WHERE v.message_id IN (SELECT value FROM json_each(?1)) ORDER BY v.created_at",
+    )?;
+    let votes = statement.query_map([ids], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    for vote in votes {
+        let (message_id, option, user_id, name) = vote?;
+        let option = messages
+            .iter_mut()
+            .find(|m| m.id == message_id)
+            .and_then(|message| message.poll.as_mut())
+            .and_then(|poll| poll.options.get_mut(usize::try_from(option).ok()?));
+        if let Some(option) = option {
+            option.voters.push(user_id);
+            option.names.push(name);
+        }
+    }
+    Ok(())
 }
 
 /// Loads files and reactions for already loaded messages.
@@ -896,6 +981,7 @@ fn hydrate(conn: &Connection, messages: &mut [Message]) -> AppResult<()> {
             });
         }
     }
+    hydrate_votes(conn, messages, &ids)?;
     let mut statement = conn.prepare(
         "SELECT r.message_id, r.emoji, a.name
          FROM automation_reactions r JOIN automations a ON a.id = r.automation_id
@@ -979,8 +1065,8 @@ pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64>
         Some(serde_json::to_string(new.attachments).map_err(crate::error::AppError::internal)?)
     };
     conn.execute(
-        "INSERT INTO messages (channel_id, parent_id, user_id, webhook_id, automation_id, bot_name, bot_icon_url, body, attachments, created_at, gif)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO messages (channel_id, parent_id, user_id, webhook_id, automation_id, bot_name, bot_icon_url, body, attachments, created_at, gif, poll, buttons)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             new.channel_id,
             new.parent_id,
@@ -992,7 +1078,13 @@ pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64>
             new.body,
             attachments,
             new.created_at,
-            new.gif.and_then(|gif| serde_json::to_string(gif).ok())
+            new.gif.and_then(|gif| serde_json::to_string(gif).ok()),
+            (!new.poll.is_empty())
+                .then(|| serde_json::to_string(new.poll).ok())
+                .flatten(),
+            (!new.buttons.is_empty())
+                .then(|| serde_json::to_string(new.buttons).ok())
+                .flatten()
         ],
     )?;
     let id = conn.last_insert_rowid();
@@ -1146,6 +1238,56 @@ pub fn set_preview(conn: &Connection, id: i64, preview: Option<&LinkPreview>) ->
         "UPDATE messages SET preview = ?1 WHERE id = ?2 AND preview IS NOT ?1 AND deleted_at IS NULL",
         params![json, id],
     )? > 0)
+}
+
+/// Votes for `option`, moves the vote there, or takes it back when it is
+/// already there.
+pub fn vote(
+    conn: &Connection,
+    message_id: i64,
+    user_id: i64,
+    option: i64,
+    now: i64,
+) -> AppResult<()> {
+    let removed = conn.execute(
+        "DELETE FROM poll_votes WHERE message_id = ?1 AND user_id = ?2 AND option = ?3",
+        params![message_id, user_id, option],
+    )?;
+    if removed == 0 {
+        conn.execute(
+            "INSERT INTO poll_votes (message_id, user_id, option, created_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (message_id, user_id) DO UPDATE SET option = excluded.option, created_at = excluded.created_at",
+            params![message_id, user_id, option, now],
+        )?;
+    }
+    Ok(())
+}
+
+/// Replaces an automation's message text and buttons, without marking it
+/// edited.
+pub fn update_bot_message(
+    conn: &Connection,
+    id: i64,
+    body: Option<&str>,
+    buttons: Option<&[Button]>,
+) -> AppResult<()> {
+    if let Some(body) = body {
+        conn.execute(
+            "UPDATE messages SET body = ?1 WHERE id = ?2",
+            params![body, id],
+        )?;
+    }
+    if let Some(buttons) = buttons {
+        let json = (!buttons.is_empty())
+            .then(|| serde_json::to_string(buttons))
+            .transpose()
+            .map_err(crate::error::AppError::internal)?;
+        conn.execute(
+            "UPDATE messages SET buttons = ?1 WHERE id = ?2",
+            params![json, id],
+        )?;
+    }
+    reindex(conn, id)
 }
 
 /// Pins or unpins a message. Returns whether it is pinned now.
@@ -1541,6 +1683,92 @@ pub fn delete_webhook(conn: &Connection, channel_id: i64, webhook_id: i64) -> Ap
     conn.execute(
         "DELETE FROM webhooks WHERE id = ?1 AND channel_id = ?2",
         params![webhook_id, channel_id],
+    )?;
+    Ok(())
+}
+
+// Outgoing webhooks
+
+#[derive(Debug, Clone)]
+pub struct OutgoingWebhook {
+    pub id: i64,
+    pub name: String,
+    pub url: String,
+    /// Words a message must start with, or empty for every message.
+    pub triggers: Vec<String>,
+    pub token: String,
+    pub last_at: Option<i64>,
+    pub last_error: Option<String>,
+}
+
+pub struct NewOutgoingWebhook<'a> {
+    pub channel_id: i64,
+    pub name: &'a str,
+    pub url: &'a str,
+    pub triggers: &'a [String],
+    pub token: &'a str,
+}
+
+pub fn create_outgoing_webhook(
+    conn: &Connection,
+    hook: &NewOutgoingWebhook<'_>,
+    created_by: i64,
+    now: i64,
+) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO outgoing_webhooks (channel_id, name, url, triggers, token, created_by, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            hook.channel_id,
+            hook.name,
+            hook.url,
+            hook.triggers.join(" "),
+            hook.token,
+            created_by,
+            now
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn outgoing_webhooks(conn: &Connection, channel_id: i64) -> AppResult<Vec<OutgoingWebhook>> {
+    let mut statement = conn.prepare(
+        "SELECT id, name, url, triggers, token, last_at, last_error
+         FROM outgoing_webhooks WHERE channel_id = ?1 ORDER BY id",
+    )?;
+    let hooks = statement.query_map([channel_id], |row| {
+        let triggers: String = row.get(3)?;
+        Ok(OutgoingWebhook {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            url: row.get(2)?,
+            triggers: triggers.split_whitespace().map(ToOwned::to_owned).collect(),
+            token: row.get(4)?,
+            last_at: row.get(5)?,
+            last_error: row.get(6)?,
+        })
+    })?;
+    Ok(hooks.collect::<Result<_, _>>()?)
+}
+
+pub fn delete_outgoing_webhook(conn: &Connection, channel_id: i64, id: i64) -> AppResult<()> {
+    conn.execute(
+        "DELETE FROM outgoing_webhooks WHERE id = ?1 AND channel_id = ?2",
+        params![id, channel_id],
+    )?;
+    Ok(())
+}
+
+pub fn record_outgoing_result(
+    conn: &Connection,
+    id: i64,
+    now: i64,
+    status: Option<u16>,
+    error: Option<&str>,
+) -> AppResult<()> {
+    conn.execute(
+        "UPDATE outgoing_webhooks SET last_at = ?1, last_status = ?2, last_error = ?3 WHERE id = ?4",
+        params![now, status, error, id],
     )?;
     Ok(())
 }
