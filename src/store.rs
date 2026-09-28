@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::{error::AppResult, webhook::Attachment};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelKind {
     Public,
     /// A named channel only its members see.
@@ -26,6 +26,80 @@ pub struct Channel {
     /// The reader muted it.
     pub muted: bool,
     pub created_by: Option<i64>,
+    /// Who may start threads, reply and react.
+    pub posting: Posting,
+    /// Whether the reader manages it: they are listed as a manager, or an
+    /// admin.
+    pub manager: bool,
+}
+
+/// Who may do something in a channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Policy {
+    #[default]
+    Everyone,
+    Managers,
+}
+
+impl Policy {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "everyone" => Some(Self::Everyone),
+            "managers" => Some(Self::Managers),
+            _ => None,
+        }
+    }
+
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Everyone => "everyone",
+            Self::Managers => "managers",
+        }
+    }
+}
+
+/// A channel's rules for new posts, thread replies and reactions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Posting {
+    pub post: Policy,
+    pub reply: Policy,
+    pub react: Policy,
+}
+
+impl Channel {
+    const fn allows(&self, policy: Policy) -> bool {
+        matches!(policy, Policy::Everyone) || self.manager
+    }
+
+    /// Whether the reader may write here: a new post, or a thread reply.
+    pub const fn may_write(&self, reply: bool) -> bool {
+        self.allows(if reply {
+            self.posting.reply
+        } else {
+            self.posting.post
+        })
+    }
+
+    pub const fn may_react(&self) -> bool {
+        self.allows(self.posting.react)
+    }
+
+    /// Why the reader can't write, for error messages.
+    pub fn write_refusal(&self, reply: bool) -> String {
+        if reply {
+            format!(
+                "Only the managers of #{} reply in threads there.",
+                self.name
+            )
+        } else if self.posting.reply == Policy::Everyone {
+            format!(
+                "Only the managers of #{} start new posts. Reply in a thread instead.",
+                self.name
+            )
+        } else {
+            format!("Only the managers of #{} post there.", self.name)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -33,8 +107,18 @@ pub struct SidebarItem {
     pub channel_id: i64,
     pub label: String,
     pub unread: bool,
-    pub private: bool,
     pub muted: bool,
+    pub look: SidebarLook,
+}
+
+/// Which icon a sidebar entry gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarLook {
+    Channel,
+    Private,
+    /// Only managers start new posts.
+    Announcement,
+    Direct,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +214,29 @@ pub fn update_profile(conn: &Connection, id: i64, edit: &ProfileEdit) -> AppResu
         ],
     )?;
     Ok(())
+}
+
+/// Someone's theme and appearance; empty values mean the team's default.
+pub fn set_user_appearance(
+    conn: &Connection,
+    id: i64,
+    theme: &str,
+    appearance: &str,
+) -> AppResult<()> {
+    conn.execute(
+        "UPDATE users SET theme = ?1, appearance = ?2 WHERE id = ?3",
+        params![theme, appearance, id],
+    )?;
+    Ok(())
+}
+
+/// Someone's own theme and appearance, empty when they use the default.
+pub fn user_appearance(conn: &Connection, id: i64) -> AppResult<(String, String)> {
+    Ok(conn.query_row(
+        "SELECT theme, appearance FROM users WHERE id = ?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?)
 }
 
 pub fn set_avatar(conn: &Connection, id: i64, file_id: Option<i64>) -> AppResult<()> {
@@ -514,6 +621,7 @@ pub fn create_channel(
     if private {
         add_member(conn, id, created_by)?;
     }
+    set_manager(conn, id, created_by, true)?;
     Ok(id)
 }
 
@@ -576,7 +684,10 @@ pub fn channel_for(conn: &Connection, channel_id: i64, user_id: i64) -> AppResul
                     (SELECT u.display_name FROM channel_members m JOIN users u ON u.id = m.user_id
                      WHERE m.channel_id = c.id AND m.user_id != ?2),
                     (SELECT u.display_name FROM users u WHERE u.id = ?2),
-                    c.private, COALESCE(p.hidden, 0), COALESCE(p.muted, 0), c.created_by
+                    c.private, COALESCE(p.hidden, 0), COALESCE(p.muted, 0), c.created_by,
+                    c.post_policy, c.reply_policy, c.react_policy,
+                    COALESCE((SELECT is_admin FROM users WHERE id = ?2), 0)
+                        OR EXISTS (SELECT 1 FROM channel_managers cm2 WHERE cm2.channel_id = c.id AND cm2.user_id = ?2)
                  FROM channels c
                  LEFT JOIN channel_prefs p ON p.channel_id = c.id AND p.user_id = ?2
                  WHERE c.id = ?1 AND {}",
@@ -606,10 +717,65 @@ pub fn channel_for(conn: &Connection, channel_id: i64, user_id: i64) -> AppResul
                     left: row.get(7)?,
                     muted: row.get(8)?,
                     created_by: row.get(9)?,
+                    // Direct conversations have no rules.
+                    posting: if kind == ChannelKind::Direct {
+                        Posting::default()
+                    } else {
+                        Posting {
+                            post: Policy::parse(&row.get::<_, String>(10)?).unwrap_or_default(),
+                            reply: Policy::parse(&row.get::<_, String>(11)?).unwrap_or_default(),
+                            react: Policy::parse(&row.get::<_, String>(12)?).unwrap_or_default(),
+                        }
+                    },
+                    manager: row.get(13)?,
                 })
             },
         )
         .optional()?)
+}
+
+pub fn set_posting(conn: &Connection, channel_id: i64, posting: Posting) -> AppResult<()> {
+    conn.execute(
+        "UPDATE channels SET post_policy = ?1, reply_policy = ?2, react_policy = ?3 WHERE id = ?4",
+        params![
+            posting.post.key(),
+            posting.reply.key(),
+            posting.react.key(),
+            channel_id
+        ],
+    )?;
+    Ok(())
+}
+
+/// A channel's managers, not counting admins.
+pub fn channel_managers(conn: &Connection, channel_id: i64) -> AppResult<Vec<User>> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT {USER_COLUMNS} FROM users WHERE id IN
+         (SELECT user_id FROM channel_managers WHERE channel_id = ?1)
+         ORDER BY display_name COLLATE NOCASE"
+    ))?;
+    let managers = statement.query_map([channel_id], user_from_row)?;
+    Ok(managers.collect::<Result<_, _>>()?)
+}
+
+pub fn set_manager(
+    conn: &Connection,
+    channel_id: i64,
+    user_id: i64,
+    manager: bool,
+) -> AppResult<()> {
+    if manager {
+        conn.execute(
+            "INSERT OR IGNORE INTO channel_managers (channel_id, user_id) VALUES (?1, ?2)",
+            params![channel_id, user_id],
+        )?;
+    } else {
+        conn.execute(
+            "DELETE FROM channel_managers WHERE channel_id = ?1 AND user_id = ?2",
+            params![channel_id, user_id],
+        )?;
+    }
+    Ok(())
 }
 
 /// Members who receive live updates for a private channel or a direct
@@ -751,7 +917,8 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
                   > COALESCE((SELECT r.last_read_id FROM reads r WHERE r.channel_id = c.id AND r.user_id = ?1), 0)";
     // Public channels someone left stay out; muted ones never look unread.
     let mut statement = conn.prepare(&format!(
-        "SELECT c.id, c.name, {unread} AND NOT COALESCE(p.muted, 0), c.private, COALESCE(p.muted, 0)
+        "SELECT c.id, c.name, {unread} AND NOT COALESCE(p.muted, 0), c.private, COALESCE(p.muted, 0),
+                c.post_policy = 'managers'
          FROM channels c LEFT JOIN channel_prefs p ON p.channel_id = c.id AND p.user_id = ?1
          WHERE c.kind = 'public' AND NOT COALESCE(p.hidden, 0) AND {}
          ORDER BY c.name COLLATE NOCASE",
@@ -763,8 +930,14 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
                 channel_id: row.get(0)?,
                 label: row.get(1)?,
                 unread: row.get(2)?,
-                private: row.get(3)?,
                 muted: row.get(4)?,
+                look: if row.get(3)? {
+                    SidebarLook::Private
+                } else if row.get(5)? {
+                    SidebarLook::Announcement
+                } else {
+                    SidebarLook::Channel
+                },
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -784,8 +957,8 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
                 channel_id: row.get(0)?,
                 label: row.get(1)?,
                 unread: row.get(2)?,
-                private: false,
                 muted: false,
+                look: SidebarLook::Direct,
             })
         })?
         .collect::<Result<_, _>>()?;

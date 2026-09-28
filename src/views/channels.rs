@@ -6,7 +6,7 @@ use maud::{Markup, html};
 use super::{Context, Shell, avatar, channel_label, copy_row, panel_page, section, user_author};
 use crate::{
     icons::{self, icon},
-    store::{Channel, ChannelKind, DirectoryEntry, OutgoingWebhook, User, Webhook},
+    store::{Channel, ChannelKind, DirectoryEntry, OutgoingWebhook, Policy, User, Webhook},
 };
 
 pub struct ChannelSettings<'a> {
@@ -15,8 +15,10 @@ pub struct ChannelSettings<'a> {
     pub base_url: &'a str,
     /// Members of a private channel.
     pub members: &'a [User],
-    /// Everyone, to add to a private channel.
+    /// Everyone, to add to a private channel or make a manager.
     pub everyone: &'a [User],
+    /// Who manages the channel, besides admins.
+    pub managers: &'a [User],
     pub outgoing: &'a [OutgoingWebhook],
 }
 
@@ -36,6 +38,7 @@ pub fn channel_settings_page(shell: &Shell<'_>, settings: &ChannelSettings<'_>) 
             @if channel.kind == ChannelKind::Private {
                 (members_section(shell, settings))
             }
+            (permissions_section(settings))
             (webhooks_section(settings))
             (outgoing_section(settings))
             (section("Leave", leave_intro(channel), &html! {
@@ -52,6 +55,83 @@ const fn leave_intro(channel: &Channel) -> &'static str {
         ChannelKind::Private => "You stop seeing it. A member has to add you again to come back.",
         _ => "It leaves your sidebar. Find it again under Browse channels.",
     }
+}
+
+fn policy_select(name: &str, label: &str, current: Policy, enabled: bool) -> Markup {
+    html! {
+        div {
+            label for={ "policy-" (name) } class="field-label" { (label) }
+            select id={ "policy-" (name) } name=(name) class="field" disabled[!enabled] {
+                option value="everyone" selected[current == Policy::Everyone] { "Everyone" }
+                option value="managers" selected[current == Policy::Managers] { "Only managers" }
+            }
+        }
+    }
+}
+
+/// Who may post, reply and react, and who manages the channel.
+fn permissions_section(settings: &ChannelSettings<'_>) -> Markup {
+    let channel = settings.channel;
+    let posting = channel.posting;
+    let candidates: Vec<&User> = settings
+        .everyone
+        .iter()
+        .filter(|user| {
+            !user.deactivated
+                && !user.is_admin
+                && !settings
+                    .managers
+                    .iter()
+                    .any(|manager| manager.id == user.id)
+        })
+        .collect();
+    section(
+        "Permissions",
+        "Managers and admins can always post. For an announcement channel, let only managers start posts while everyone replies in threads and reacts.",
+        &html! {
+            form method="post" action={ "/c/" (channel.id) "/permissions" } class="mb-6 grid gap-3 sm:grid-cols-3" {
+                (policy_select("post", "New posts", posting.post, channel.manager))
+                (policy_select("reply", "Replies in threads", posting.reply, channel.manager))
+                (policy_select("react", "Reactions and votes", posting.react, channel.manager))
+                @if channel.manager {
+                    div class="sm:col-span-3" { button type="submit" class="btn" { "Save permissions" } }
+                }
+            }
+            h3 class="mb-2 font-semibold" { "Managers" }
+            @if settings.managers.is_empty() {
+                p class="mb-3 text-sm text-muted dark:text-haint" { "Only admins manage this channel." }
+            }
+            ul class="mb-4" {
+                @for manager in settings.managers {
+                    li class="flex items-center gap-3 border-b border-line py-2 last:border-b-0 dark:border-night-line" {
+                        (avatar(&user_author(manager), &Context::default()))
+                        span class="min-w-0 flex-1 truncate" { (manager.display_name) " " span class="text-muted dark:text-haint" { "@" (manager.username) } }
+                        @if channel.manager {
+                            form method="post" action={ "/c/" (channel.id) "/managers/" (manager.id) "/remove" } {
+                                button type="submit" class="btn-quiet text-sm" { "Remove" }
+                            }
+                        }
+                    }
+                }
+            }
+            @if channel.manager && !candidates.is_empty() {
+                form method="post" action={ "/c/" (channel.id) "/managers" } class="flex items-end gap-2" {
+                    div class="flex-1" {
+                        label for="manager" class="field-label" { "Add a manager" }
+                        select id="manager" name="user_id" class="field" {
+                            @for user in candidates {
+                                option value=(user.id) { (user.display_name) " (@" (user.username) ")" }
+                            }
+                        }
+                    }
+                    button type="submit" class="btn shrink-0" { "Add" }
+                }
+            }
+            @if !channel.manager {
+                p class="text-sm text-muted dark:text-haint" { "Managers and admins change these." }
+            }
+        },
+    )
 }
 
 fn members_section(shell: &Shell<'_>, settings: &ChannelSettings<'_>) -> Markup {

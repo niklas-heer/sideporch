@@ -1,7 +1,7 @@
 //! Profiles: a page for each person, and settings for your own.
 
 use axum::{
-    Router,
+    Form, Router,
     extract::{Multipart, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Redirect, Response},
@@ -29,6 +29,79 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/people/{user_id}", get(profile))
         .route("/settings/profile", get(edit).post(save))
+        .route(
+            "/settings/appearance",
+            get(appearance).post(save_appearance),
+        )
+}
+
+async fn render_appearance(
+    state: &AppState,
+    user: &CurrentUser,
+    error: Option<&str>,
+    saved: bool,
+) -> AppResult<Markup> {
+    let user_id = user.id;
+    let ((theme, mode), (default_theme, default_mode)) = state
+        .db
+        .call(move |conn| {
+            Ok((
+                store::user_appearance(conn, user_id)?,
+                crate::themes::defaults(conn)?,
+            ))
+        })
+        .await?;
+    let sidebar = shell_data(state, user.id).await?;
+    let shell = Shell {
+        user,
+        sidebar: &sidebar,
+        current: None,
+    };
+    Ok(views::appearance::appearance_page(
+        &shell,
+        &views::appearance::Picker {
+            action: "/settings/appearance",
+            theme: &theme,
+            appearance: &mode,
+            default: Some((
+                &default_theme,
+                crate::themes::Appearance::parse(&default_mode).unwrap_or_default(),
+            )),
+        },
+        error,
+        saved,
+    ))
+}
+
+async fn appearance(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Query(query): Query<EditQuery>,
+) -> AppResult<Markup> {
+    render_appearance(&state, &user, None, query.saved.is_some()).await
+}
+
+#[derive(serde::Deserialize)]
+struct AppearanceForm {
+    #[serde(default)]
+    theme: String,
+    #[serde(default)]
+    appearance: String,
+}
+
+async fn save_appearance(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Form(form): Form<AppearanceForm>,
+) -> AppResult<Response> {
+    crate::themes::validate(&form.theme, &form.appearance)?;
+    let user_id = user.id;
+    state
+        .db
+        .call(move |conn| store::set_user_appearance(conn, user_id, &form.theme, &form.appearance))
+        .await?;
+    // Reload, so the page shows the new theme.
+    Ok(Redirect::to("/settings/appearance?saved=1").into_response())
 }
 
 async fn profile(

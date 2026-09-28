@@ -354,6 +354,26 @@ CREATE TABLE outgoing_webhooks (
 );
 CREATE INDEX outgoing_webhooks_by_channel ON outgoing_webhooks (channel_id);
 ",
+    r"
+-- Who may start threads, reply and react in a channel: `everyone`, or
+-- `managers` for announcement channels. Admins always manage.
+ALTER TABLE channels ADD COLUMN post_policy TEXT NOT NULL DEFAULT 'everyone';
+ALTER TABLE channels ADD COLUMN reply_policy TEXT NOT NULL DEFAULT 'everyone';
+ALTER TABLE channels ADD COLUMN react_policy TEXT NOT NULL DEFAULT 'everyone';
+CREATE TABLE channel_managers (
+    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (channel_id, user_id)
+);
+INSERT INTO channel_managers (channel_id, user_id)
+    SELECT id, created_by FROM channels WHERE kind = 'public' AND created_by IS NOT NULL;
+",
+    r"
+-- A theme name and `system`, `light` or `dark`; empty means the
+-- instance's default.
+ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN appearance TEXT NOT NULL DEFAULT '';
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on

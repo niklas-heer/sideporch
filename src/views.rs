@@ -11,11 +11,13 @@ use crate::{
     store::{
         Author, Channel, ChannelKind, FileRef, Gif, Invite, Message, Sidebar, SidebarItem, User,
     },
+    themes::Choice,
     webhook::Attachment,
 };
 
 pub mod account;
 pub mod admin;
+pub mod appearance;
 pub mod automations;
 pub mod channels;
 pub use channels::{ChannelSettings, channel_settings_page};
@@ -84,11 +86,14 @@ pub const ASSET_VERSION: &str = env!("SIDEPORCH_ASSET_VERSION");
 /// Consecutive messages from one author within this window share a header.
 const GROUP_WINDOW_MS: i64 = 5 * 60 * 1000;
 
-fn document(title: &str, body_class: &str, content: &Markup) -> Markup {
+fn document(title: &str, body_class: &str, choice: &Choice, content: &Markup) -> Markup {
     html! {
         (DOCTYPE)
-        html lang="en" data-assets=(ASSET_VERSION) {
+        html lang="en" data-assets=(ASSET_VERSION) data-theme=(choice.theme.id)
+            data-appearance=(choice.appearance.key()) class=[choice.dark().then_some("dark")] {
             head {
+                // Before anything else, so the page never flashes in the wrong mode.
+                script src={ "/assets/theme.js?v=" (ASSET_VERSION) } {}
                 meta charset="utf-8";
                 // Resizing for the on-screen keyboard keeps the composer visible.
                 meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content";
@@ -102,6 +107,7 @@ fn document(title: &str, body_class: &str, content: &Markup) -> Markup {
                 link rel="icon" href="/assets/icons/icon-192.png" type="image/png" sizes="192x192";
                 link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png";
                 link rel="manifest" href="/manifest.webmanifest";
+                link rel="stylesheet" href={ "/assets/themes.css?v=" (crate::themes::VERSION.as_str()) };
                 link rel="stylesheet" href={ "/assets/app.css?v=" (ASSET_VERSION) };
                 script src={ "/assets/app.js?v=" (ASSET_VERSION) } defer {}
             }
@@ -124,7 +130,12 @@ pub fn auth_page(title: &str, content: &Markup) -> Markup {
             }
         }
     };
-    document(title, "bg-floor text-ink antialiased", &page)
+    document(
+        title,
+        "bg-floor text-ink antialiased",
+        &Choice::default(),
+        &page,
+    )
 }
 
 pub fn form_error(error: Option<&str>) -> Markup {
@@ -257,10 +268,10 @@ fn sidebar_link(item: &SidebarItem, current: Option<i64>, svg: &str) -> Markup {
     } else {
         "text-haint-2 hover:bg-floor-2 data-[unread]:font-bold data-[unread]:text-white data-[muted]:opacity-60"
     };
-    let svg = if item.private {
-        icons::LOCK_SIMPLE
-    } else {
-        svg
+    let svg = match item.look {
+        crate::store::SidebarLook::Private => icons::LOCK_SIMPLE,
+        crate::store::SidebarLook::Announcement => icons::MEGAPHONE_SIMPLE,
+        crate::store::SidebarLook::Channel | crate::store::SidebarLook::Direct => svg,
     };
     html! {
         li {
@@ -315,6 +326,7 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                     (nav_link("/activity", icons::AT, "Activity", shell.sidebar.activity))
                     (nav_link("/saved", icons::BOOKMARK_SIMPLE, "Saved", false))
                     (nav_link("/scheduled", icons::CLOCK, "Scheduled", false))
+                    (nav_link("/people", icons::USERS, "People", false))
                 }
                 div class="mb-1 mt-2 flex items-center justify-between px-3 text-sm text-haint" {
                     h2 class="font-semibold" { a href="/channels/browse" class="hover:text-white hover:underline" title="Browse all channels" { "Channels" } }
@@ -352,32 +364,62 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                     button type="button" data-install-dismiss class="rounded-lg px-2 py-1 text-sm text-haint hover:text-white" { "Not now" }
                 }
             }
-            div class="flex items-center gap-1 border-t border-floor-2 px-3 py-3" {
-                a href="/people" class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-floor-2" {
-                    (icon(icons::USERS, "h-5 w-5 shrink-0"))
-                    span class="truncate" { "People" }
+            (account_menu(shell))
+        }
+    }
+}
+
+/// One entry in the account menu.
+fn menu_link(href: &str, svg: &str, label: &str) -> Markup {
+    html! {
+        a href=(href) class="flex items-center gap-2.5 rounded-lg px-3 py-1.5 hover:bg-floor-2 hover:text-white" {
+            (icon(svg, "h-4 w-4 shrink-0 opacity-80")) (label)
+        }
+    }
+}
+
+/// The signed-in person at the bottom of the sidebar, opening everything
+/// about their account. A native disclosure, so it works without scripts.
+fn account_menu(shell: &Shell<'_>) -> Markup {
+    let user = shell.user;
+    let author = Author::User {
+        id: user.id,
+        display_name: user.display_name.clone(),
+        avatar: user.avatar,
+        status_emoji: String::new(),
+    };
+    html! {
+        details data-account-menu class="relative border-t border-floor-2 px-3 py-2" {
+            summary class="flex cursor-pointer list-none items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-floor-2" {
+                div class="scale-90" { (avatar(&author, &Context::default())) }
+                span class="min-w-0 flex-1" {
+                    span class="block truncate font-semibold text-white" { (user.display_name) }
+                    span class="block truncate text-xs text-haint" { "Account and settings" }
                 }
-                a href="/emoji" class="rounded-lg p-2 hover:bg-floor-2 hover:text-white" aria-label="Custom emoji" title="Custom emoji" {
-                    (icon(icons::SMILEY, "h-5 w-5"))
-                }
-                a href="/settings/profile" class="rounded-lg p-2 hover:bg-floor-2 hover:text-white" aria-label="Your profile" title="Your profile" {
-                    (icon(icons::USER_CIRCLE, "h-5 w-5"))
-                }
-                @if shell.user.is_admin {
-                    a href="/automations" class="rounded-lg p-2 hover:bg-floor-2 hover:text-white" aria-label="Automations" title="Automations" {
-                        (icon(icons::LIGHTNING, "h-5 w-5"))
-                    }
-                    a href="/admin/system" class="rounded-lg p-2 hover:bg-floor-2 hover:text-white" aria-label="System" title="System and GIFs" {
-                        (icon(icons::GAUGE, "h-5 w-5"))
-                    }
-                }
+                (icon(icons::CARET_UP_DOWN, "h-4 w-4 shrink-0 opacity-70"))
+            }
+            nav aria-label="Account" class="absolute inset-x-3 bottom-full mb-1 space-y-0.5 rounded-xl border border-floor-3 bg-floor p-1.5 text-sm shadow-2xl" {
+                (menu_link(&format!("/people/{}", user.id), icons::USER_CIRCLE, "Your profile"))
+                (menu_link("/settings/profile", icons::PENCIL_SIMPLE, "Edit profile"))
+                (menu_link("/settings/appearance", icons::PALETTE, "Appearance"))
+                (menu_link("/settings/account", icons::KEY, "Password"))
+                (menu_link("/emoji", icons::SMILEY, "Custom emoji"))
+                (menu_link("/gifs/library", icons::GIF, "GIF library"))
                 button type="button" data-push-toggle hidden aria-pressed="false"
-                    class="rounded-lg p-2 hover:bg-floor-2 hover:text-white aria-pressed:text-lamp" aria-label="Notifications" title="Turn notifications on or off" {
-                    (icon(icons::BELL, "h-5 w-5"))
+                    class="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left hover:bg-floor-2 hover:text-white" {
+                    (icon(icons::BELL, "h-4 w-4 shrink-0 opacity-80"))
+                    span class="flex-1" { "Notifications" }
+                    span data-push-state class="text-xs text-haint" { "Off" }
                 }
+                @if user.is_admin {
+                    div class="my-1 border-t border-floor-2" {}
+                    (menu_link("/automations", icons::LIGHTNING, "Automations"))
+                    (menu_link("/admin/system", icons::GAUGE, "Admin"))
+                }
+                div class="my-1 border-t border-floor-2" {}
                 form method="post" action="/logout" {
-                    button type="submit" class="rounded-lg p-2 hover:bg-floor-2 hover:text-white" aria-label="Sign out" title={ "Sign out " (shell.user.display_name) } {
-                        (icon(icons::SIGN_OUT, "h-5 w-5"))
+                    button type="submit" class="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left hover:bg-floor-2 hover:text-white" {
+                        (icon(icons::SIGN_OUT, "h-4 w-4 shrink-0 opacity-80")) "Sign out"
                     }
                 }
             }
@@ -401,7 +443,7 @@ fn app_page(title: &str, shell: &Shell<'_>, data: &PageData, main: &Markup) -> M
             (main)
         }
     };
-    document(title, APP_BODY, &page)
+    document(title, APP_BODY, &shell.user.choice, &page)
 }
 
 /// The channel list on its own: the mobile home screen.
@@ -414,7 +456,7 @@ pub fn home_page(shell: &Shell<'_>) -> Markup {
             }
         }
     };
-    document("Channels", APP_BODY, &page)
+    document("Channels", APP_BODY, &shell.user.choice, &page)
 }
 
 fn back_to_channels() -> Markup {
@@ -427,6 +469,9 @@ fn back_to_channels() -> Markup {
 
 fn channel_label(channel: &Channel) -> Markup {
     let svg = match channel.kind {
+        ChannelKind::Public if channel.posting.post == crate::store::Policy::Managers => {
+            icons::MEGAPHONE_SIMPLE
+        }
         ChannelKind::Public => icons::HASH,
         ChannelKind::Private => icons::LOCK_SIMPLE,
         ChannelKind::Direct => icons::CHAT_CIRCLE_TEXT,
@@ -453,6 +498,8 @@ pub struct ChannelView<'a> {
     pub gifs: &'a crate::gifs::Settings,
     /// How many messages are pinned in the channel.
     pub pins: i64,
+    /// Minutes people can edit their messages for, if limited.
+    pub edit_window: Option<i64>,
 }
 
 pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
@@ -472,7 +519,7 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
         "flex"
     };
     let main = html! {
-        main class={ "min-w-0 flex-1 flex-col " (column) } {
+        main class={ "min-w-0 flex-1 flex-col " (column) } data-edit-minutes=[view.edit_window] {
             header class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-5 dark:border-night-line" {
                 (back_to_channels())
                 h1 class="min-w-0 text-lg font-bold" { (channel_label(channel)) }
@@ -520,7 +567,11 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
                     button type="submit" class="btn px-3 py-1 text-sm" { "Join" }
                 }
             }
-            (composer(&format!("/c/{}/messages", channel.id), None, &composer_label))
+            @if channel.may_write(false) {
+                (composer(&format!("/c/{}/messages", channel.id), None, &composer_label))
+            } @else {
+                (read_only_notice(channel, false))
+            }
         }
     };
     let thread = view
@@ -556,7 +607,10 @@ fn empty_channel(channel: &Channel) -> Markup {
                     " in the channel settings."
                 }
             }
-            @if channel.kind == ChannelKind::Public {
+            @if channel.kind == ChannelKind::Public && !channel.may_write(false) {
+                p class="mt-1 text-muted dark:text-haint" { "Announcements from the channel's managers will appear here." }
+            }
+            @if channel.kind == ChannelKind::Public && channel.may_write(false) {
                 p class="mt-1 text-muted dark:text-haint" {
                     "Write the first message below, or "
                     a href={ "/c/" (channel.id) "/settings" } class="underline underline-offset-2" { "connect a monitor or bot" }
@@ -592,7 +646,29 @@ fn thread_panel(
                 }
                 ol id="replies" { (message_list(replies, render)) }
             }
-            (composer(&format!("/c/{}/messages", channel.id), Some(root.id), "Reply"))
+            @if channel.may_write(true) {
+                (composer(&format!("/c/{}/messages", channel.id), Some(root.id), "Reply"))
+            } @else {
+                (read_only_notice(channel, true))
+            }
+        }
+    }
+}
+
+/// Takes the composer's place where the reader may not write.
+fn read_only_notice(channel: &Channel, reply: bool) -> Markup {
+    let can_reply = channel.may_write(true);
+    let can_react = channel.may_react();
+    html! {
+        div class="mx-4 mb-4 mt-2 flex items-center gap-3 rounded-xl border border-line bg-screen px-4 py-3 text-sm text-muted dark:border-night-line dark:bg-night-2 dark:text-haint" {
+            (icon(icons::MEGAPHONE_SIMPLE, "h-5 w-5 shrink-0"))
+            p {
+                @if reply { "Only managers reply in this channel's threads." }
+                @else { "Only managers start posts in #" (channel.name) "." }
+                @if !reply && can_reply { " Reply in a thread to join in" }
+                @if can_react { @if !reply && can_reply { ", or react." } @else { " You can react." } }
+                @else if !reply && can_reply { "." }
+            }
         }
     }
 }
@@ -622,7 +698,7 @@ fn composer(action: &str, parent: Option<i64>, label: &str) -> Markup {
                     (icon(icons::GIF, "h-5 w-5"))
                 }
                 textarea name="body" rows="1" maxlength="10000" aria-label=(label) placeholder=(label)
-                    class="max-h-48 min-h-6 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-hidden placeholder:text-muted" {}
+                    class="max-h-48 min-h-6 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-hidden placeholder:text-muted dark:placeholder:text-haint" {}
                 button type="button" data-schedule-button hidden title="Send later" aria-label="Send later"
                     class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night" {
                     (icon(icons::CLOCK, "h-5 w-5"))

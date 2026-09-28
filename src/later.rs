@@ -250,10 +250,12 @@ pub async fn deliver_due(state: &AppState) -> AppResult<()> {
     for message in scheduled {
         let user_id = message.user_id;
         let channel_id = message.channel_id;
+        let parent_id = message.parent_id;
         let allowed = state
             .db
             .call(move |conn| {
-                Ok(store::channel_for(conn, channel_id, user_id)?.is_some()
+                Ok(store::channel_for(conn, channel_id, user_id)?
+                    .is_some_and(|channel| channel.may_write(parent_id.is_some()))
                     && store::user(conn, user_id)?.is_some_and(|user| !user.deactivated))
             })
             .await?;

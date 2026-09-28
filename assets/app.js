@@ -32,7 +32,7 @@
       const script = document.createElement("script");
       script.src = "/assets/mermaid.js?v=12.0.0";
       script.onload = () => {
-        const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+        const dark = document.documentElement.classList.contains("dark");
         globalThis.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "neutral" });
         resolve(globalThis.mermaid);
       };
@@ -558,7 +558,7 @@
       if (event.key === "ArrowUp" && !textarea.value && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) {
         const list = document.getElementById(form.elements.parent_id ? "replies" : "messages");
         const mine = [...(list?.querySelectorAll(`li[data-user="${app?.dataset.me}"]:not([data-deleted])`) ?? [])].pop();
-        if (mine) {
+        if (mine && stillEditable(mine)) {
           event.preventDefault();
           startEdit(mine);
           return;
@@ -768,7 +768,7 @@
     const admin = app?.dataset.admin !== undefined;
     const deleted = item.dataset.deleted !== undefined;
     const entries = [];
-    if (mine && !deleted) entries.push(["Edit message", () => startEdit(item)]);
+    if (mine && !deleted && stillEditable(item)) entries.push(["Edit message", () => startEdit(item)]);
     if (!deleted) {
       entries.push([item.dataset.pinned !== undefined ? "Unpin" : "Pin to channel", () => post(`${base}/pin`)]);
       entries.push([
@@ -905,6 +905,12 @@
     if (trigger && openMessageMenu(trigger, menuExtras)) event.preventDefault();
   });
 
+  // Admins can limit how long messages stay editable.
+  function stillEditable(item) {
+    const minutes = Number(document.querySelector("[data-edit-minutes]")?.dataset.editMinutes || 0);
+    return !minutes || Date.now() - Number(item.dataset.created) <= minutes * 60000;
+  }
+
   // Edits a message in place: Enter saves, Escape cancels.
   async function startEdit(item) {
     if (item.querySelector("form[data-edit]")) return;
@@ -966,6 +972,22 @@
         hint.textContent = (await answer.text()).slice(0, 200) || "Couldn't save. Try again.";
         hint.className = "text-red-700 dark:text-red-300";
       }
+    });
+  }
+
+  // Trying on themes: the page takes a theme or mode as soon as it is picked.
+  const themePicker = document.querySelector("[data-theme-picker]");
+  if (themePicker) {
+    const root = document.documentElement;
+    const systemDark = matchMedia("(prefers-color-scheme: dark)");
+    themePicker.addEventListener("change", () => {
+      const theme = themePicker.querySelector("input[name=theme]:checked");
+      const mode = themePicker.querySelector("input[name=appearance]:checked")?.value || root.dataset.appearance;
+      if (theme?.value) root.dataset.theme = theme.value;
+      const hasLight = theme?.dataset.light !== "false";
+      const hasDark = theme?.dataset.dark !== "false";
+      const dark = !hasLight || (hasDark && (mode === "dark" || (mode === "system" && systemDark.matches)));
+      root.classList.toggle("dark", dark);
     });
   }
 
@@ -1181,7 +1203,11 @@
     const registration = await navigator.serviceWorker.register("/sw.js");
     const toggle = document.querySelector("[data-push-toggle]");
     if (!toggle || !("PushManager" in window) || !window.Notification) return;
-    const show = (subscribed) => toggle.setAttribute("aria-pressed", subscribed ? "true" : "false");
+    const show = (subscribed) => {
+      toggle.setAttribute("aria-pressed", subscribed ? "true" : "false");
+      const state = toggle.querySelector("[data-push-state]");
+      if (state) state.textContent = subscribed ? "On" : "Off";
+    };
     show(Boolean(await registration.pushManager.getSubscription()));
     toggle.hidden = false;
     toggle.addEventListener("click", async () => {
@@ -1202,6 +1228,20 @@
       });
       const response = await post("/push/subscriptions", subscription.toJSON());
       show(response.ok);
+    });
+  }
+
+  // The account menu closes on a click elsewhere or Escape.
+  const accountMenu = document.querySelector("[data-account-menu]");
+  if (accountMenu) {
+    document.addEventListener("click", (event) => {
+      if (accountMenu.open && !accountMenu.contains(event.target)) accountMenu.open = false;
+    });
+    accountMenu.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && accountMenu.open) {
+        accountMenu.open = false;
+        accountMenu.querySelector("summary")?.focus();
+      }
     });
   }
 

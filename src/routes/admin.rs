@@ -1,4 +1,4 @@
-//! The admin's system page and link preview switch.
+//! The admin's system page and message settings.
 
 use axum::{Form, Router, extract::State, routing::get};
 use maud::Markup;
@@ -16,7 +16,11 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/system", get(system_page))
-        .route("/admin/previews", get(previews_page).post(save_previews))
+        .route("/admin/messages", get(messages_page).post(save_messages))
+        .route(
+            "/admin/appearance",
+            get(appearance_page).post(save_appearance),
+        )
 }
 
 const fn require_admin(user: &CurrentUser) -> AppResult<()> {
@@ -55,37 +59,112 @@ async fn system_page(user: CurrentUser, State(state): State<AppState>) -> AppRes
     ))
 }
 
-async fn render_previews(state: &AppState, user: &CurrentUser, saved: bool) -> AppResult<Markup> {
-    let enabled = state.db.call(|conn| crate::previews::enabled(conn)).await?;
+async fn render_messages(state: &AppState, user: &CurrentUser, saved: bool) -> AppResult<Markup> {
+    let (previews, edit_window) = state
+        .db
+        .call(|conn| {
+            Ok((
+                crate::previews::enabled(conn)?,
+                crate::messages::edit_window(conn)?,
+            ))
+        })
+        .await?;
     let sidebar = shell_data(state, user.id).await?;
     let shell = Shell {
         user,
         sidebar: &sidebar,
         current: None,
     };
-    Ok(views::admin::previews_page(&shell, enabled, saved))
+    Ok(views::admin::messages_page(
+        &shell,
+        previews,
+        edit_window.unwrap_or(0),
+        saved,
+    ))
 }
 
-async fn previews_page(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
+async fn messages_page(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
     require_admin(&user)?;
-    render_previews(&state, &user, false).await
+    render_messages(&state, &user, false).await
 }
 
 #[derive(Deserialize)]
-struct PreviewsForm {
-    enabled: Option<String>,
+struct MessagesForm {
+    previews: Option<String>,
+    #[serde(default)]
+    edit_minutes: i64,
 }
 
-async fn save_previews(
+async fn save_messages(
     user: CurrentUser,
     State(state): State<AppState>,
-    Form(form): Form<PreviewsForm>,
+    Form(form): Form<MessagesForm>,
 ) -> AppResult<Markup> {
     require_admin(&user)?;
-    let enabled = form.enabled.is_some();
+    let previews = form.previews.is_some();
     state
         .db
-        .call(move |conn| crate::previews::set_enabled(conn, enabled))
+        .call(move |conn| {
+            crate::messages::set_edit_window(conn, form.edit_minutes)?;
+            crate::previews::set_enabled(conn, previews)
+        })
         .await?;
-    render_previews(&state, &user, true).await
+    render_messages(&state, &user, true).await
+}
+
+async fn render_appearance(state: &AppState, user: &CurrentUser, saved: bool) -> AppResult<Markup> {
+    let (theme, mode) = state.db.call(|conn| crate::themes::defaults(conn)).await?;
+    let sidebar = shell_data(state, user.id).await?;
+    let shell = Shell {
+        user,
+        sidebar: &sidebar,
+        current: None,
+    };
+    Ok(views::appearance::default_page(
+        &shell,
+        &views::admin::tabs("/admin/appearance"),
+        &views::appearance::Picker {
+            action: "/admin/appearance",
+            theme: &theme,
+            appearance: &mode,
+            default: None,
+        },
+        saved,
+    ))
+}
+
+#[derive(serde::Deserialize, Default)]
+struct SavedQuery {
+    saved: Option<String>,
+}
+
+async fn appearance_page(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<SavedQuery>,
+) -> AppResult<Markup> {
+    require_admin(&user)?;
+    render_appearance(&state, &user, query.saved.is_some()).await
+}
+
+#[derive(Deserialize)]
+struct AppearanceForm {
+    theme: String,
+    appearance: String,
+}
+
+async fn save_appearance(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Form(form): Form<AppearanceForm>,
+) -> AppResult<axum::response::Redirect> {
+    require_admin(&user)?;
+    if form.theme.is_empty() || form.appearance.is_empty() {
+        return Err(AppError::bad_request("Pick a theme and a mode."));
+    }
+    state
+        .db
+        .call(move |conn| crate::themes::set_defaults(conn, &form.theme, &form.appearance))
+        .await?;
+    Ok(axum::response::Redirect::to("/admin/appearance?saved=1"))
 }

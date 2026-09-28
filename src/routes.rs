@@ -562,17 +562,18 @@ async fn render_channel(
                 .collect();
             let saved = store::saved_ids(conn, user_id, &shown)?;
             let pins = store::pinned_count(conn, channel_id)?;
+            let edit_window = messages::edit_window(conn)?;
             Ok((
                 channel,
                 messages,
                 older,
                 thread,
                 sidebar,
-                (ctx, favorites, gifs, saved, pins),
+                (ctx, favorites, gifs, saved, (pins, edit_window)),
             ))
         })
         .await?;
-    let (ctx, favorites, gifs, saved, pins) = ctx;
+    let (ctx, favorites, gifs, saved, (pins, edit_window)) = ctx;
     let shell = Shell {
         user,
         sidebar: &sidebar,
@@ -591,6 +592,7 @@ async fn render_channel(
             favorites: &favorites,
             gifs: &gifs,
             pins,
+            edit_window,
         },
     ))
 }
@@ -624,7 +626,12 @@ async fn post_message(
         .call(move |conn| store::channel_for(conn, channel_id, user_id))
         .await?
         .ok_or(AppError::NotFound)?;
+    let refusal = (!channel.may_write(input.parent_id.is_some()))
+        .then(|| AppError::bad_request(channel.write_refusal(input.parent_id.is_some())));
     if let Some(send_at) = &input.send_at {
+        if let Some(refusal) = refusal {
+            return Err(refusal);
+        }
         if !input.files.is_empty() || input.gif.is_some() {
             return Err(AppError::bad_request(
                 "Only text can be scheduled. Send files and GIFs right away.",
@@ -639,15 +646,10 @@ async fn post_message(
             &[notice],
         ));
     }
-    if input.files.is_empty()
-        && let Some((name, text)) = automations::CommandCall::parse(&body)
-        && name == "poll"
-        && !state
-            .automations
-            .commands()
-            .iter()
-            .any(|command| command.name == "poll")
-    {
+    if let Some(text) = builtin_poll(&state, &body, &input) {
+        if let Some(refusal) = refusal {
+            return Err(refusal);
+        }
         return post_poll(&state, &user, channel_id, input.parent_id, &text, &headers).await;
     }
     if input.files.is_empty()
@@ -661,6 +663,10 @@ async fn post_message(
             input.parent_id,
             &answers,
         ));
+    }
+    // Slash commands still work; what would be posted is checked here.
+    if let Some(refusal) = refusal {
+        return Err(refusal);
     }
     let gif = match input.gif {
         Some(posted) => Some(gifs::resolve(&state, posted).await?),
@@ -697,6 +703,17 @@ async fn post_message(
         |parent| format!("/c/{channel_id}/t/{parent}"),
     );
     Ok(Redirect::to(&target).into_response())
+}
+
+/// The text after `/poll`, unless an automation took the command.
+fn builtin_poll(state: &AppState, body: &str, input: &MessageInput) -> Option<String> {
+    let (name, text) = automations::CommandCall::parse(body)?;
+    let taken = state
+        .automations
+        .commands()
+        .iter()
+        .any(|command| command.name == "poll");
+    (input.files.is_empty() && name == "poll" && !taken).then_some(text)
 }
 
 /// Reads `/poll Question? | One | Two` or `/poll "Question?" "One" "Two"`.
@@ -1074,11 +1091,15 @@ async fn channel_settings(
     let (hooks, sidebar, people) = state
         .db
         .call(move |conn| {
-            let people = if private {
-                (store::members(conn, channel_id)?, store::users(conn)?)
-            } else {
-                (Vec::new(), Vec::new())
-            };
+            let people = (
+                if private {
+                    store::members(conn, channel_id)?
+                } else {
+                    Vec::new()
+                },
+                store::users(conn)?,
+                store::channel_managers(conn, channel_id)?,
+            );
             Ok((
                 (
                     store::webhooks(conn, channel_id)?,
@@ -1103,6 +1124,7 @@ async fn channel_settings(
             base_url: &base_url(&state, &headers),
             members: &people.0,
             everyone: &people.1,
+            managers: &people.2,
             outgoing: &outgoing,
         },
     ))

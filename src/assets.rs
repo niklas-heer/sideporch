@@ -15,6 +15,7 @@ const EDITOR_JS: &str = include_str!("../assets/editor.js");
 /// Mermaid, gzip-compressed; see `assets/vendor/README.md`.
 const MERMAID_JS_GZ: &[u8] = include_bytes!("../assets/vendor/mermaid-12.0.0.min.js.gz");
 const SERVICE_WORKER: &str = include_str!("../assets/sw.js");
+const THEME_JS: &str = include_str!("../assets/theme.js");
 const LOGO: &str = include_str!("../assets/logo.svg");
 /// What phones and browsers need to install Sideporch as an app. PNG icons
 /// come first because iOS and Android don't use SVG app icons; the share
@@ -92,12 +93,23 @@ macro_rules! font {
     };
 }
 
-pub fn router() -> Router<AppState> {
+/// App icons, for home screens and notifications.
+fn icons() -> Router<AppState> {
     Router::new()
+        .route("/assets/icons/icon-192.png", icon!("icon-192.png"))
+        .route("/assets/icons/icon-512.png", icon!("icon-512.png"))
+        .route("/assets/icons/maskable-512.png", icon!("maskable-512.png"))
         .route(
-            "/assets/app.css",
-            get(|| async { serve("text/css; charset=utf-8", IMMUTABLE, APP_CSS.as_bytes()) }),
+            "/assets/icons/apple-touch-icon.png",
+            icon!("apple-touch-icon.png"),
         )
+        .route("/apple-touch-icon.png", icon!("apple-touch-icon.png"))
+        .route("/assets/icons/badge-96.png", icon!("badge-96.png"))
+}
+
+/// The page scripts and the service worker.
+fn scripts() -> Router<AppState> {
+    Router::new()
         .route(
             "/assets/app.js",
             get(|| async {
@@ -119,12 +131,12 @@ pub fn router() -> Router<AppState> {
             }),
         )
         .route(
-            "/assets/emoji.json",
+            "/assets/theme.js",
             get(|| async {
                 serve(
-                    "application/json",
+                    "text/javascript; charset=utf-8",
                     IMMUTABLE,
-                    crate::emoji::CATALOG.as_bytes(),
+                    THEME_JS.as_bytes(),
                 )
             }),
         )
@@ -152,6 +164,36 @@ pub fn router() -> Router<AppState> {
                 )
             }),
         )
+}
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .merge(icons())
+        .merge(scripts())
+        .route(
+            "/assets/app.css",
+            get(|| async { serve("text/css; charset=utf-8", IMMUTABLE, APP_CSS.as_bytes()) }),
+        )
+        .route(
+            "/assets/themes.css",
+            get(|| async {
+                serve(
+                    "text/css; charset=utf-8",
+                    IMMUTABLE,
+                    crate::themes::CSS.as_bytes(),
+                )
+            }),
+        )
+        .route(
+            "/assets/emoji.json",
+            get(|| async {
+                serve(
+                    "application/json",
+                    IMMUTABLE,
+                    crate::emoji::CATALOG.as_bytes(),
+                )
+            }),
+        )
         .route(
             "/assets/logo.svg",
             get(|| async { serve("image/svg+xml", DAY, LOGO.as_bytes()) }),
@@ -160,15 +202,6 @@ pub fn router() -> Router<AppState> {
             "/favicon.ico",
             get(|| async { serve("image/svg+xml", DAY, LOGO.as_bytes()) }),
         )
-        .route("/assets/icons/icon-192.png", icon!("icon-192.png"))
-        .route("/assets/icons/icon-512.png", icon!("icon-512.png"))
-        .route("/assets/icons/maskable-512.png", icon!("maskable-512.png"))
-        .route(
-            "/assets/icons/apple-touch-icon.png",
-            icon!("apple-touch-icon.png"),
-        )
-        .route("/apple-touch-icon.png", icon!("apple-touch-icon.png"))
-        .route("/assets/icons/badge-96.png", icon!("badge-96.png"))
         .route(
             "/offline",
             get(|| async { serve("text/html; charset=utf-8", DAY, OFFLINE.as_bytes()) }),

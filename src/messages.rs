@@ -234,6 +234,40 @@ fn publish_changed(
     );
 }
 
+/// How long people can edit their messages, in minutes; empty or 0 for no
+/// limit, the default.
+const EDIT_WINDOW: &str = "messages.edit_minutes";
+
+/// The choices admins have.
+pub const EDIT_WINDOWS: &[(i64, &str)] = &[
+    (0, "No limit"),
+    (15, "15 minutes"),
+    (60, "1 hour"),
+    (360, "6 hours"),
+    (1440, "1 day"),
+    (10_080, "1 week"),
+];
+
+pub fn edit_window(conn: &rusqlite::Connection) -> AppResult<Option<i64>> {
+    Ok(store::setting(conn, EDIT_WINDOW)?
+        .and_then(|minutes| minutes.parse::<i64>().ok())
+        .filter(|minutes| *minutes > 0))
+}
+
+pub fn set_edit_window(conn: &rusqlite::Connection, minutes: i64) -> AppResult<()> {
+    if !EDIT_WINDOWS.iter().any(|(choice, _)| *choice == minutes) {
+        return Err(AppError::bad_request(
+            "Pick how long messages can be edited.",
+        ));
+    }
+    store::set_setting(conn, EDIT_WINDOW, &minutes.to_string())
+}
+
+/// Whether a message sent at `created_at` can still be edited at `now`.
+pub fn editable(window: Option<i64>, created_at: i64, now: i64) -> bool {
+    window.is_none_or(|minutes| now.saturating_sub(created_at) <= minutes.saturating_mul(60_000))
+}
+
 /// Who may change a message: its author edits it; its author or an admin
 /// deletes it.
 pub enum Change {
@@ -266,6 +300,16 @@ pub async fn change(
                 Change::Edit(body) => {
                     if !own {
                         return Err(AppError::Forbidden);
+                    }
+                    let window = edit_window(&tx)?;
+                    if !editable(window, message.created_at, now) {
+                        let label = EDIT_WINDOWS
+                            .iter()
+                            .find(|(minutes, _)| Some(*minutes) == window)
+                            .map_or("a while", |(_, label)| label);
+                        return Err(AppError::bad_request(format!(
+                            "Messages can only be edited for {label} after sending."
+                        )));
                     }
                     store::edit_message(&tx, message_id, body, now)?;
                 }
@@ -350,7 +394,14 @@ pub async fn toggle_reaction(
     let (message, audience, ctx, event) = state
         .db
         .call(move |conn| {
-            store::channel_for(conn, channel_id, user_id)?.ok_or(AppError::NotFound)?;
+            let channel =
+                store::channel_for(conn, channel_id, user_id)?.ok_or(AppError::NotFound)?;
+            if !channel.may_react() {
+                return Err(AppError::bad_request(format!(
+                    "Only the managers of #{} react there.",
+                    channel.name
+                )));
+            }
             let message = store::message(conn, message_id)?
                 .filter(|message| message.channel_id == channel_id && !message.deleted)
                 .ok_or(AppError::NotFound)?;

@@ -730,8 +730,15 @@ async fn links_get_previews_unless_turned_off() {
     );
 
     // Admins turn them off.
-    admin.post("/admin/previews", &[]).await;
-    assert!(!admin.page("/admin/previews").await.contains("checked"));
+    admin
+        .post("/admin/messages", &[("edit_minutes", "0")])
+        .await;
+    assert!(
+        !admin
+            .page("/admin/messages")
+            .await
+            .contains(r#"name="previews" value="on" checked"#)
+    );
     admin
         .send(general, &format!("Again: {site}/guide"), None)
         .await;
@@ -1252,4 +1259,235 @@ async fn phones_can_install_share_and_come_back_after_signing_in() {
         )
         .await;
     assert_eq!(common::location(&evil), "/");
+}
+
+#[tokio::test]
+async fn announcement_channels_let_only_managers_post() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    let news = create_channel(&admin, "news", false).await;
+    admin.send(news, "Office closed on Friday", None).await;
+    let first = last_message_id(&admin.page(&format!("/c/{news}")).await);
+
+    // Members can't change the rules.
+    let rules = [
+        ("post", "managers"),
+        ("reply", "everyone"),
+        ("react", "everyone"),
+    ];
+    assert_eq!(
+        member
+            .post(&format!("/c/{news}/permissions"), &rules)
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    admin.post(&format!("/c/{news}/permissions"), &rules).await;
+
+    // Members reply and react, but don't start posts, polls or schedules.
+    let refused = fetch_post(
+        &member,
+        &format!("/c/{news}/messages"),
+        &[("body", "Hi all")],
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        refused
+            .text()
+            .await
+            .unwrap()
+            .contains("Reply in a thread instead")
+    );
+    for form in [
+        vec![("body", "/poll Lunch? | Yes | No")],
+        vec![("body", "Later"), ("send_at", "tomorrow")],
+    ] {
+        assert_eq!(
+            fetch_post(&member, &format!("/c/{news}/messages"), &form)
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        member.send(news, "Enjoy the weekend", Some(first)).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        fetch_post(
+            &member,
+            &format!("/c/{news}/m/{first}/reactions"),
+            &[("emoji", "tada")]
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    let page = member.page(&format!("/c/{news}")).await;
+    assert!(page.contains("Only managers start posts in #news"));
+    assert!(!page.contains(r#"placeholder="Message #news""#));
+    assert!(
+        member
+            .page("/home")
+            .await
+            .contains(&format!("data-channel-link=\"{news}\""))
+    );
+}
+
+#[tokio::test]
+async fn channels_can_limit_replies_and_reactions_to_managers() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    let mo = member.user_id().await;
+    let news = create_channel(&admin, "news", false).await;
+    admin.send(news, "Office closed on Friday", None).await;
+    let first = last_message_id(&admin.page(&format!("/c/{news}")).await);
+
+    // Reactions can be limited too.
+    admin
+        .post(
+            &format!("/c/{news}/permissions"),
+            &[
+                ("post", "managers"),
+                ("reply", "managers"),
+                ("react", "managers"),
+            ],
+        )
+        .await;
+    assert_eq!(
+        fetch_post(
+            &member,
+            &format!("/c/{news}/m/{first}/reactions"),
+            &[("emoji", "eyes")]
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        member.send(news, "Thanks", Some(first)).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Managers post.
+    admin
+        .post(
+            &format!("/c/{news}/managers"),
+            &[("user_id", &mo.to_string())],
+        )
+        .await;
+    assert_eq!(
+        member.send(news, "New menu is up", None).await,
+        StatusCode::NO_CONTENT
+    );
+    assert!(
+        admin
+            .page(&format!("/c/{news}/settings"))
+            .await
+            .contains("Mo Member")
+    );
+}
+
+#[tokio::test]
+async fn admins_limit_how_long_messages_stay_editable() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    assert_eq!(
+        admin
+            .post(
+                "/admin/messages",
+                &[("edit_minutes", "7"), ("previews", "on")]
+            )
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    admin
+        .post(
+            "/admin/messages",
+            &[("edit_minutes", "15"), ("previews", "on")],
+        )
+        .await;
+    admin.send(general, "Fresh", None).await;
+    let page = admin.page(&format!("/c/{general}")).await;
+    assert!(page.contains(r#"data-edit-minutes="15""#));
+    let id = last_message_id(&page);
+    assert_eq!(
+        fetch_post(
+            &admin,
+            &format!("/c/{general}/m/{id}/edit"),
+            &[("body", "Still fresh")]
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
+#[tokio::test]
+async fn people_pick_themes_and_admins_set_the_default() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    let page = member.page("/settings/appearance").await;
+    assert_eq!(page.matches("data-theme-card").count(), 20);
+    assert!(page.contains(r#"data-theme="sideporch" data-appearance="system""#));
+    let css = member.page("/assets/themes.css").await;
+    assert!(css.contains(r#"[data-theme="nord"].dark{"#));
+
+    // The admin's default applies to everyone who hasn't chosen.
+    admin
+        .post(
+            "/admin/appearance",
+            &[("theme", "nord"), ("appearance", "dark")],
+        )
+        .await;
+    assert!(
+        member
+            .page("/home")
+            .await
+            .contains(r#"data-theme="nord" data-appearance="dark" class="dark""#)
+    );
+
+    // A person's own choice wins; dark-only themes stay dark.
+    member
+        .post(
+            "/settings/appearance",
+            &[("theme", "dracula"), ("appearance", "light")],
+        )
+        .await;
+    assert!(
+        member
+            .page("/home")
+            .await
+            .contains(r#"data-theme="dracula" data-appearance="dark" class="dark""#)
+    );
+    assert_eq!(
+        member
+            .post(
+                "/settings/appearance",
+                &[("theme", "neon"), ("appearance", "")]
+            )
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    member
+        .post("/settings/appearance", &[("theme", ""), ("appearance", "")])
+        .await;
+    assert!(member.page("/home").await.contains(r#"data-theme="nord""#));
+
+    // Everything about the account lives in one menu.
+    let home = member.page("/home").await;
+    assert!(
+        home.contains("data-account-menu")
+            && home.contains(">Appearance<")
+            && home.contains("Sign out")
+    );
+    assert!(!home.contains(">Automations<"));
+    assert!(admin.page("/home").await.contains(">Automations<"));
 }

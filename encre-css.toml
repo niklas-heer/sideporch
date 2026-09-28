@@ -1,24 +1,30 @@
 # Utility classes are generated at build time by encre-css (a Rust
 # implementation of Tailwind). build.rs scans src/ and assets/*.js.
 
+[theme]
+# Themes switch light and dark mode with a `dark` class on <html>; see
+# src/themes.rs and assets/theme.js.
+dark_mode = { class = ".dark" }
+
 [theme.colors]
-# Painted porch floorboards: the sidebar and primary buttons.
-floor = "#24403C"
-floor-2 = "#2E524D"
-floor-3 = "#3B6660"
-# Porch-ceiling "haint blue": highlights and focus rings.
-haint = "#B9E0DA"
-haint-2 = "#DCEFEC"
-# The porch light: unread and mention markers only.
-lamp = "#F5C04A"
-# Text and surfaces.
-ink = "#1B2826"
-muted = "#5A6D69"
-line = "#DCE4E2"
-screen = "#F5F8F7"
-night = "#101A19"
-night-2 = "#172422"
-night-line = "#2A3B38"
+# Colours come from the active theme (src/themes.rs), as CSS variables.
+# Sideporch's own theme: painted porch floorboards for the sidebar and
+# primary buttons (floor), porch-ceiling "haint blue" for highlights
+# (haint), and the porch light for unread markers (lamp).
+floor = "var(--floor)"
+floor-2 = "var(--floor-2)"
+floor-3 = "var(--floor-3)"
+haint = "var(--haint)"
+haint-2 = "var(--haint-2)"
+lamp = "var(--lamp)"
+ink = "var(--ink)"
+muted = "var(--muted)"
+line = "var(--line)"
+screen = "var(--screen)"
+white = "var(--white)"
+night = "var(--night)"
+night-2 = "var(--night-2)"
+night-line = "var(--night-line)"
 
 [shortcuts]
 btn = "inline-flex items-center justify-center gap-2 rounded-lg bg-floor px-4 py-2 font-semibold text-white hover:bg-floor-2 disabled:opacity-60 dark:bg-haint dark:text-night dark:hover:bg-haint-2"

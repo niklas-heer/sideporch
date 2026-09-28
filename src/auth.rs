@@ -115,6 +115,10 @@ pub struct CurrentUser {
     pub id: i64,
     pub display_name: String,
     pub is_admin: bool,
+    /// Their theme, or the instance's default.
+    pub choice: crate::themes::Choice,
+    /// Their profile picture.
+    pub avatar: Option<i64>,
 }
 
 pub async fn lookup_session(state: &AppState, token: String) -> AppResult<Option<CurrentUser>> {
@@ -125,7 +129,9 @@ pub async fn lookup_session(state: &AppState, token: String) -> AppResult<Option
         .call(move |conn| {
             Ok(conn
                 .query_row(
-                    "SELECT u.id, u.display_name, u.is_admin
+                    "SELECT u.id, u.display_name, u.is_admin, u.theme, u.appearance, u.avatar_file_id,
+                         COALESCE((SELECT value FROM settings WHERE key = 'appearance.theme'), ''),
+                         COALESCE((SELECT value FROM settings WHERE key = 'appearance.mode'), '')
                      FROM sessions s JOIN users u ON u.id = s.user_id
                      WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.deactivated_at IS NULL",
                     params![token_hash, now],
@@ -134,6 +140,13 @@ pub async fn lookup_session(state: &AppState, token: String) -> AppResult<Option
                             id: row.get(0)?,
                             display_name: row.get(1)?,
                             is_admin: row.get(2)?,
+                            choice: crate::themes::Choice::resolve(
+                                &row.get::<_, String>(3)?,
+                                &row.get::<_, String>(4)?,
+                                &row.get::<_, String>(6)?,
+                                &row.get::<_, String>(7)?,
+                            ),
+                            avatar: row.get(5)?,
                         })
                     },
                 )

@@ -30,6 +30,7 @@ mod search;
 mod secrets;
 mod store;
 mod system;
+mod themes;
 mod views;
 mod webhook;
 

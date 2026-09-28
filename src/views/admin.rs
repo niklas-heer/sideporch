@@ -13,10 +13,10 @@ use crate::{
 };
 
 /// Tabs across the admin pages.
-fn tabs(current: &str) -> Markup {
+pub fn tabs(current: &str) -> Markup {
     html! {
         nav class="mb-6 flex flex-wrap gap-2" aria-label="Admin" {
-            @for (href, label) in [("/admin/system", "System"), ("/admin/backups", "Backups"), ("/admin/gifs", "GIFs"), ("/admin/previews", "Link previews"), ("/admin/import", "Import"), ("/people", "People"), ("/automations", "Automations")] {
+            @for (href, label) in [("/admin/system", "System"), ("/admin/backups", "Backups"), ("/admin/gifs", "GIFs"), ("/admin/messages", "Messages"), ("/admin/appearance", "Appearance"), ("/admin/import", "Import"), ("/people", "People"), ("/automations", "Automations")] {
                 a href=(href) aria-current=[(href == current).then_some("page")]
                     class="rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-screen aria-[current=page]:bg-haint-2 aria-[current=page]:text-floor dark:hover:bg-night-2 dark:aria-[current=page]:bg-floor-2 dark:aria-[current=page]:text-haint-2" {
                     (label)
@@ -269,29 +269,40 @@ pub fn gifs_page(
     )
 }
 
-pub fn previews_page(shell: &Shell<'_>, enabled: bool, saved: bool) -> Markup {
+pub fn messages_page(shell: &Shell<'_>, previews: bool, edit_minutes: i64, saved: bool) -> Markup {
     panel_page(
-        "Link previews",
+        "Messages",
         shell,
-        &html! { "Link previews" },
+        &html! { "Messages" },
         &html! {
-            (tabs("/admin/previews"))
-            p class="mb-5 max-w-xl text-muted dark:text-haint" {
-                "When someone shares a link, Sideporch fetches the page and shows its title, description and image under the message. "
-                "Requests never reach private or internal addresses. Images load from the linked site. "
-                "Authors and admins can remove a preview from a message."
-            }
+            (tabs("/admin/messages"))
             @if saved {
                 p role="status" class="mb-4 rounded-lg border border-line bg-haint-2 px-3 py-2 text-sm text-floor dark:border-night-line dark:bg-floor-2 dark:text-haint-2" {
                     "Saved."
                 }
             }
-            form method="post" action="/admin/previews" class="max-w-lg space-y-4" {
+            form method="post" action="/admin/messages" class="max-w-lg space-y-6" {
+                div {
+                    label for="edit-minutes" class="field-label" { "People can edit their messages" }
+                    select id="edit-minutes" name="edit_minutes" class="field" {
+                        @for (minutes, label) in crate::messages::EDIT_WINDOWS {
+                            option value=(minutes) selected[*minutes == edit_minutes] {
+                                @if *minutes == 0 { "Any time" } @else { "For " (label) " after sending" }
+                            }
+                        }
+                    }
+                    p class="mt-1 text-sm text-muted dark:text-haint" {
+                        "A limit keeps old conversations from being rewritten; it matters more in bigger groups. Deleting always works."
+                    }
+                }
                 label class="flex gap-3" {
-                    input type="checkbox" name="enabled" value="on" checked[enabled] class="mt-1";
+                    input type="checkbox" name="previews" value="on" checked[previews] class="mt-1";
                     span {
                         span class="block font-semibold" { "Show link previews" }
-                        span class="block text-sm text-muted dark:text-haint" { "Off: links stay plain, and Sideporch never fetches them." }
+                        span class="block text-sm text-muted dark:text-haint" {
+                            "Sideporch fetches the first link in a message and shows its title, description and image. "
+                            "Requests never reach private or internal addresses; images load from the linked site. Off: links stay plain and are never fetched."
+                        }
                     }
                 }
                 button type="submit" class="btn" { "Save" }

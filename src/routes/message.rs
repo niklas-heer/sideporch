@@ -344,11 +344,21 @@ async fn vote(
     Form(form): Form<VoteForm>,
 ) -> AppResult<Response> {
     let message = readable(&state, &user, channel_id, message_id).await?;
+    let user_id = user.id;
+    let channel = state
+        .db
+        .call(move |conn| store::channel_for(conn, channel_id, user_id))
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if !channel.may_react() {
+        return Err(AppError::bad_request(
+            "Only the channel's managers vote there.",
+        ));
+    }
     let options = message.poll.as_ref().map_or(0, |poll| poll.options.len());
     if usize::try_from(form.option).map_or(true, |option| option >= options) || message.deleted {
         return Err(AppError::bad_request("That poll has no such option."));
     }
-    let user_id = user.id;
     let now = now_ms();
     state
         .db
@@ -470,11 +480,14 @@ async fn share(
     }
     let user_id = user.id;
     let channel_id = form.channel_id;
-    state
+    let channel = state
         .db
         .call(move |conn| store::channel_for(conn, channel_id, user_id))
         .await?
         .ok_or(AppError::NotFound)?;
+    if !channel.may_write(false) {
+        return Err(AppError::bad_request(channel.write_refusal(false)));
+    }
     messages::post(
         &state,
         messages::Draft {

@@ -54,7 +54,8 @@ Open <http://localhost:8080> (or <http://127.0.0.1:8080> for the Homebrew versio
 - **Markdown** as on GitHub: bold and italics, lists and task lists, tables, code blocks, quotes, links, `@mentions`, `:emoji:`, and diagrams drawn from [Mermaid](https://mermaid.js.org) code blocks.
 - **Reactions** with every emoji, **custom emoji** anyone can add, **GIFs** from the team's own library (or GIPHY or KLIPY, if an admin sets them up), **files and images** you paste or drop in, and **link previews**.
 - **Polls**: `/poll Where do we eat? | Pizza | Tacos`.
-- **Edit and delete** your messages (press ↑ in an empty box to edit your last one), and **pin** the important ones to the channel.
+- **Edit and delete** your messages (press ↑ in an empty box to edit your last one), and **pin** the important ones to the channel. Admins can limit editing to a while after sending; by default there's no limit.
+- **Announcement channels**: let only a channel's managers start posts, while everyone else replies in threads and reacts, or limit replies and reactions too.
 
 ![A #deploys channel: Gatus alerts posted through a webhook, a Mermaid diagram of the release process, and an automation asking for deploy approval with buttons in a thread.](docs/screenshots/deploys.webp)
 
@@ -83,14 +84,16 @@ Sideporch works in any mobile browser, and installs as an app: its own icon and 
 
 **Get notifications on your phone.** Your server needs HTTPS (see [Run it](#run-it)). Then:
 
-- **iPhone and iPad** (iOS 16.4 or newer): open Sideporch in Safari, tap **Share**, then **Add to Home Screen**. Open it from the home screen and tap **Turn on** in the hint at the bottom of the sidebar, or the bell. iOS only lets installed web apps send notifications, so this step is needed.
-- **Android**: open Sideporch in Chrome or Firefox and tap **Turn on** or the bell. Installing it (**Install** in the hint, or *Add to Home screen*) is optional but gives it its own window.
+- **iPhone and iPad** (iOS 16.4 or newer): open Sideporch in Safari, tap **Share**, then **Add to Home Screen**. Open it from the home screen and tap **Turn on** in the hint at the bottom of the sidebar, or **Notifications** in your account menu (your name at the bottom of the sidebar). iOS only lets installed web apps send notifications, so this step is needed.
+- **Android**: open Sideporch in Chrome or Firefox and tap **Turn on**, or **Notifications** in your account menu. Installing it (**Install** in the hint, or *Add to Home screen*) is optional but gives it its own window.
 
 Notifications cover direct messages, mentions and replies in your threads, and skip the ones you're already looking at. Each device turns them on separately. Sideporch sends them itself through the browsers' push services, so no app store account is involved; your server only needs to reach the internet.
 
 <p align="center"><img src="docs/screenshots/phones.webp" alt="Sideporch on two phones: the channel list, and a thread." width="560"></p>
 
-### Profiles and people
+### Themes, profiles and people
+
+Pick one of 20 popular themes, such as GitHub, Solarized, Gruvbox, Catppuccin, Nord, Dracula or High contrast, light, dark or following your system; admins set the team's default. Everything about your account is one click away under your name at the bottom of the sidebar.
 
 Everyone has a profile with a picture, a status, a bio and links, and picks the emoji their reaction picker shows first. Admins invite people with links, make others admins, create password reset links (no email needed), and deactivate accounts of people who leave.
 
