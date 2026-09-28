@@ -234,3 +234,140 @@ async fn deleting_keeps_threads_and_works_without_javascript() {
     let permalink = member.get(&format!("/c/{general}/m/{plain}")).await;
     assert!(common::location(&permalink).ends_with(&format!("#m{plain}")));
 }
+
+/// Signs in with a username and password, returning the browser.
+async fn sign_in(server: &common::Server, username: &str, password: &str) -> (Browser, StatusCode) {
+    let mut browser = Browser::anonymous(server);
+    let status = browser
+        .submit("/login", &[("username", username), ("password", password)])
+        .await
+        .status();
+    (browser, status)
+}
+
+#[tokio::test]
+async fn accounts_change_passwords_reset_and_deactivate() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    let mo = member.user_id().await;
+
+    // Changing the password needs the current one and signs out elsewhere.
+    let (other_device, _) = sign_in(&server, "mo", "a long password").await;
+    let wrong = member
+        .post(
+            "/settings/account",
+            &[("current", "nope"), ("password", "brand new pass")],
+        )
+        .await;
+    assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+    let changed = member
+        .post(
+            "/settings/account",
+            &[
+                ("current", "a long password"),
+                ("password", "brand new pass"),
+            ],
+        )
+        .await;
+    assert_eq!(changed.status(), StatusCode::OK);
+    assert_eq!(member.get("/home").await.status(), StatusCode::OK);
+    assert_eq!(
+        other_device.get("/home").await.status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        sign_in(&server, "mo", "brand new pass").await.1,
+        StatusCode::SEE_OTHER
+    );
+
+    // Only admins hand out reset links, and not for themselves.
+    assert_eq!(
+        member
+            .post(&format!("/people/{mo}/reset-link"), &[])
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let me = admin.user_id().await;
+    assert_eq!(
+        admin
+            .post(&format!("/people/{me}/deactivate"), &[])
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let page = admin
+        .post(&format!("/people/{mo}/reset-link"), &[])
+        .await
+        .text()
+        .await
+        .unwrap();
+    let token = between(&page, "/reset/", "<").to_owned();
+    let mut forgetful = Browser::anonymous(&server);
+    assert!(
+        forgetful
+            .page(&format!("/reset/{token}"))
+            .await
+            .contains("Mo Member")
+    );
+    let reset = forgetful
+        .submit(
+            &format!("/reset/{token}"),
+            &[("password", "remembered one")],
+        )
+        .await;
+    assert_eq!(reset.status(), StatusCode::SEE_OTHER);
+    assert_eq!(forgetful.get("/home").await.status(), StatusCode::OK);
+    assert_eq!(member.get("/home").await.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        Browser::anonymous(&server)
+            .get(&format!("/reset/{token}"))
+            .await
+            .status(),
+        StatusCode::GONE
+    );
+}
+
+#[tokio::test]
+async fn admins_grant_rights_and_deactivate_accounts() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let (forgetful, _) = {
+        invite(&server, &admin, "Mo Member", "mo").await;
+        sign_in(&server, "mo", "a long password").await
+    };
+    let mo = forgetful.user_id().await;
+    // Admin rights and deactivation.
+    admin
+        .post(&format!("/people/{mo}/admin"), &[("admin", "true")])
+        .await;
+    assert!(forgetful.page("/admin/system").await.contains("Storage"));
+    admin
+        .post(&format!("/people/{mo}/admin"), &[("admin", "false")])
+        .await;
+    assert_eq!(
+        forgetful.get("/admin/system").await.status(),
+        StatusCode::FORBIDDEN
+    );
+    admin.post(&format!("/people/{mo}/deactivate"), &[]).await;
+    assert_eq!(forgetful.get("/home").await.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        sign_in(&server, "mo", "a long password").await.1,
+        StatusCode::UNAUTHORIZED
+    );
+    let people = admin.page("/people").await;
+    assert!(between(&people, "Deactivated", "</section>").contains("Mo Member"));
+    assert!(
+        !invite(&server, &admin, "Ola Other", "ola")
+            .await
+            .page("/people")
+            .await
+            .contains("Deactivated")
+    );
+    admin.post(&format!("/people/{mo}/reactivate"), &[]).await;
+    assert_eq!(
+        sign_in(&server, "mo", "a long password").await.1,
+        StatusCode::SEE_OTHER
+    );
+}

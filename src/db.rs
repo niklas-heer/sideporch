@@ -256,6 +256,17 @@ CREATE TABLE saved_messages (
     PRIMARY KEY (user_id, message_id)
 );
 ",
+    r"
+ALTER TABLE users ADD COLUMN deactivated_at INTEGER;
+
+CREATE TABLE password_resets (
+    token_hash BLOB PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on

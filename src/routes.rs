@@ -25,6 +25,7 @@ use crate::{
     webhook,
 };
 
+mod account;
 mod admin;
 mod automation;
 mod gifs;
@@ -93,6 +94,7 @@ pub fn router(state: AppState) -> Router {
         .merge(settings::router())
         .merge(profile::router())
         .merge(admin::router())
+        .merge(account::router())
         .merge(gifs::router())
         .merge(message::router())
         .merge(assets::router())

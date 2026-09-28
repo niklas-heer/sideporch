@@ -60,9 +60,16 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context) -> Markup {
                         }
                         @if own {
                             a href="/settings/profile" class="btn-quiet" { "Edit profile" }
+                            a href="/settings/account" class="btn-quiet" { (icon(icons::KEY, "h-4 w-4")) "Password" }
                         }
                     }
+                    @if user.deactivated {
+                        p class="mt-3 rounded-lg bg-screen px-3 py-2 text-sm dark:bg-night-2" { "This account is deactivated." }
+                    }
                 }
+            }
+            @if shell.user.is_admin && !own {
+                (admin_controls(user))
             }
             @if !user.bio.is_empty() {
                 div class="rich mt-8 max-w-prose" { (PreEscaped(markdown::render(&user.bio, ctx))) }
@@ -80,6 +87,39 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context) -> Markup {
             p class="mt-8 text-sm text-muted dark:text-haint" { "Joined " (timestamp_date(user.created_at)) }
         },
     )
+}
+
+/// What an admin can do about someone else's account.
+fn admin_controls(user: &User) -> Markup {
+    let base = format!("/people/{}", user.id);
+    html! {
+        section class="mt-10 rounded-xl border border-line p-4 dark:border-night-line" {
+            h2 class="mb-3 font-bold" { "Admin" }
+            div class="flex flex-wrap gap-2" {
+                @if user.deactivated {
+                    form method="post" action={ (base) "/reactivate" } {
+                        button type="submit" class="btn-quiet" { "Reactivate account" }
+                    }
+                } @else {
+                    form method="post" action={ (base) "/reset-link" } {
+                        button type="submit" class="btn-quiet" { (icon(icons::KEY, "h-4 w-4")) "Create password reset link" }
+                    }
+                    form method="post" action={ (base) "/admin" } {
+                        input type="hidden" name="admin" value=(if user.is_admin { "false" } else { "true" });
+                        button type="submit" class="btn-quiet" {
+                            @if user.is_admin { "Remove admin rights" } @else { "Make admin" }
+                        }
+                    }
+                    form method="post" action={ (base) "/deactivate" } {
+                        button type="submit" class="btn-quiet text-red-700 dark:text-red-300" { "Deactivate account" }
+                    }
+                }
+            }
+            p class="mt-3 text-sm text-muted dark:text-haint" {
+                "Deactivating signs them out everywhere and stops their notifications. Their messages stay."
+            }
+        }
+    }
 }
 
 /// The favorites shown first in the reaction picker, or the most used.

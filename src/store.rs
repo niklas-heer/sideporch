@@ -48,6 +48,8 @@ pub struct User {
     /// Shortcode names, in the order the person chose.
     pub favorite_emoji: Vec<String>,
     pub created_at: i64,
+    /// Deactivated people can't sign in and get no notifications.
+    pub deactivated: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -57,7 +59,7 @@ pub struct ProfileLink {
 }
 
 const USER_COLUMNS: &str = "id, username, display_name, is_admin, avatar_file_id, status_emoji, \
-     status_text, bio, links, favorite_emoji, created_at";
+     status_text, bio, links, favorite_emoji, created_at, deactivated_at IS NOT NULL";
 
 fn user_from_row(row: &Row<'_>) -> rusqlite::Result<User> {
     let links: String = row.get(8)?;
@@ -77,6 +79,7 @@ fn user_from_row(row: &Row<'_>) -> rusqlite::Result<User> {
             .map(ToOwned::to_owned)
             .collect(),
         created_at: row.get(10)?,
+        deactivated: row.get(11)?,
     })
 }
 
@@ -309,7 +312,7 @@ pub fn create_user(
 pub fn login_record(conn: &Connection, username: &str) -> AppResult<Option<(i64, String)>> {
     Ok(conn
         .query_row(
-            "SELECT id, password_hash FROM users WHERE username = ?1",
+            "SELECT id, password_hash FROM users WHERE username = ?1 AND deactivated_at IS NULL",
             [username],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -332,7 +335,96 @@ pub fn user_exists(conn: &Connection, id: i64) -> AppResult<bool> {
 }
 
 pub fn delete_expired_sessions(conn: &Connection, now: i64) -> AppResult<usize> {
+    conn.execute("DELETE FROM password_resets WHERE expires_at <= ?1", [now])?;
     Ok(conn.execute("DELETE FROM sessions WHERE expires_at <= ?1", [now])?)
+}
+
+pub fn password_hash(conn: &Connection, user_id: i64) -> AppResult<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT password_hash FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+pub fn set_password(conn: &Connection, user_id: i64, hash: &str) -> AppResult<()> {
+    conn.execute(
+        "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+        params![hash, user_id],
+    )?;
+    conn.execute("DELETE FROM password_resets WHERE user_id = ?1", [user_id])?;
+    Ok(())
+}
+
+/// Signs someone out everywhere, except the session with `keep`.
+pub fn end_sessions(conn: &Connection, user_id: i64, keep: Option<&[u8]>) -> AppResult<()> {
+    conn.execute(
+        "DELETE FROM sessions WHERE user_id = ?1 AND token_hash IS NOT ?2",
+        params![user_id, keep],
+    )?;
+    Ok(())
+}
+
+/// Replaces any earlier reset link for the user with a new one.
+pub fn create_password_reset(
+    conn: &Connection,
+    token_hash: &[u8],
+    user_id: i64,
+    created_by: i64,
+    now: i64,
+    expires_at: i64,
+) -> AppResult<()> {
+    conn.execute("DELETE FROM password_resets WHERE user_id = ?1", [user_id])?;
+    conn.execute(
+        "INSERT INTO password_resets (token_hash, user_id, created_by, created_at, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![token_hash, user_id, created_by, now, expires_at],
+    )?;
+    Ok(())
+}
+
+/// Who a valid reset link is for.
+pub fn password_reset_user(
+    conn: &Connection,
+    token_hash: &[u8],
+    now: i64,
+) -> AppResult<Option<User>> {
+    let user_id: Option<i64> = conn
+        .query_row(
+            "SELECT r.user_id FROM password_resets r JOIN users u ON u.id = r.user_id
+             WHERE r.token_hash = ?1 AND r.expires_at > ?2 AND u.deactivated_at IS NULL",
+            params![token_hash, now],
+            |row| row.get(0),
+        )
+        .optional()?;
+    user_id.map_or(Ok(None), |id| user(conn, id))
+}
+
+/// Deactivates someone, signing them out everywhere, or reactivates them.
+pub fn set_deactivated(conn: &Connection, user_id: i64, at: Option<i64>) -> AppResult<()> {
+    conn.execute(
+        "UPDATE users SET deactivated_at = ?1 WHERE id = ?2",
+        params![at, user_id],
+    )?;
+    if at.is_some() {
+        end_sessions(conn, user_id, None)?;
+        conn.execute(
+            "DELETE FROM push_subscriptions WHERE user_id = ?1",
+            [user_id],
+        )?;
+        conn.execute("DELETE FROM password_resets WHERE user_id = ?1", [user_id])?;
+    }
+    Ok(())
+}
+
+pub fn set_admin(conn: &Connection, user_id: i64, is_admin: bool) -> AppResult<()> {
+    conn.execute(
+        "UPDATE users SET is_admin = ?1 WHERE id = ?2",
+        params![is_admin, user_id],
+    )?;
+    Ok(())
 }
 
 // Channels
@@ -1565,7 +1657,8 @@ pub fn notification_targets(
     }
     let text = message.body.to_lowercase();
     let everyone = public && (mentions(&text, "channel") || mentions(&text, "here"));
-    let mut statement = conn.prepare("SELECT id, lower(username) FROM users")?;
+    let mut statement =
+        conn.prepare("SELECT id, lower(username) FROM users WHERE deactivated_at IS NULL")?;
     for user in statement.query_map([], |row| {
         Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
     })? {
@@ -1923,7 +2016,7 @@ pub fn use_api_token(
     let found: Option<(i64, i64, String)> = conn
         .query_row(
             "SELECT t.id, u.id, t.name FROM api_tokens t JOIN users u ON u.id = t.user_id
-             WHERE t.token_hash = ?1 AND u.is_admin = 1",
+             WHERE t.token_hash = ?1 AND u.is_admin = 1 AND u.deactivated_at IS NULL",
             [token_hash],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )

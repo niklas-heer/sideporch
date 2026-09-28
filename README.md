@@ -27,7 +27,7 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 - **A system page** for admins: CPU and memory with a short history, database and file sizes, free disk space, and activity.
 - **Push notifications** for direct messages, thread replies and mentions, sent by Sideporch itself through Web Push. On iPhone and iPad, add Sideporch to the home screen first.
 - **Automations**: Lua scripts that react to events, run on cron schedules, answer slash commands and webhooks, call APIs with encrypted secrets, and share code through libraries. They are written in an editor with a linter, formatter, test runs and version history, and AI can write them, from the editor or through MCP.
-- Set up in the browser: the first visitor creates the admin account, then invites everyone else. No email needed.
+- Set up in the browser: the first visitor creates the admin account, then invites everyone else. No email needed: admins hand out password reset links, make other people admins, and deactivate accounts.
 - Slack-compatible incoming webhooks per channel, tested against the payloads Gatus sends.
 - Works on phones, in dark mode, and without JavaScript (pages reload instead of updating live).
 

@@ -15,6 +15,7 @@ use crate::{
     webhook::Attachment,
 };
 
+pub mod account;
 pub mod admin;
 pub mod automations;
 pub mod emoji;
@@ -103,7 +104,7 @@ fn document(title: &str, body_class: &str, content: &Markup) -> Markup {
 
 // Signed-out pages
 
-fn auth_page(title: &str, content: &Markup) -> Markup {
+pub fn auth_page(title: &str, content: &Markup) -> Markup {
     let page = html! {
         main class="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10" {
             a href="/" class="mb-8 flex items-center gap-3 self-center text-haint-2" {
@@ -128,7 +129,7 @@ pub fn form_error(error: Option<&str>) -> Markup {
     }
 }
 
-fn text_field(
+pub fn text_field(
     label: &str,
     name: &str,
     kind: &str,
@@ -1155,7 +1156,7 @@ pub fn people_page(
         &html! {
             (section("Everyone here", "Start a direct conversation with anyone on this porch.", &html! {
                 ul {
-                    @for user in users {
+                    @for user in users.iter().filter(|user| !user.deactivated) {
                         li class="flex items-center gap-3 border-b border-line py-3 last:border-b-0 dark:border-night-line" {
                             (avatar(&user_author(user), &Context::default()))
                             div class="min-w-0 flex-1" {
@@ -1167,6 +1168,7 @@ pub fn people_page(
                                 }
                                 p class="truncate text-sm text-muted dark:text-haint" { "@" (user.username) }
                             }
+                            a href={ "/people/" (user.id) } class="btn-quiet text-sm" { "Profile" }
                             a href={ "/dm/" (user.id) } class="btn-quiet text-sm" {
                                 (icon(icons::CHAT_CIRCLE_TEXT, "h-4 w-4"))
                                 @if user.id == shell.user.id { "Notes to self" } @else { "Message" }
@@ -1175,6 +1177,22 @@ pub fn people_page(
                     }
                 }
             }))
+            @if shell.user.is_admin && users.iter().any(|user| user.deactivated) {
+                (section("Deactivated", "They can't sign in. Their messages stay. Reactivate them from their profile.", &html! {
+                    ul {
+                        @for user in users.iter().filter(|user| user.deactivated) {
+                            li class="flex items-center gap-3 border-b border-line py-3 opacity-70 last:border-b-0 dark:border-night-line" {
+                                (avatar(&user_author(user), &Context::default()))
+                                div class="min-w-0 flex-1" {
+                                    p class="truncate font-semibold" { (user.display_name) }
+                                    p class="truncate text-sm text-muted dark:text-haint" { "@" (user.username) }
+                                }
+                                a href={ "/people/" (user.id) } class="btn-quiet text-sm" { "Profile" }
+                            }
+                        }
+                    }
+                }))
+            }
             @if shell.user.is_admin {
                 (section("Invite links", "Anyone with an active link can create an account. Links expire after 7 days.", &html! {
                     @if !invites.is_empty() {
