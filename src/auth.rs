@@ -53,7 +53,10 @@ pub async fn hash_password(password: String) -> AppResult<String> {
 
 pub async fn verify_password(password: String, hash: String) -> AppResult<bool> {
     tokio::task::spawn_blocking(move || {
-        let parsed = PasswordHash::new(&hash).map_err(AppError::internal)?;
+        // Accounts imported without a password have no valid hash.
+        let Ok(parsed) = PasswordHash::new(&hash) else {
+            return Ok(false);
+        };
         Ok(Argon2::default()
             .verify_password(password.as_bytes(), &parsed)
             .is_ok())

@@ -15,6 +15,7 @@ mod error;
 mod files;
 mod gifs;
 mod icons;
+mod import;
 mod later;
 mod markdown;
 mod markup;

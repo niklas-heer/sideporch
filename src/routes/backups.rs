@@ -1,10 +1,10 @@
 //! Admin → Backups: download a backup, back up on a schedule, and fetch the
-//! stored ones.
+//! stored ones. Admin → Import brings in a Slack export.
 
 use axum::{
     Form, Router,
     body::{Body, Bytes},
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -29,7 +29,16 @@ pub fn router() -> Router<AppState> {
         .route("/admin/backups/run", post(run))
         .route("/admin/backups/download", get(download))
         .route("/admin/backups/files/{name}", get(stored))
+        .route(
+            "/admin/import",
+            get(import_page)
+                .post(import)
+                .layer(DefaultBodyLimit::max(MAX_IMPORT_BYTES)),
+        )
 }
+
+/// Largest Slack export accepted.
+const MAX_IMPORT_BYTES: usize = 1024 * 1024 * 1024;
 
 const fn require_admin(user: &CurrentUser) -> AppResult<()> {
     if user.is_admin {
@@ -178,4 +187,87 @@ async fn stored(
     let settings = state.db.call(|conn| Settings::load(conn)).await?;
     let path = settings.directory(&state.data_dir).join(&name);
     send_file(path, &name, false).await
+}
+
+async fn render_import(
+    state: &AppState,
+    user: &CurrentUser,
+    report: Option<&crate::import::Report>,
+    error: Option<&str>,
+) -> AppResult<Markup> {
+    let sidebar = shell_data(state, user.id).await?;
+    let shell = Shell {
+        user,
+        sidebar: &sidebar,
+        current: None,
+    };
+    Ok(views::admin::import_page(&shell, report, error))
+}
+
+async fn import_page(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
+    require_admin(&user)?;
+    render_import(&state, &user, None, None).await
+}
+
+/// Saves the uploaded export to a temporary file, since ZIPs are read by
+/// seeking, then imports it.
+async fn import(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    mut form: Multipart,
+) -> AppResult<Response> {
+    require_admin(&user)?;
+    let path = state
+        .data_dir
+        .join(format!(".import-{}.zip", crate::auth::random_token()?));
+    let mut received = false;
+    {
+        use tokio::io::AsyncWriteExt as _;
+        let mut file = tokio::fs::File::create(&path)
+            .await
+            .map_err(AppError::internal)?;
+        while let Some(mut field) = form
+            .next_field()
+            .await
+            .map_err(|error| AppError::bad_request(error.body_text()))?
+        {
+            if field.name() != Some("export") {
+                continue;
+            }
+            while let Some(chunk) = field
+                .chunk()
+                .await
+                .map_err(|error| AppError::bad_request(error.body_text()))?
+            {
+                received = true;
+                file.write_all(&chunk).await.map_err(AppError::internal)?;
+            }
+        }
+        file.flush().await.map_err(AppError::internal)?;
+    }
+    let now = now_ms();
+    let opened = path.clone();
+    let result = if received {
+        state
+            .db
+            .call(move |conn| {
+                let file = std::fs::File::open(&opened).map_err(AppError::internal)?;
+                crate::import::slack(conn, std::io::BufReader::new(file), now)
+            })
+            .await
+    } else {
+        Err(AppError::bad_request("Choose the ZIP file Slack gave you."))
+    };
+    drop(tokio::fs::remove_file(&path).await);
+    match result {
+        Ok(report) => Ok(render_import(&state, &user, Some(&report), None)
+            .await?
+            .into_response()),
+        Err(AppError::BadRequest(message)) => Ok((
+            StatusCode::BAD_REQUEST,
+            render_import(&state, &user, None, Some(&message)).await?,
+        )
+            .into_response()),
+        Err(other) => Err(other),
+    }
 }

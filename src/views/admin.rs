@@ -16,7 +16,7 @@ use crate::{
 fn tabs(current: &str) -> Markup {
     html! {
         nav class="mb-6 flex flex-wrap gap-2" aria-label="Admin" {
-            @for (href, label) in [("/admin/system", "System"), ("/admin/backups", "Backups"), ("/admin/gifs", "GIFs"), ("/admin/previews", "Link previews"), ("/people", "People"), ("/automations", "Automations")] {
+            @for (href, label) in [("/admin/system", "System"), ("/admin/backups", "Backups"), ("/admin/gifs", "GIFs"), ("/admin/previews", "Link previews"), ("/admin/import", "Import"), ("/people", "People"), ("/automations", "Automations")] {
                 a href=(href) aria-current=[(href == current).then_some("page")]
                     class="rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-screen aria-[current=page]:bg-haint-2 aria-[current=page]:text-floor dark:hover:bg-night-2 dark:aria-[current=page]:bg-floor-2 dark:aria-[current=page]:text-haint-2" {
                     (label)
@@ -394,6 +394,68 @@ pub fn backups_page(shell: &Shell<'_>, view: &BackupsView<'_>) -> Markup {
                     ", and start it again. With Docker, run the same command in a one-off container that mounts the data volume."
                 }
             }))
+        },
+    )
+}
+
+/// `1 message`, `3 messages`.
+fn count(number: usize, noun: &str) -> String {
+    if number == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{number} {noun}s")
+    }
+}
+
+fn import_report(report: &crate::import::Report) -> Markup {
+    html! {
+        div role="status" class="mb-6 rounded-xl border border-line bg-haint-2 p-4 text-floor dark:border-night-line dark:bg-floor-2 dark:text-haint-2" {
+            p class="font-semibold" { "Imported." }
+            ul class="mt-2 list-disc pl-5 text-sm" {
+                li { (count(report.messages, "message")) ", " (count(report.reactions, "reaction")) }
+                li { (count(report.channels, "new channel")) ", " (count(report.conversations, "new direct conversation")) }
+                li { (count(report.people_created.len(), "new account")) ", " (report.people_matched) " matched to existing accounts by username" }
+                @if report.skipped > 0 { li { (count(report.skipped, "message")) " already here, skipped" } }
+            }
+            @if !report.people_created.is_empty() {
+                p class="mt-3 text-sm" {
+                    "New accounts have no password yet. Create a reset link for each person from their profile under "
+                    a href="/people" class="underline" { "People" } ": "
+                    (report.people_created.iter().map(|name| format!("@{name}")).collect::<Vec<_>>().join(", "))
+                }
+            }
+        }
+    }
+}
+
+pub fn import_page(
+    shell: &Shell<'_>,
+    report: Option<&crate::import::Report>,
+    error: Option<&str>,
+) -> Markup {
+    panel_page(
+        "Import",
+        shell,
+        &html! { "Import from Slack" },
+        &html! {
+            (tabs("/admin/import"))
+            (form_error(error))
+            @if let Some(report) = report { (import_report(report)) }
+            p class="mb-3 max-w-xl text-muted dark:text-haint" {
+                "Bring in a Slack workspace export: people, public and private channels, direct messages, threads and reactions. "
+                "Get the export in Slack under Workspace settings → Import/Export Data. "
+                "People are matched to existing accounts by username; channels by name. Importing the same export again only adds what's new."
+            }
+            p class="mb-5 max-w-xl text-sm text-muted dark:text-haint" {
+                "Slack keeps attached files behind its login, so imported messages name their files instead of showing them."
+            }
+            form method="post" action="/admin/import" enctype="multipart/form-data" class="flex flex-wrap items-end gap-3" {
+                div {
+                    label for="export" class="field-label" { "Slack export (.zip)" }
+                    input id="export" name="export" type="file" accept=".zip,application/zip" required class="field text-sm";
+                }
+                button type="submit" class="btn" { (icon(icons::UPLOAD_SIMPLE, "h-5 w-5")) "Import" }
+            }
         },
     )
 }

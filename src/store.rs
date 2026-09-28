@@ -779,7 +779,7 @@ pub fn home_channel(conn: &Connection) -> AppResult<Option<i64>> {
 // Messages
 
 const MESSAGE_SELECT: &str = "SELECT m.id, m.channel_id, m.parent_id, m.user_id, u.display_name,
-        m.bot_name, m.bot_icon_url, m.body, m.attachments, m.created_at, m.webhook_id IS NOT NULL,
+        m.bot_name, m.bot_icon_url, m.body, m.attachments, m.created_at, (m.webhook_id IS NOT NULL OR m.slack_format),
         u.avatar_file_id, COALESCE(u.status_emoji, ''), m.gif,
         (SELECT COUNT(*) FROM messages r WHERE r.parent_id = m.id),
         m.edited_at, m.deleted_at IS NOT NULL,

@@ -847,3 +847,141 @@ async fn backups_download_schedule_and_restore() {
         StatusCode::NOT_FOUND
     );
 }
+
+/// A small Slack export.
+fn slack_export() -> Vec<u8> {
+    use std::io::Write as _;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut add = |name: &str, value: &Value| {
+        zip.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(value.to_string().as_bytes()).unwrap();
+    };
+    add(
+        "users.json",
+        &json!([
+            { "id": "U1", "name": "ada", "profile": { "display_name": "Ada" } },
+            { "id": "U2", "name": "grace.h", "real_name": "Grace Hopper" },
+            { "id": "U3", "name": "gone", "deleted": true },
+            { "id": "B1", "name": "deploybot", "is_bot": true }
+        ]),
+    );
+    add(
+        "channels.json",
+        &json!([
+            { "id": "C1", "name": "general", "members": ["U1", "U2"] },
+            { "id": "C2", "name": "garden", "members": ["U1"], "topic": { "value": "Tomatoes and more" } }
+        ]),
+    );
+    add(
+        "groups.json",
+        &json!([{ "id": "G1", "name": "plans", "members": ["U1", "U2"] }]),
+    );
+    add(
+        "dms.json",
+        &json!([{ "id": "D1", "members": ["U1", "U2"] }]),
+    );
+    add(
+        "garden/2020-07-29.json",
+        &json!([
+            { "type": "message", "subtype": "channel_join", "user": "U2", "text": "<@U2> has joined", "ts": "1596036000.000100" },
+            { "type": "message", "user": "U2", "text": "Planting *today*, <@U1>?", "ts": "1596036100.000200",
+              "reactions": [{ "name": "seedling", "users": ["U1"], "count": 1 }] },
+            { "type": "message", "user": "U1", "text": "Yes!", "ts": "1596036200.000300", "thread_ts": "1596036100.000200" },
+            { "type": "message", "subtype": "bot_message", "username": "Weather", "text": "Sunny all day", "ts": "1596036300.000400" },
+            { "type": "message", "user": "U1", "text": "Photos", "ts": "1596036400.000500", "files": [{ "name": "beds.jpg" }] }
+        ]),
+    );
+    add(
+        "plans/2020-07-30.json",
+        &json!([{ "type": "message", "user": "U1", "text": "Secret shed plans", "ts": "1596120000.000100" }]),
+    );
+    add(
+        "D1/2020-07-30.json",
+        &json!([{ "type": "message", "user": "U2", "text": "Psst, Ada", "ts": "1596120100.000100" }]),
+    );
+    zip.finish().unwrap().into_inner()
+}
+
+async fn upload_export(admin: &Browser, export: Vec<u8>) -> String {
+    let form = reqwest::multipart::Form::new().part(
+        "export",
+        reqwest::multipart::Part::bytes(export).file_name("slack.zip"),
+    );
+    let response = admin
+        .client
+        .post(admin.url("/admin/import"))
+        .header("cookie", &admin.cookie)
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.text().await.unwrap()
+}
+
+#[tokio::test]
+async fn slack_exports_import_once() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let report = upload_export(&admin, slack_export()).await;
+    assert!(
+        report.contains("Imported.") && report.contains("6 messages"),
+        "{report}"
+    );
+    assert!(report.contains("@grace.h") && report.contains("1 matched"));
+
+    let directory = admin.page("/channels/browse").await;
+    assert!(directory.contains(">garden<") && directory.contains("Tomatoes and more"));
+    let garden: i64 = between(&directory, "href=\"/c/", "\"").parse().unwrap();
+    let garden = if admin
+        .page(&format!("/c/{garden}"))
+        .await
+        .contains("Sunny all day")
+    {
+        garden
+    } else {
+        garden + 1
+    };
+    let page = admin.page(&format!("/c/{garden}")).await;
+    assert!(
+        page.contains("<strong>today</strong>") && page.contains("@ada"),
+        "{page}"
+    );
+    assert!(page.contains("Weather") && page.contains("Shared in Slack: beds.jpg"));
+    assert!(page.contains("🌱") && page.contains("1 reply"));
+    assert!(!page.contains("has joined"));
+    assert!(admin.page("/search?q=secret").await.contains("shed plans"));
+
+    // Private channels and direct messages keep their members.
+    let home = admin.page("/home").await;
+    assert!(home.contains("plans") && home.contains("Grace Hopper"));
+    let people = admin.page("/people").await;
+    assert!(between(&people, "Deactivated", "</section>").contains("gone"));
+
+    // New people sign in only after an admin sends a reset link.
+    assert_eq!(
+        sign_in(&server, "grace.h", "").await.1,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // A second import adds nothing.
+    let again = upload_export(&admin, slack_export()).await;
+    assert!(
+        again.contains("0 messages") && again.contains("already here"),
+        "{again}"
+    );
+    let bad = reqwest::multipart::Form::new().part(
+        "export",
+        reqwest::multipart::Part::bytes(b"not a zip".to_vec()).file_name("x.zip"),
+    );
+    let response = admin
+        .client
+        .post(admin.url("/admin/import"))
+        .header("cookie", &admin.cookie)
+        .multipart(bad)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

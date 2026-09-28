@@ -319,6 +319,12 @@ CREATE INDEX scheduled_messages_due ON scheduled_messages (send_at);
     r"
 ALTER TABLE messages ADD COLUMN preview TEXT;
 ",
+    r"
+-- Where an imported message came from, so imports never add it twice.
+ALTER TABLE messages ADD COLUMN import_id TEXT;
+CREATE UNIQUE INDEX messages_by_import_id ON messages (import_id) WHERE import_id IS NOT NULL;
+ALTER TABLE messages ADD COLUMN slack_format INTEGER NOT NULL DEFAULT 0;
+",
 ];
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on
