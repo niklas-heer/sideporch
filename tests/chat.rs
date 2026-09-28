@@ -16,19 +16,13 @@ use common::{Browser, admin, between, home_channel, invite, location, setup_path
 use reqwest::StatusCode;
 
 #[tokio::test]
-async fn the_first_account_needs_the_setup_link() {
+async fn the_first_visitor_creates_the_admin_account() {
     let server = start().await;
     let visitor = Browser::anonymous(&server);
 
-    let response = visitor.get("/").await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert!(
-        response
-            .text()
-            .await
-            .unwrap()
-            .contains("setup link printed in the server log")
-    );
+    assert_eq!(location(&visitor.get("/").await), "/setup");
+    let page = visitor.page("/setup").await;
+    assert!(page.contains("The first person to open this page becomes the admin"));
     assert_eq!(
         visitor.get("/setup/not-the-token").await.status(),
         StatusCode::NOT_FOUND
@@ -39,11 +33,19 @@ async fn the_first_account_needs_the_setup_link() {
     let page = admin.page(&format!("/c/{general}")).await;
     assert!(page.contains("This is the start of #general."));
 
-    // The link works once; afterwards new people need an invite.
-    assert_eq!(
-        visitor.get(&setup_path(&server)).await.status(),
-        StatusCode::NOT_FOUND
-    );
+    // Setup works once; afterwards new people need an invite.
+    assert_eq!(location(&visitor.get(&setup_path(&server)).await), "/login");
+    let late = visitor
+        .post(
+            "/setup",
+            &[
+                ("display_name", "Mallory"),
+                ("username", "mallory"),
+                ("password", "too late now"),
+            ],
+        )
+        .await;
+    assert_eq!(late.status(), StatusCode::NOT_FOUND);
     assert_eq!(location(&visitor.get("/").await), "/login");
 }
 
@@ -370,11 +372,12 @@ async fn pages_ship_their_assets_and_security_headers() {
 }
 
 #[tokio::test]
-async fn the_setup_link_is_kept_private_and_removed_after_use() {
+async fn a_required_setup_link_is_kept_private_and_removed_after_use() {
     let data = tempfile::tempdir().unwrap();
     let app = sideporch::Sideporch::open(sideporch::Config {
         data_dir: data.path().to_owned(),
         public_url: None,
+        require_setup_link: true,
         allow_insecure_push: true,
     })
     .await
@@ -402,6 +405,12 @@ async fn the_setup_link_is_kept_private_and_removed_after_use() {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
+    // Without the link there is no way in.
+    let front = client.get(format!("{base}/")).send().await.unwrap();
+    assert_eq!(front.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(front.text().await.unwrap().contains("sideporch setup-link"));
+    let open = client.get(format!("{base}/setup")).send().await.unwrap();
+    assert_eq!(open.status(), StatusCode::NOT_FOUND);
     let response = client
         .post(link.trim())
         .form(&[
@@ -414,5 +423,6 @@ async fn the_setup_link_is_kept_private_and_removed_after_use() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert!(!file.exists(), "a used link is deleted");
+    assert!(app.setup_is_secret() || app.setup_path().is_none());
     assert!(app.save_setup_link(&base).unwrap().is_none());
 }

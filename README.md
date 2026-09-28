@@ -23,7 +23,7 @@ Sideporch is a small, self-hosted team chat: channels, direct messages, and thre
 - **Reactions** with emoji, and **custom emoji** anyone can add, like Slack's.
 - **Push notifications** for direct messages, thread replies and mentions, sent by Sideporch itself through Web Push. On iPhone and iPad, add Sideporch to the home screen first.
 - **Automations**: admins write small Lua scripts that answer messages, react to reactions, receive webhooks, post on a schedule, and remember data, in an editor with a linter, formatter, test runs and version history. AI can write them, from the editor or through MCP. They run sandboxed, with limits on time, memory and posts.
-- A one-time setup link for the first account, then invite links. No email needed.
+- Set up in the browser: the first visitor creates the admin account, then invites everyone else. No email needed.
 - Slack-compatible incoming webhooks per channel, tested against the payloads Gatus sends.
 - Works on phones, in dark mode, and without JavaScript (pages reload instead of updating live).
 
@@ -53,20 +53,21 @@ On NixOS, the flake provides a module: import `sideporch.nixosModules.default` a
 sideporch --data /var/lib/sideporch --public-url https://chat.example.com
 ```
 
-On first start, Sideporch creates a one-time setup link for the first account, which is an admin. When you run it in a terminal it prints the link. As a service or in a container, the link stays out of the logs, because anyone who has it can claim the instance; get it with:
+Then open Sideporch in your browser. While no account exists, the first visitor creates the admin account; after that, new people need an invite link from **People**. No email is needed.
+
+If others can reach the server before you set it up, start it with `--require-setup-link`. Setup then needs a one-time link that stays out of service and container logs. Get it on the server:
 
 ```sh
 sideporch setup-link --data /var/lib/sideporch
 docker exec <container> /sideporch setup-link
 ```
 
-The link lives in a file only the server's user can read and is deleted once used. Then open **People** to create invite links for everyone else.
-
 | Option | Environment variable | Default | Meaning |
 | --- | --- | --- | --- |
 | `--listen` | `SIDEPORCH_LISTEN` | `127.0.0.1:8080` | Address and port to listen on. |
 | `--data` | `SIDEPORCH_DATA` | `sideporch-data` | Directory for the SQLite database. |
 | `--public-url` | `SIDEPORCH_PUBLIC_URL` | derived from requests | The URL people use, for invite and webhook links. An `https://` URL also turns on secure cookies. |
+| `--require-setup-link` | `SIDEPORCH_REQUIRE_SETUP_LINK` | off | Require the one-time link from `sideporch setup-link` to create the first account. |
 
 Put Sideporch behind a reverse proxy such as Caddy for HTTPS. The proxy must pass WebSocket upgrades for `/ws`. Browsers only allow push notifications and installing Sideporch as an app over HTTPS.
 

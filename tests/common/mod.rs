@@ -22,6 +22,7 @@ pub async fn start() -> Server {
     let app = Sideporch::open(Config {
         data_dir: data.path().to_owned(),
         public_url: None,
+        require_setup_link: false,
         allow_insecure_push: true,
     })
     .await

@@ -11,7 +11,7 @@ use maud::Markup;
 use serde::Deserialize;
 
 use crate::{
-    AppState, assets,
+    AppState, Setup, assets,
     auth::{self, CurrentUser},
     error::{AppError, AppResult},
     files::{self, MessageInput},
@@ -39,6 +39,7 @@ pub fn router(state: AppState) -> Router {
         .route("/home", get(home))
         .route("/login", get(login_form).post(login))
         .route("/logout", post(logout))
+        .route("/setup", get(open_setup_form).post(open_setup))
         .route("/setup/{token}", get(setup_form).post(setup))
         .route("/join/{token}", get(join_form).post(join))
         .route("/channels/new", get(new_channel_form))
@@ -141,15 +142,19 @@ async fn signed_in(state: &AppState, headers: &HeaderMap) -> AppResult<Option<Cu
 
 async fn index(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
     if signed_in(&state, &headers).await?.is_none() {
-        if state.setup_pending() {
-            return Ok((
-                StatusCode::SERVICE_UNAVAILABLE,
-                views::error_page(
+        match state.setup() {
+            Setup::Open => return Ok(Redirect::to("/setup").into_response()),
+            Setup::Link(_) => {
+                return Ok((
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "This Sideporch isn't set up yet. Open the setup link printed in the server log.",
-                ),
-            )
-                .into_response());
+                    views::error_page(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "This Sideporch isn't set up yet. Get the one-time setup link with `sideporch setup-link` on the server.",
+                    ),
+                )
+                    .into_response());
+            }
+            Setup::Done => {}
         }
         return Ok(Redirect::to("/login").into_response());
     }
@@ -267,11 +272,36 @@ fn validate_account(input: AccountInput) -> Result<ValidAccount, (&'static str, 
     })
 }
 
+async fn open_setup_form(State(state): State<AppState>) -> AppResult<Response> {
+    match state.setup() {
+        Setup::Open => {
+            Ok(views::setup_page("/setup", true, None, &AccountForm::default()).into_response())
+        }
+        Setup::Done => Ok(Redirect::to("/login").into_response()),
+        Setup::Link(_) => Err(AppError::NotFound),
+    }
+}
+
+async fn open_setup(
+    State(state): State<AppState>,
+    Form(input): Form<AccountInput>,
+) -> AppResult<Response> {
+    if state.setup() != Setup::Open {
+        return Err(AppError::NotFound);
+    }
+    create_first_account(&state, "/setup", input).await
+}
+
 async fn setup_form(State(state): State<AppState>, Path(token): Path<String>) -> AppResult<Markup> {
     if !state.setup_token_matches(&token) {
         return Err(AppError::NotFound);
     }
-    Ok(views::setup_page(&token, None, &AccountForm::default()))
+    Ok(views::setup_page(
+        &format!("/setup/{token}"),
+        false,
+        None,
+        &AccountForm::default(),
+    ))
 }
 
 async fn setup(
@@ -282,12 +312,22 @@ async fn setup(
     if !state.setup_token_matches(&token) {
         return Err(AppError::NotFound);
     }
+    create_first_account(&state, &format!("/setup/{token}"), input).await
+}
+
+/// Creates the first account, an admin, unless someone was faster.
+async fn create_first_account(
+    state: &AppState,
+    action: &str,
+    input: AccountInput,
+) -> AppResult<Response> {
+    let open = state.setup() == Setup::Open;
     let account = match validate_account(input) {
         Ok(account) => account,
         Err((error, form)) => {
             return Ok((
                 StatusCode::BAD_REQUEST,
-                views::setup_page(&token, Some(error), &form),
+                views::setup_page(action, open, Some(error), &form),
             )
                 .into_response());
         }
@@ -316,7 +356,7 @@ async fn setup(
         .await?;
     let user_id = created.ok_or(AppError::NotFound)?;
     state.finish_setup();
-    let cookie = auth::start_session(&state, user_id).await?;
+    let cookie = auth::start_session(state, user_id).await?;
     redirect_with_cookie("/", &cookie)
 }
 

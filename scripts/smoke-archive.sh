@@ -32,12 +32,10 @@ port=$((20000 + $$ % 20000))
 server=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   if curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
-    "$temporary/sideporch" setup-link --data "$temporary/data" | grep -q "/setup/"
-    if grep -q '/setup/' "$temporary/log"; then
-      echo "the setup link leaked into the service log" >&2
-      exit 1
-    fi
-    printf 'Verified sideporch %s for %s: it starts, answers, and keeps its setup link out of the log\n' "$version" "$target"
+    # A fresh server sends the first visitor to the setup page.
+    curl -fsS -o /dev/null -w '%{redirect_url}' "http://127.0.0.1:$port/" | grep -q '/setup$'
+    "$temporary/sideporch" setup-link --data "$temporary/data" | grep -q "/setup"
+    printf 'Verified sideporch %s for %s: it starts, answers, and offers the first-account setup\n' "$version" "$target"
     exit 0
   fi
   sleep 0.5

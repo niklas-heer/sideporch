@@ -147,16 +147,23 @@ fn account_fields(form: &AccountForm) -> Markup {
     }
 }
 
-pub fn setup_page(token: &str, error: Option<&str>, form: &AccountForm) -> Markup {
+/// `open`: anyone who reaches the page can claim it, so say so.
+pub fn setup_page(action: &str, open: bool, error: Option<&str>, form: &AccountForm) -> Markup {
     auth_page(
         "Set up",
         &html! {
-            h1 class="mb-2 text-xl font-bold" { "Set up your Sideporch" }
+            h1 class="mb-2 text-xl font-bold" { "Welcome to your Sideporch" }
             p class="mb-5 text-muted dark:text-haint" {
-                "Create the first account. It can invite everyone else and manage channels."
+                "Create the admin account. It can invite everyone else, manage channels, and write automations."
+            }
+            @if open {
+                p class="mb-5 rounded-lg border border-line bg-screen px-3 py-2 text-sm text-muted dark:border-night-line dark:bg-night dark:text-haint" {
+                    "The first person to open this page becomes the admin, so finish setup now. To require a one-time link instead, start Sideporch with "
+                    code { "--require-setup-link" } "."
+                }
             }
             (form_error(error))
-            form method="post" action={ "/setup/" (token) } {
+            form method="post" action=(action) {
                 (account_fields(form))
                 button type="submit" class="btn mt-2 w-full" { "Create account" }
             }

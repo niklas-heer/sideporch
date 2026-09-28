@@ -25,14 +25,19 @@ struct Args {
     /// Used in invite and webhook links; secure cookies are enabled for https.
     #[arg(long, env = "SIDEPORCH_PUBLIC_URL")]
     public_url: Option<String>,
+    /// Require a one-time link, printed by `sideporch setup-link`, to create
+    /// the first account. Without it, the first visitor becomes the admin.
+    #[arg(long, env = "SIDEPORCH_REQUIRE_SETUP_LINK")]
+    require_setup_link: bool,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Print the one-time link for creating the first account.
+    /// Print the link for creating the first account.
     ///
     /// The running server keeps it in a file in the data directory that only
     /// its user can read. With Docker: `docker exec <container> /sideporch setup-link`.
+    /// It is only secret when the server runs with `--require-setup-link`.
     SetupLink,
 }
 
@@ -60,6 +65,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let app = Sideporch::open(Config {
         data_dir: args.data.clone(),
         public_url: args.public_url,
+        require_setup_link: args.require_setup_link,
         allow_insecure_push: false,
     })
     .await?;
@@ -70,12 +76,12 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     };
     tracing::info!(data = %args.data.display(), "Sideporch is listening on {base}");
     if let Some(file) = app.save_setup_link(&base)? {
-        // The link grants the first admin account. Show it on an interactive
-        // terminal; keep it out of service and container logs.
-        if std::io::stdout().is_terminal()
+        // A one-time link grants the first admin account. Show it on an
+        // interactive terminal; keep it out of service and container logs.
+        if (!app.setup_is_secret() || std::io::stdout().is_terminal())
             && let Some(path) = app.setup_path()
         {
-            tracing::info!("Create the first account at {base}{path}");
+            tracing::info!("No account exists yet. Open {base}{path} to create the admin account");
         } else {
             tracing::info!(
                 file = %file.display(),

@@ -41,6 +41,10 @@ pub struct Config {
     /// The public base URL, such as `https://chat.example.com`. Used for
     /// invite and webhook links; derived from each request when unset.
     pub public_url: Option<String>,
+    /// Require the one-time setup link to create the first account. By
+    /// default the first person to open Sideporch creates it; lock setup
+    /// when the server is reachable by others before you set it up.
+    pub require_setup_link: bool,
     /// Accept plain-HTTP push endpoints. Browsers only use HTTPS ones; this
     /// exists so tests can run a local push service.
     #[doc(hidden)]
@@ -56,28 +60,35 @@ pub(crate) struct AppState {
     automations: Automations,
     public_url: Option<String>,
     secure_cookies: bool,
-    /// One-time token for creating the first account, while none exists.
-    setup_token: Arc<Mutex<Option<String>>>,
+    /// How the first account can be created, while none exists.
+    setup: Arc<Mutex<Setup>>,
     /// Where the setup link is kept for `sideporch setup-link`.
     setup_file: PathBuf,
 }
 
+/// Whether and how the first account can still be created.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Setup {
+    Done,
+    /// Whoever opens `/setup` first creates the admin account.
+    Open,
+    /// Only the one-time link `/setup/<token>` works.
+    Link(String),
+}
+
 impl AppState {
-    fn setup_pending(&self) -> bool {
-        self.setup_token.lock().is_ok_and(|token| token.is_some())
+    fn setup(&self) -> Setup {
+        self.setup.lock().map_or(Setup::Done, |setup| setup.clone())
     }
 
     fn setup_token_matches(&self, candidate: &str) -> bool {
-        self.setup_token.lock().is_ok_and(|token| {
-            token
-                .as_deref()
-                .is_some_and(|token| Sha256::digest(token) == Sha256::digest(candidate))
-        })
+        matches!(self.setup(), Setup::Link(token)
+            if Sha256::digest(&token) == Sha256::digest(candidate))
     }
 
     fn finish_setup(&self) {
-        if let Ok(mut token) = self.setup_token.lock() {
-            *token = None;
+        if let Ok(mut setup) = self.setup.lock() {
+            *setup = Setup::Done;
         }
         if let Err(error) = std::fs::remove_file(&self.setup_file)
             && error.kind() != std::io::ErrorKind::NotFound
@@ -122,10 +133,12 @@ impl Sideporch {
                 ))
             })
             .await?;
-        let setup_token = if users == 0 {
-            Some(auth::random_token()?)
+        let setup = if users > 0 {
+            Setup::Done
+        } else if config.require_setup_link {
+            Setup::Link(auth::random_token()?)
         } else {
-            None
+            Setup::Open
         };
         let state = AppState {
             db,
@@ -137,7 +150,7 @@ impl Sideporch {
                 .as_deref()
                 .is_some_and(|url| url.starts_with("https://")),
             public_url,
-            setup_token: Arc::new(Mutex::new(setup_token)),
+            setup: Arc::new(Mutex::new(setup)),
             setup_file: setup_link_file(&config.data_dir),
         };
         state.automations.serve(state.clone());
@@ -145,21 +158,27 @@ impl Sideporch {
         Ok(Self { state })
     }
 
-    /// The path of the one-time setup page, while no account exists yet.
+    /// The path of the setup page, while no account exists yet: `/setup`,
+    /// or the one-time `/setup/<token>` when setup requires the link.
     #[must_use]
     pub fn setup_path(&self) -> Option<String> {
-        self.state
-            .setup_token
-            .lock()
-            .ok()?
-            .as_ref()
-            .map(|token| format!("/setup/{token}"))
+        match self.state.setup() {
+            Setup::Done => None,
+            Setup::Open => Some("/setup".to_owned()),
+            Setup::Link(token) => Some(format!("/setup/{token}")),
+        }
+    }
+
+    /// Whether the setup path is a secret one-time link.
+    #[must_use]
+    pub fn setup_is_secret(&self) -> bool {
+        matches!(self.state.setup(), Setup::Link(_))
     }
 
     /// Saves the setup link, built on `base_url`, to a file only the
-    /// server's user can read, and returns the file. The link grants the
-    /// first admin account, so it stays out of shared logs. Returns `None`
-    /// once an account exists.
+    /// server's user can read, and returns the file. A one-time link grants
+    /// the first admin account, so it stays out of shared logs. Returns
+    /// `None` once an account exists.
     ///
     /// # Errors
     ///
