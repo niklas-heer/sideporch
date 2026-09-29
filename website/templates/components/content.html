@@ -7,6 +7,24 @@
 </aside>
 {% endcomponent note %}
 
+{# Ways into the docs, one card per kind of reader: a Markdown list whose
+   items start with a bold link. #}
+{% component paths() %}
+<div class="paths">{{ body | markdown | safe }}</div>
+{% endcomponent paths %}
+
+{# A diagram in Mermaid's language, drawn in the browser by site.js with
+   the Mermaid build Sideporch ships. Keep blank lines out of the diagram:
+   Markdown would end the HTML there. #}
+{% component diagram(caption: string = "") %}
+<figure class="diagram">
+<pre class="mermaid">{{ body | trim }}</pre>
+{%- if caption %}
+<figcaption>{{ caption | markdown(inline=true) | safe }}</figcaption>
+{%- endif %}
+</figure>
+{% endcomponent diagram %}
+
 {# A screenshot from static/img/<version>/ that opens large, labelled with
    the version it shows (data/screenshots.toml). With dark=true,
    the page shows NAME-dark.webp when the reader's system is dark. The

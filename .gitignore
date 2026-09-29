@@ -16,4 +16,5 @@ result
 /tools/loadtest/accounts*.json
 /tools/loadtest/results/.samples
 /website/public/
+/website/static/vendor/
 /scripts/node_modules

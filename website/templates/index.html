@@ -8,9 +8,11 @@
         <h1>Your own chat, on your own porch.</h1>
         <p class="lede">Channels, threads, polls and search for a team, a club, a family or a whole community. It runs as one program on a server you control, and people know how to use it the moment they open it.</p>
         <p class="cta">
-          <a class="button primary" href="{{ get_url(path='@/docs/get-started/try-it.md') }}">Get started</a>
+          <a class="button primary" href="{{ config.extra.demo }}">Try the live demo</a>
+          <a class="button" href="{{ get_url(path='@/docs/get-started/try-it.md') }}">Get started</a>
           <a class="button" href="{{ get_url(path='@/docs/get-started/install.md') }}">Install on a server</a>
         </p>
+        <p class="demo-note">The demo is a real Sideporch server: sign up in seconds and look around. It starts over every night.</p>
         <div class="start">
           <p class="start-label" id="one-line">Or try it now, on any machine with Docker:</p>
           <div class="copyline">
@@ -71,6 +73,29 @@
 {% endblock %}
 {% block content %}
   <main class="landing">
+    <section class="why" aria-labelledby="why-title">
+      <h2 id="why-title">Why run your own chat?</h2>
+      <p class="why-lede">Team chat has become something you rent: per person, per month, with your history held by someone else. Sideporch is for the teams, clubs, families and communities who would rather own theirs.</p>
+      <div class="reasons">
+        <div>
+          <h3>No bill per person</h3>
+          <p>Sideporch is free and open source under the MIT license. Invite fifty people or five thousand; the cost is the small server it runs on.</p>
+        </div>
+        <div>
+          <h3>Your history stays yours</h3>
+          <p>No message limits and no history that disappears after 90 days. Everything lives in one directory on your server, and a backup is one file you can download.</p>
+        </div>
+        <div>
+          <h3>Nothing else to run</h3>
+          <p>One program, no database server, no mail server, no containers to wire together. Updates are signed, and Sideporch can install them for you.</p>
+        </div>
+        <div>
+          <h3>Familiar from minute one</h3>
+          <p>Channels, threads, mentions, reactions and search work the way people know from Slack. It installs on phones like an app, with notifications.</p>
+        </div>
+      </div>
+    </section>
+
     <section id="features" class="features" aria-labelledby="features-title">
       <h2 id="features-title">Everything people expect from team chat, and nothing to rent</h2>
       <div class="groups">
@@ -153,6 +178,25 @@
       <p class="gallery-version">Screenshots of Sideporch {{ screenshots.version }}.</p>
     </section>
 
+    <section class="compare" aria-labelledby="compare-title">
+      <h2 id="compare-title">How it compares</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th scope="col"></th><th scope="col">Sideporch</th><th scope="col">Slack</th><th scope="col">Discord</th><th scope="col">Mattermost</th><th scope="col">Zulip</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Runs on your own server</th><td>Yes</td><td>No</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Open source</th><td>Yes, MIT</td><td>No</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">What running it takes</th><td>One program</td><td>Nothing: hosted</td><td>Nothing: hosted</td><td>Server and PostgreSQL</td><td>Server, PostgreSQL, RabbitMQ, Redis, memcached</td></tr>
+            <tr><th scope="row">Cost</th><td>Your server</td><td>Per person, per month</td><td>Free, paid extras</td><td>Free edition, paid plans per person</td><td>Free to host, paid cloud and support</td></tr>
+            <tr><th scope="row">Brings your Slack history</th><td>Yes</td><td>It's where it is</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="compare-note">As of September 2026. Slack's free plan shows the last 90 days of messages. Mattermost and Zulip are mature and do more, such as calls; Sideporch aims to be the one that's simplest to run. <a href="{{ get_url(path='@/docs/get-started/what-is-sideporch.md') }}">What Sideporch is, and isn't</a></p>
+    </section>
+
     <section class="size" aria-labelledby="size-title">
       <div>
         <h2 id="size-title">A small server is plenty</h2>
@@ -192,7 +236,45 @@
           <p>Share invite links, or open sign-up for a community. Nobody needs an email address unless you want sign-in links.</p>
         </li>
       </ol>
-      <p class="more">The <a href="{{ get_url(path='@/docs/_index.md') }}">documentation</a> covers the rest: <a href="{{ get_url(path='@/docs/get-started/update.md') }}">updates</a>, <a href="{{ get_url(path='@/docs/community/server/backups.md') }}">backups</a>, <a href="{{ get_url(path='@/docs/community/connect/move-from-slack.md') }}">moving from Slack</a> and <a href="{{ get_url(path='@/docs/integrations/automations/_index.md') }}">automations</a>. Sideporch is young; expect rough edges before 1.0, and read the <a href="https://github.com/niklas-heer/sideporch/releases">release notes</a> for what changed.</p>
+      <p class="more">Curious how it works? <a href="{{ get_url(path='@/docs/under-the-hood/_index.md') }}">Under the hood</a> explains the design with diagrams. The <a href="{{ get_url(path='@/docs/_index.md') }}">documentation</a> covers the rest: <a href="{{ get_url(path='@/docs/get-started/update.md') }}">updates</a>, <a href="{{ get_url(path='@/docs/community/server/backups.md') }}">backups</a>, <a href="{{ get_url(path='@/docs/community/connect/move-from-slack.md') }}">moving from Slack</a> and <a href="{{ get_url(path='@/docs/integrations/automations/_index.md') }}">automations</a>. Sideporch is young; expect rough edges before 1.0, and read the <a href="https://github.com/niklas-heer/sideporch/releases">release notes</a> for what changed.</p>
+    </section>
+
+    <section class="faq" aria-labelledby="faq-title">
+      <h2 id="faq-title">Questions people ask</h2>
+      <div class="faq-list">
+        <details>
+          <summary>Is Sideporch really free?</summary>
+          <p>Yes. It's open source under the MIT license, with no paid edition and no limits on people or messages. You pay for the server it runs on, which can be a small VPS, a home server or a Raspberry Pi.</p>
+        </details>
+        <details>
+          <summary>Who is it for?</summary>
+          <p>Teams that want Slack's way of working without the per-person bill, clubs and families who want a private place to talk, and public communities that need sign-up, trust levels and moderation. <a href="{{ get_url(path='@/docs/get-started/what-is-sideporch.md') }}">What Sideporch is</a></p>
+        </details>
+        <details>
+          <summary>What do I need to run it?</summary>
+          <p>A machine with Linux or macOS, or anything that runs Docker, and a domain name for HTTPS, which phones need for notifications and passkeys. Half a CPU and 512 MB serve thousands of people. <a href="{{ get_url(path='@/docs/get-started/run-on-a-server.md') }}">Run it on a server</a></p>
+        </details>
+        <details>
+          <summary>Can we move over from Slack?</summary>
+          <p>Yes. Import a Slack export with channels, threads, direct messages and reactions, and keep using the webhooks your tools already send. <a href="{{ get_url(path='@/docs/community/connect/move-from-slack.md') }}">Move from Slack</a></p>
+        </details>
+        <details>
+          <summary>Does it work on phones?</summary>
+          <p>Yes. Sideporch installs from the browser like an app on iPhone and Android, with push notifications sent straight from your server. <a href="{{ get_url(path='@/docs/using/phones.md') }}">Phones and notifications</a></p>
+        </details>
+        <details>
+          <summary>Is my data private?</summary>
+          <p>It stays on your server. Sideporch has no analytics and doesn't phone home; it asks GitHub for new releases, which you can switch off, and fetches link previews and GIFs only if you let it. <a href="{{ get_url(path='@/docs/under-the-hood/security.md') }}">Security</a></p>
+        </details>
+        <details>
+          <summary>Is it ready for us?</summary>
+          <p>Sideporch is young. It works end to end and is tested thoroughly, but expect rough edges and breaking changes before 1.0. Keep backups, and read the release notes before updating.</p>
+        </details>
+        <details>
+          <summary>How do we leave, if we want to?</summary>
+          <p>Everything is in one data directory, and the database is plain SQLite that any tool can read. A backup is one archive you can download from the browser. <a href="{{ get_url(path='@/docs/community/server/backups.md') }}">Backups</a></p>
+        </details>
+      </div>
     </section>
   </main>
 {% endblock %}

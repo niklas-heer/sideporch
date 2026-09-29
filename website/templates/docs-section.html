@@ -14,6 +14,7 @@
       {% if section.description %}<p class="lede-docs">{{ section.description }}</p>{% endif %}
       {{ section.content | safe }}
       {% if home %}
+        <h2 class="cards-title">All the documentation</h2>
         <div class="cards" data-pagefind-ignore>
           {% for path in section.subsections %}
             {% set part = get_section(path=path) %}

@@ -27,7 +27,11 @@ To look at a build with a plain static server, give it the address:
   docs page and section layouts, and Tera components in `components/`. Pages
   use them for screenshots and callouts:
   `{{<shot name="search" alt="…" caption="…" />}}` and
-  `{% <note kind="tip"> %}…{% </note> %}` (`kind` is `info`, `tip` or `warning`).
+  `{% <note kind="tip"> %}…{% </note> %}` (`kind` is `info`, `tip` or `warning`),
+  and diagrams in Mermaid's language: `{% <diagram caption="…"> %}…{% </diagram> %}`
+  (no blank lines inside). `site.js` draws them with the Mermaid build
+  Sideporch ships; `vendor.sh` unpacks it into `static/vendor/` before each
+  build and preview.
 - `static/`: the stylesheet, `site.js` (the hero conversation, copy buttons,
   search, the docs menu and the screenshot viewer), fonts, the logo and
   `img/<version>/`, where every screenshot lives, named after the version it

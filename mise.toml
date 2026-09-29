@@ -90,7 +90,7 @@ run = "nix flake check --print-build-logs"
 [tasks.site]
 description = "Preview the website with live reload at http://127.0.0.1:1111"
 dir = "website"
-run = "zola serve"
+run = ["sh vendor.sh", "zola serve"]
 
 [tasks."site-build"]
 description = "Build the website into website/public, with its search index (SITE_URL=http://127.0.0.1:8765 to serve it elsewhere)"

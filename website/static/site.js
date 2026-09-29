@@ -83,6 +83,26 @@
     });
   }
 
+  // Diagrams: Mermaid loads only on pages that have one, and draws them in
+  // the reader's light or dark colors.
+  const diagrams = [...document.querySelectorAll("pre.mermaid")];
+  if (diagrams.length > 0) {
+    const script = document.createElement("script");
+    script.src = "/vendor/mermaid.min.js";
+    script.addEventListener("load", () => {
+      const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+      globalThis.mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: dark ? "dark" : "neutral",
+        fontFamily: getComputedStyle(document.body).fontFamily,
+        themeVariables: { fontSize: "15px" },
+      });
+      globalThis.mermaid.run({ nodes: diagrams });
+    });
+    document.head.append(script);
+  }
+
   // Search: Pagefind's index loads the first time search opens.
   const search = document.getElementById("search");
   if (search) {

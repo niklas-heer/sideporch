@@ -3,6 +3,7 @@
 # to serve the build from somewhere other than https://sideporch.app.
 set -eu
 cd "$(dirname "$0")"
+sh vendor.sh
 if [ -n "${SITE_URL:-}" ]; then
   zola build --base-url "$SITE_URL"
 else

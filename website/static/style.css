@@ -137,6 +137,23 @@ code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-si
 
 main.landing { max-width: 72rem; margin: 0 auto; padding: 0 1.5rem; }
 .landing > section { margin-top: 6rem; }
+.demo-note { margin-top: 0.7rem; font-size: 0.92rem; opacity: 0.8; }
+.why-lede { margin-top: 1rem; max-width: var(--measure); font-size: 1.15rem; color: var(--muted); }
+.reasons { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.5rem; margin-top: 2.2rem; }
+.reasons > div { padding: 1.2rem 1.3rem; border: 1px solid var(--border); border-radius: 0.8rem; }
+.reasons h3 { font-size: 1.1rem; font-weight: 800; }
+.reasons p { margin-top: 0.5rem; color: var(--muted); font-size: 0.97rem; }
+.compare .table-wrap { margin-top: 1.8rem; overflow-x: auto; }
+.compare table { width: 100%; min-width: 44rem; border-collapse: collapse; font-size: 0.97rem; }
+.compare th, .compare td { padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.compare thead th { font-size: 0.9rem; font-weight: 800; }
+.compare thead th:nth-child(2), .compare td:first-of-type { background: var(--soft); }
+.compare tbody th { font-weight: 700; color: var(--muted); width: 22%; }
+.compare-note { margin-top: 1rem; max-width: var(--measure); font-size: 0.92rem; color: var(--muted); }
+.faq-list { margin-top: 1.8rem; max-width: 48rem; }
+.faq details { border-bottom: 1px solid var(--border); padding: 0.9rem 0; }
+.faq summary { cursor: pointer; font-weight: 700; font-size: 1.05rem; }
+.faq details p { margin-top: 0.6rem; color: var(--muted); max-width: var(--measure); }
 h2 { font-size: clamp(1.7rem, 3vw, 2.3rem); font-weight: 800; letter-spacing: -0.015em; max-width: 24ch; text-wrap: balance; }
 
 .groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3rem; margin-top: 2.5rem; }
@@ -185,6 +202,7 @@ body > footer {
 @media (max-width: 60rem) {
   .hero { grid-template-columns: minmax(0, 1fr); gap: 2rem; padding-bottom: 3.5rem; }
   .groups { grid-template-columns: minmax(0, 1fr); gap: 2rem; }
+  .reasons { grid-template-columns: minmax(0, 1fr); }
   .size { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
 }
 @media (max-width: 40rem) {
@@ -317,6 +335,13 @@ body.docs > footer { max-width: 84rem; }
 .callout-tip { border-left-color: #3A9A6E; }
 .callout-warning { border-left-color: var(--lamp); }
 
+.paths ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 1rem; margin: 1.5rem 0 0; padding: 0 !important; list-style: none; max-width: 60rem; }
+.paths li { margin: 0 !important; padding: 1rem 1.1rem; border: 1px solid var(--border); border-radius: 0.8rem; color: var(--muted); font-size: 0.95rem; }
+.paths li > strong:first-child { display: block; margin-bottom: 0.3rem; font-size: 1.05rem; }
+.paths li > strong:first-child a { color: var(--fg); text-decoration: none; }
+.paths li > strong:first-child a:hover { text-decoration: underline; }
+.prose:has(.paths) { max-width: 60rem; }
+.cards-title { margin-top: 2.8rem; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 1.2rem; max-width: none; }
 .prose:has(.cards) { max-width: 60rem; }
 .card { padding: 1.2rem 1.3rem; border: 1px solid var(--border); border-radius: 0.8rem; }
@@ -439,6 +464,10 @@ body.docs > footer { max-width: 84rem; }
 /* Screenshots, and the viewer they open in */
 
 .shot { margin: 1.8rem 0 0; }
+.diagram { margin: 1.8rem 0 0; padding: 1.2rem; border: 1px solid var(--border); border-radius: 0.7rem; overflow-x: auto; }
+.diagram pre.mermaid { margin: 0; padding: 0; background: none; border: 0; text-align: center; white-space: pre; }
+.diagram pre.mermaid:not([data-processed]) { color: var(--muted); font-size: 0.8rem; text-align: left; }
+.diagram figcaption { margin-top: 0.8rem; font-size: 0.92rem; color: var(--muted); }
 .shot img, a[data-zoom] img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 0.7rem; }
 .shot figcaption { margin-top: 0.55rem; font-size: 0.92rem; color: var(--muted); }
 .shot-version { white-space: nowrap; font-size: 0.8rem; opacity: 0.75; }
