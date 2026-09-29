@@ -12,6 +12,7 @@ mod backup;
 mod blobs;
 mod community;
 mod db;
+mod demo;
 mod emoji;
 mod error;
 mod federation;
@@ -360,6 +361,7 @@ fn start_background_work(state: &AppState) {
     updates::start(state.clone());
     federation::outbox::start(state.clone());
     access::start(state.clone());
+    demo::start(state.clone());
 }
 
 /// The file that holds the first-account setup link while one is pending.

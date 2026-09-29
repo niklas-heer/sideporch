@@ -671,6 +671,12 @@ ALTER TABLE roles ADD COLUMN color TEXT NOT NULL DEFAULT 'gray';
 ALTER TABLE users ADD COLUMN level_noticed INTEGER;
 ",
     ),
+    Migration::Sql(
+        r"
+-- Channels that demo resets keep.
+ALTER TABLE channels ADD COLUMN kept INTEGER NOT NULL DEFAULT 0;
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

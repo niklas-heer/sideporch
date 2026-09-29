@@ -229,6 +229,8 @@ pub fn sidebar_with_update(
 ) -> AppResult<store::Sidebar> {
     let mut sidebar = store::sidebar(conn, user_id)?;
     sidebar.level_up = crate::community::level_up(conn, user_id)?;
+    let demo = crate::demo::Demo::load(conn)?;
+    sidebar.demo = demo.enabled.then(|| demo.notice());
     let is_admin: bool = conn.query_row(
         "SELECT is_admin FROM users WHERE id = ?1",
         [user_id],
@@ -398,7 +400,9 @@ async fn registration(state: &AppState) -> AppResult<views::LoginOptions> {
         .db
         .call(|conn| {
             let mail = crate::mail::configured(conn)?;
+            let demo = crate::demo::Demo::load(conn)?;
             Ok(views::LoginOptions {
+                demo: demo.enabled.then_some(demo),
                 registration: crate::community::Joining::load(conn)?.registration,
                 email_links: mail && crate::security::Policy::load(conn)?.email_links,
                 email_resets: mail,

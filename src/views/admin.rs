@@ -16,7 +16,7 @@ use crate::{
 pub fn tabs(current: &str) -> Markup {
     html! {
         nav class="mb-6 flex flex-wrap gap-2" aria-label="Admin" {
-            @for (href, label) in [("/admin/system", "System"), ("/admin/community", "Community"), ("/admin/permissions", "Permissions"), ("/admin/sign-in", "Sign-in"), ("/moderation", "Moderation"), ("/admin/speech", "Speech"), ("/admin/backups", "Backups"), ("/admin/updates", "Updates"), ("/admin/connections", "Connections"), ("/admin/gifs", "GIFs"), ("/admin/messages", "Messages"), ("/admin/appearance", "Appearance"), ("/admin/import", "Import"), ("/people", "People"), ("/automations", "Automations")] {
+            @for (href, label) in [("/admin/system", "System"), ("/admin/community", "Community"), ("/admin/permissions", "Permissions"), ("/admin/sign-in", "Sign-in"), ("/moderation", "Moderation"), ("/admin/speech", "Speech"), ("/admin/backups", "Backups"), ("/admin/updates", "Updates"), ("/admin/connections", "Connections"), ("/admin/gifs", "GIFs"), ("/admin/messages", "Messages"), ("/admin/appearance", "Appearance"), ("/admin/import", "Import"), ("/admin/demo", "Demo"), ("/people", "People"), ("/automations", "Automations")] {
                 a href=(href) aria-current=[(href == current).then_some("page")]
                     class="rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-screen aria-[current=page]:bg-haint-2 aria-[current=page]:text-floor dark:hover:bg-night-2 dark:aria-[current=page]:bg-floor-2 dark:aria-[current=page]:text-haint-2" {
                     (label)
@@ -468,6 +468,83 @@ pub fn import_page(
                     input id="export" name="export" type="file" accept=".zip,application/zip" required class="field text-sm";
                 }
                 button type="submit" class="btn" { (icon(icons::UPLOAD_SIMPLE, "h-5 w-5")) "Import" }
+            }
+        },
+    )
+}
+
+/// A channel an admin can keep through demo resets.
+pub struct DemoChannel {
+    pub id: i64,
+    pub name: String,
+    pub private: bool,
+    pub kept: bool,
+}
+
+/// Admin → Demo: resetting the server every day.
+pub fn demo_page(
+    shell: &Shell<'_>,
+    demo: crate::demo::Demo,
+    channels: &[DemoChannel],
+    last_reset: Option<&str>,
+    notice: Option<&str>,
+) -> Markup {
+    panel_page(
+        "Demo",
+        shell,
+        &html! { "Demo" },
+        &html! {
+            (tabs("/admin/demo"))
+            @if let Some(notice) = notice {
+                p role="status" class="mb-4 rounded-lg border border-line bg-haint-2 px-3 py-2 text-sm text-floor dark:border-night-line dark:bg-floor-2 dark:text-haint-2" { (notice) }
+            }
+            p class="mb-5 text-muted dark:text-haint" {
+                "For a server anyone may try. Every day it forgets everyone and everything except what you keep: "
+                "the channels ticked below with their messages from people who stay, admins and people with a role, "
+                "automations, custom emoji, GIFs, bans and settings. Everyone sees when it starts over."
+            }
+            form method="post" action="/admin/demo" class="space-y-5" {
+                label class="flex items-center gap-2" {
+                    input type="checkbox" name="enabled" value="on" checked[demo.enabled] class="h-4 w-4 accent-floor";
+                    span class="font-semibold" { "Reset this server every day" }
+                }
+                label class="block max-w-xs" {
+                    span class="field-label" { "At (UTC)" }
+                    select name="hour" class="field" {
+                        @for hour in 0_u8..24 {
+                            option value=(hour) selected[hour == demo.hour] { (format!("{hour:02}:00")) }
+                        }
+                    }
+                }
+                fieldset {
+                    legend class="field-label" { "Keep these channels" }
+                    @if channels.is_empty() {
+                        p class="text-sm text-muted dark:text-haint" { "No channels yet." }
+                    } @else {
+                        div class="grid gap-2 sm:grid-cols-2" data-kept {
+                            @for channel in channels {
+                                label class="flex items-center gap-2 text-sm" {
+                                    input type="checkbox" name="keep" value=(channel.id) checked[channel.kept] class="h-4 w-4 accent-floor";
+                                    span { @if channel.private { (icon(icons::LOCK_SIMPLE, "inline h-3.5 w-3.5")) " " } "#" (channel.name) }
+                                }
+                            }
+                        }
+                    }
+                    p class="mt-2 text-sm text-muted dark:text-haint" {
+                        "Channels not ticked, and every direct message, go with each reset. Keep an announcement channel where only admins post, and your own private channels."
+                    }
+                }
+                button type="submit" class="btn" { "Save" }
+            }
+            div class="mt-10 rounded-xl border border-red-200 p-4 dark:border-red-900" {
+                h2 class="font-bold" { "Reset now" }
+                p class="mt-1 text-sm text-muted dark:text-haint" {
+                    "Starts over right away, the same way the daily reset does. "
+                    @if let Some(last) = last_reset { "The last reset was " (last) "." } @else { "It never ran yet." }
+                }
+                form method="post" action="/admin/demo/reset" class="mt-3" {
+                    button type="submit" class="btn bg-red-700 hover:bg-red-800" { "Reset now" }
+                }
             }
         },
     )

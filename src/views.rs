@@ -177,6 +177,8 @@ pub fn text_field(
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoginOptions {
     pub registration: crate::community::Registration,
+    /// On a demo server: when it starts over.
+    pub demo: Option<crate::demo::Demo>,
     /// Sign-in links by email are on.
     pub email_links: bool,
     /// Email works, so people can reset their own password.
@@ -193,6 +195,9 @@ pub fn login_page(
         "Sign in",
         &html! {
             h1 class="mb-5 text-xl font-bold" { "Sign in" }
+            @if let Some(demo) = options.demo {
+                p class="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200" data-demo { (demo.notice()) }
+            }
             (form_error(error))
             // app.js shows this where the browser supports passkeys.
             div data-passkey-area hidden {
@@ -379,6 +384,9 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                     class="absolute inset-x-3 top-full z-40 mt-1 max-h-96 overflow-y-auto rounded-xl border border-line bg-white p-1 text-ink shadow-2xl dark:border-night-line dark:bg-night-2 dark:text-haint-2" {}
             }
             div class="flex-1 overflow-y-auto px-3 pb-4" {
+                @if let Some(demo) = &shell.sidebar.demo {
+                    p class="mx-1 mb-3 rounded-lg bg-floor-2 px-3 py-2 text-xs text-haint-2" data-demo { (demo) }
+                }
                 ul class="mb-4 space-y-0.5" data-sidebar-nav {
                     (nav_link("/activity", icons::AT, "Activity", shell.sidebar.activity))
                     (nav_link("/saved", icons::BOOKMARK_SIMPLE, "Saved", false))

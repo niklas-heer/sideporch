@@ -132,6 +132,8 @@ pub struct Sidebar {
     /// A trust level the person reached and hasn't been told about, with
     /// what it lets them do.
     pub level_up: Option<(u8, Vec<&'static str>)>,
+    /// On a demo server: when it starts over.
+    pub demo: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1044,6 +1046,7 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
         activity,
         update: None,
         level_up: None,
+        demo: None,
     })
 }
 

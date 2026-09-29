@@ -21,6 +21,8 @@ pub fn router() -> Router<AppState> {
             "/admin/appearance",
             get(appearance_page).post(save_appearance),
         )
+        .route("/admin/demo", get(demo_page).post(save_demo))
+        .route("/admin/demo/reset", axum::routing::post(reset_demo))
 }
 
 const fn require_admin(user: &CurrentUser) -> AppResult<()> {
@@ -167,4 +169,101 @@ async fn save_appearance(
         .call(move |conn| crate::themes::set_defaults(conn, &form.theme, &form.appearance))
         .await?;
     Ok(axum::response::Redirect::to("/admin/appearance?saved=1"))
+}
+
+async fn render_demo(
+    state: &AppState,
+    user: &CurrentUser,
+    notice: Option<&str>,
+) -> AppResult<Markup> {
+    let (demo, channels, last_reset) = state
+        .db
+        .call(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT id, name, private, kept FROM channels WHERE kind = 'public' ORDER BY name COLLATE NOCASE",
+            )?;
+            let channels = statement
+                .query_map([], |row| {
+                    Ok(views::admin::DemoChannel {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        private: row.get(2)?,
+                        kept: row.get(3)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((
+                crate::demo::Demo::load(conn)?,
+                channels,
+                store::setting(conn, "demo.last_reset")?,
+            ))
+        })
+        .await?;
+    let sidebar = shell_data(state, user.id).await?;
+    let shell = Shell {
+        user,
+        sidebar: &sidebar,
+        current: None,
+    };
+    Ok(views::admin::demo_page(
+        &shell,
+        demo,
+        &channels,
+        last_reset.as_deref(),
+        notice,
+    ))
+}
+
+async fn demo_page(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
+    require_admin(&user)?;
+    render_demo(&state, &user, None).await
+}
+
+async fn save_demo(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    axum::extract::RawForm(form): axum::extract::RawForm,
+) -> AppResult<Markup> {
+    require_admin(&user)?;
+    // `keep` repeats, once per ticked channel.
+    let pairs: Vec<(String, String)> = form
+        .split(|byte| *byte == b'&')
+        .filter_map(|pair| {
+            let pair = std::str::from_utf8(pair).ok()?;
+            let (key, value) = pair.split_once('=')?;
+            Some((key.to_owned(), value.to_owned()))
+        })
+        .collect();
+    let demo = crate::demo::Demo {
+        enabled: pairs.iter().any(|(key, _)| key == "enabled"),
+        hour: pairs
+            .iter()
+            .find(|(key, _)| key == "hour")
+            .and_then(|(_, hour)| hour.parse().ok())
+            .filter(|hour| *hour < 24)
+            .unwrap_or(4),
+    };
+    let kept: Vec<i64> = pairs
+        .iter()
+        .filter(|(key, _)| key == "keep")
+        .filter_map(|(_, id)| id.parse().ok())
+        .collect();
+    state
+        .db
+        .call(move |conn| {
+            demo.save(conn)?;
+            crate::demo::set_kept(conn, &kept)
+        })
+        .await?;
+    render_demo(&state, &user, Some("Saved.")).await
+}
+
+async fn reset_demo(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
+    require_admin(&user)?;
+    let removed = crate::demo::reset_now(&state).await?;
+    let notice = format!(
+        "Started over: {} people, {} channels and {} messages are gone.",
+        removed.people, removed.channels, removed.messages
+    );
+    render_demo(&state, &user, Some(&notice)).await
 }
