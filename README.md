@@ -9,7 +9,7 @@ with the things people miss from Slack, on a server you control.</p>
 <p align="center">
 <a href="https://sideporch.app">Website</a> ·
 <a href="https://sideporch.app/docs/">Documentation</a> ·
-<a href="https://demo.sideporch.app">Live demo</a> ·
+<a href="https://sideporch-demo.fly.dev">Live demo</a> ·
 <a href="#try-it">Try it</a> ·
 <a href="#install">Install</a> ·
 <a href="#features">Features</a>

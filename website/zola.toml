@@ -30,7 +30,7 @@ skip_prefixes = [
 
 [extra]
 # The public demo server, reset every day.
-demo = "https://demo.sideporch.app"
+demo = "https://sideporch-demo.fly.dev"
 repo = "https://github.com/niklas-heer/sideporch"
 edit_base = "https://github.com/niklas-heer/sideporch/edit/main/website/content/"
 # For pages made from other files (extra.edit_path in their front matter).

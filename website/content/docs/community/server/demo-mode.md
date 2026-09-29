@@ -4,7 +4,7 @@ description = "Run a server anyone can try, which starts over every day and keep
 weight = 5
 +++
 
-Demo mode is for a server that anyone may join to try Sideporch, like the one on [sideporch.app](https://demo.sideporch.app). Every day at a set hour, the server forgets everyone and everything except what you keep, so spam, test messages and anything shady are gone by the next morning.
+Demo mode is for a server that anyone may join to try Sideporch, like [the live demo](https://sideporch-demo.fly.dev). Every day at a set hour, the server forgets everyone and everything except what you keep, so spam, test messages and anything shady are gone by the next morning.
 
 Turn it on under **Admin → Demo**, pick the hour (in UTC), and tick the channels to keep. New in 0.6.0.
 

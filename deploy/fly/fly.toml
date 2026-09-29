@@ -1,0 +1,42 @@
+# The live demo at https://sideporch-demo.fly.dev: one machine, a volume
+# for the data, demo mode switched on from Admin → Demo. See README.md.
+app = "sideporch-demo"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  SIDEPORCH_LISTEN = "0.0.0.0:8080"
+  SIDEPORCH_DATA = "/data"
+  SIDEPORCH_PUBLIC_URL = "https://sideporch-demo.fly.dev"
+  # Fly's proxy puts the visitor's address here; limits and bans use it.
+  SIDEPORCH_CLIENT_IP_HEADER = "Fly-Client-IP"
+  # Anyone can reach it before the admin exists; the setup link is printed
+  # by `fly ssh console -C "/sideporch setup-link --data /data"`.
+  SIDEPORCH_REQUIRE_SETUP_LINK = "true"
+  # The demo is updated by deploying a new release image.
+  SIDEPORCH_UPDATE_CHECK = "false"
+
+[[mounts]]
+  source = "sideporch_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Live connections and the daily reset need the machine running.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
