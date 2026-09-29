@@ -24,7 +24,9 @@ To look at a build with a plain static server, give it the address:
   docs page and section layouts, and shortcodes.
 - `static/`: the stylesheet, `site.js` (the hero conversation, copy buttons,
   search, the docs menu and the screenshot viewer), fonts, the logo and
-  `img/`, where every screenshot lives. The README uses them too.
+  `img/`, where every screenshot lives (`mise run screenshots` retakes them). The README uses them too.
+  `og.png` is the 1200×630 picture link previews show; remake it when the
+  look or the channel screenshot changes a lot.
 
 ## Deploying
 

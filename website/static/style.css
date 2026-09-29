@@ -466,3 +466,23 @@ a[data-zoom]:hover::after, a[data-zoom]:focus-visible::after { opacity: 1; }
   .viewer[open]::backdrop { animation: viewer-in 0.18s ease-out; }
 }
 @keyframes viewer-in { from { opacity: 0; } }
+
+/* Landing page additions */
+
+.cta { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2rem; }
+.button {
+  display: inline-flex; align-items: center; padding: 0.75rem 1.3rem; border: 1px solid var(--haint); border-radius: 0.7rem;
+  font-weight: 800; text-decoration: none;
+}
+.dusk .button { color: var(--haint-2); }
+.dusk .button:hover { background: rgb(0 0 0 / 0.18); }
+.dusk .button.primary { color: var(--floor); background: var(--lamp); border-color: var(--lamp); }
+.dusk .button.primary:hover { background: #F8CE6E; border-color: #F8CE6E; }
+.cta + .start { margin-top: 1.8rem; }
+.start-label { font-size: 0.95rem; }
+.gallery .phones { grid-column: 1 / -1; justify-self: center; width: min(100%, 38rem); }
+.tag-rec {
+  display: inline-block; margin-left: 0.35rem; padding: 0 0.4rem; border-radius: 0.3rem;
+  font-size: 0.75rem; font-weight: 800; vertical-align: 0.1em; color: var(--floor); background: var(--haint-2);
+}
+.steps a { font-weight: 600; }

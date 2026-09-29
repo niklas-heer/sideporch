@@ -14,8 +14,13 @@
   <meta property="og:title" content="{{ doc_title }}">
   <meta property="og:description" content="{{ doc_description }}">
   <meta property="og:url" content="{{ doc_url | safe }}">
-  <meta property="og:image" content="{{ get_url(path='img/channel.webp') }}">
+  <meta property="og:image" content="{{ get_url(path='og.png') }}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Sideporch: your own chat, on your own porch. A channel with a thread and a ranked poll.">
   <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Sideporch">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="preload" href="{{ get_url(path='fonts/normal-latin.woff2') }}" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="{{ get_url(path='style.css', cachebust=true) }}">
   <script src="{{ get_url(path='site.js', cachebust=true) }}" defer></script>
@@ -49,7 +54,7 @@
 
   <footer>
     <img src="{{ get_url(path='logo.svg') }}" alt="" width="28" height="28">
-    <p>Sideporch is free software under the MIT license. <a href="{{ config.extra.repo }}">Source on GitHub</a>, <a href="{{ config.extra.repo }}/releases">releases</a>, <a href="{{ config.extra.repo }}/issues">issues</a>.</p>
+    <p>Sideporch is free software under the MIT license. <a href="{{ get_url(path='@/docs/_index.md') }}">Documentation</a>, <a href="{{ config.extra.repo }}">source on GitHub</a>, <a href="{{ config.extra.repo }}/releases">releases</a>, <a href="{{ config.extra.repo }}/issues">issues</a>.</p>
   </footer>
 </body>
 </html>

@@ -7,13 +7,17 @@
       <div class="pitch">
         <h1>Your own chat, on your own porch.</h1>
         <p class="lede">Channels, threads, polls and search for a team, a club, a family or a whole community. It runs as one program on a server you control, and people know how to use it the moment they open it.</p>
+        <p class="cta">
+          <a class="button primary" href="{{ get_url(path='@/docs/get-started/try-it.md') }}">Get started</a>
+          <a class="button" href="{{ get_url(path='@/docs/get-started/install.md') }}">Install on a server</a>
+        </p>
         <div class="start">
-          <p class="start-label" id="one-line">Try it on any machine with Docker:</p>
+          <p class="start-label" id="one-line">Or try it now, on any machine with Docker:</p>
           <div class="copyline">
             <code aria-labelledby="one-line">docker run -p 8080:8080 -v sideporch:/data ghcr.io/niklas-heer/sideporch</code>
             <button type="button" data-copy="docker run -p 8080:8080 -v sideporch:/data ghcr.io/niklas-heer/sideporch">Copy</button>
           </div>
-          <p class="start-note">Then open <code>localhost:8080</code>. The first person to arrive becomes the admin. <a href="#install">Other ways to install</a></p>
+          <p class="start-note">Then open <code>localhost:8080</code>. The first person to arrive becomes the admin.</p>
         </div>
       </div>
 
@@ -84,7 +88,7 @@
           <h3>Simple to run yourself</h3>
           <ul>
             <li><strong>One program, one folder.</strong> No database server, no mail server, nothing else to install.</li>
-            <li><strong>Upgrades itself</strong> when you install a new version, and keeps a copy of your data first.</li>
+            <li><strong>Upgrading is replacing one file.</strong> Your data moves to the new version on its own, and a copy is kept first.</li>
             <li><strong>Backups</strong> from the browser or on a schedule; restoring is one command.</li>
             <li><strong>Bring your Slack history</strong>: channels, threads and reactions come along.</li>
             <li><strong>Webhooks and Lua automations</strong> for monitors, CI and bots; Slack-style webhooks work unchanged.</li>
@@ -103,29 +107,35 @@
       </div>
     </section>
 
+    {% set m_channel = get_image_metadata(path="img/channel.webp") %}{% set m_deploys = get_image_metadata(path="img/deploys.webp") %}{% set m_search = get_image_metadata(path="img/search.webp") %}{% set m_switcher = get_image_metadata(path="img/switcher.webp") %}{% set m_moderation = get_image_metadata(path="img/moderation.webp") %}{% set m_automation = get_image_metadata(path="img/automation.webp") %}{% set m_phones = get_image_metadata(path="img/phones.webp") %}
     <section class="gallery" aria-label="Screenshots">
       <figure class="wide">
-        <picture>
-          <source media="(prefers-color-scheme: dark)" srcset="/img/channel-dark.webp">
-          <img src="/img/channel.webp" alt="A Sideporch channel with a thread open on the right: messages with reactions, a checklist, and a ranked poll showing which restaurant leads after three rounds." width="1600" height="1083" loading="lazy">
-        </picture>
-        <figcaption>A channel with a thread open, and a ranked poll finding where the team celebrates. Everything works on phones too, and installs like an app.</figcaption>
+        <a href="{{ get_url(path='img/channel.webp') }}" data-zoom data-zoom-dark="{{ get_url(path='img/channel-dark.webp') }}"><picture><source media="(prefers-color-scheme: dark)" srcset="{{ get_url(path='img/channel-dark.webp') }}"><img src="{{ get_url(path='img/channel.webp') }}" alt="A Sideporch channel with a thread open on the right: messages with reactions, a checklist, and a ranked poll showing which restaurant leads after three rounds." width="{{ m_channel.width }}" height="{{ m_channel.height }}" loading="lazy" decoding="async"></picture></a>
+        <figcaption>A channel with a thread open, and a ranked poll finding where the team celebrates.</figcaption>
       </figure>
       <figure>
-        <img src="/img/deploys.webp" alt="A deploys channel with alerts from a monitor, a Mermaid diagram and an approval button." width="1600" height="1224" loading="lazy">
+        <a href="{{ get_url(path='img/deploys.webp') }}" data-zoom><picture><img src="{{ get_url(path='img/deploys.webp') }}" alt="A deploys channel with alerts from a monitor, a Mermaid diagram and an approval button." width="{{ m_deploys.width }}" height="{{ m_deploys.height }}" loading="lazy" decoding="async"></picture></a>
         <figcaption>Alerts from your monitors next to the people who fix them.</figcaption>
       </figure>
       <figure>
-        <img src="/img/search.webp" alt="Search for “relase notes”, corrected to “release notes”, with the matching message highlighted and filter shortcuts." width="1600" height="1083" loading="lazy">
+        <a href="{{ get_url(path='img/search.webp') }}" data-zoom><picture><img src="{{ get_url(path='img/search.webp') }}" alt="Search for “relase notes”, corrected to “release notes”, with the matching message highlighted and filter shortcuts." width="{{ m_search.width }}" height="{{ m_search.height }}" loading="lazy" decoding="async"></picture></a>
         <figcaption>Search that fixes typos from your team's own words, with filters one click away.</figcaption>
       </figure>
       <figure>
-        <img src="/img/moderation.webp" alt="The moderation page: someone asking to join, and a reported spam message with buttons to delete it or dismiss the report." width="1600" height="1224" loading="lazy">
-        <figcaption>Moderation for public communities: sign-up requests, reports and time-outs.</figcaption>
+        <a href="{{ get_url(path='img/switcher.webp') }}" data-zoom><picture><img src="{{ get_url(path='img/switcher.webp') }}" alt="The quick switcher, opened with Cmd+K over a channel, filtering channels as you type." width="{{ m_switcher.width }}" height="{{ m_switcher.height }}" loading="lazy" decoding="async"></picture></a>
+        <figcaption>Jump to any channel, person or page with ⌘K.</figcaption>
       </figure>
       <figure>
-        <img src="/img/automation.webp" alt="The automation editor with a Lua script that asks for deploy approvals." width="1600" height="1083" loading="lazy">
+        <a href="{{ get_url(path='img/moderation.webp') }}" data-zoom><picture><img src="{{ get_url(path='img/moderation.webp') }}" alt="The moderation page: someone asking to join, and a reported spam message with buttons to delete it or dismiss the report." width="{{ m_moderation.width }}" height="{{ m_moderation.height }}" loading="lazy" decoding="async"></picture></a>
+        <figcaption>Moderation for public communities: sign-up requests, reports and time-outs.</figcaption>
+      </figure>
+      <figure class="wide">
+        <a href="{{ get_url(path='img/automation.webp') }}" data-zoom><picture><img src="{{ get_url(path='img/automation.webp') }}" alt="The automation editor with a Lua script that asks for deploy approvals." width="{{ m_automation.width }}" height="{{ m_automation.height }}" loading="lazy" decoding="async"></picture></a>
         <figcaption>Automations in Lua, written, checked and tested in the browser.</figcaption>
+      </figure>
+      <figure class="phones">
+        <a href="{{ get_url(path='img/phones.webp') }}" data-zoom><picture><img src="{{ get_url(path='img/phones.webp') }}" alt="Sideporch on two phones: the channel list, and a thread." width="{{ m_phones.width }}" height="{{ m_phones.height }}" loading="lazy" decoding="async"></picture></a>
+        <figcaption>On phones it installs like an app, with notifications.</figcaption>
       </figure>
     </section>
 
@@ -133,7 +143,7 @@
       <div>
         <h2 id="size-title">A small server is plenty</h2>
         <p>In load tests, everyone was online at once and posted every two minutes; a message only counted if it reached everyone within a second. Plan with a quarter of this on slower real servers: a Raspberry Pi still serves a thousand people.</p>
-        <p><a href="https://github.com/niklas-heer/sideporch/blob/main/docs/capacity.md">How it was measured</a></p>
+        <p><a href="{{ get_url(path='@/docs/community/server-size.md') }}">How it was measured</a></p>
       </div>
       <table>
         <caption class="sr-only">People online at once, by server size</caption>
@@ -151,24 +161,24 @@
       <ol class="steps">
         <li>
           <h3>Install it</h3>
-          <p>Pick whichever fits your server. Every release has static binaries for Linux and macOS, on x86-64 and ARM.</p>
+          <p>On a server, use the install script: it checks the download and puts one file in place. Every release has static binaries for Linux and macOS, on x86-64 and ARM.</p>
           <dl class="ways">
+            <dt>Script <span class="tag-rec">for servers</span></dt><dd><code>curl -fsSL https://raw.githubusercontent.com/niklas-heer/sideporch/main/install.sh | sh</code></dd>
             <dt>Docker</dt><dd><code>docker run -d -p 8080:8080 -v sideporch:/data ghcr.io/niklas-heer/sideporch</code></dd>
             <dt>Homebrew</dt><dd><code>brew install niklas-heer/tap/sideporch</code></dd>
-            <dt>Script</dt><dd><code>curl -fsSL https://raw.githubusercontent.com/niklas-heer/sideporch/main/install.sh | sh</code></dd>
             <dt>Nix</dt><dd><code>nix run github:niklas-heer/sideporch</code></dd>
           </dl>
         </li>
         <li>
           <h3>Open it and become the admin</h3>
-          <p>The first person to open it creates the admin account. Put it behind HTTPS with Caddy or your usual proxy so phones get notifications and passkeys work.</p>
+          <p>The first person to open it creates the admin account. Put it behind HTTPS with Caddy or your usual proxy so phones get notifications and passkeys work. <a href="{{ get_url(path='@/docs/get-started/run-on-a-server.md') }}">How to run it on a server</a></p>
         </li>
         <li>
           <h3>Bring people in</h3>
           <p>Share invite links, or open sign-up for a community. Nobody needs an email address unless you want sign-in links.</p>
         </li>
       </ol>
-      <p class="more">The <a href="https://github.com/niklas-heer/sideporch#install">README</a> covers running it for real: HTTPS, backups, updates and moving from Slack. Sideporch is young; expect rough edges before 1.0, and read the <a href="https://github.com/niklas-heer/sideporch/releases">release notes</a> for what changed.</p>
+      <p class="more">The <a href="{{ get_url(path='@/docs/_index.md') }}">documentation</a> covers the rest: <a href="{{ get_url(path='@/docs/get-started/update.md') }}">updates</a>, <a href="{{ get_url(path='@/docs/community/backups.md') }}">backups</a>, <a href="{{ get_url(path='@/docs/community/move-from-slack.md') }}">moving from Slack</a> and <a href="{{ get_url(path='@/docs/integrations/automations.md') }}">automations</a>. Sideporch is young; expect rough edges before 1.0, and read the <a href="https://github.com/niklas-heer/sideporch/releases">release notes</a> for what changed.</p>
     </section>
   </main>
 {% endblock %}
