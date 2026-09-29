@@ -76,6 +76,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/emoji/{name}/delete", post(files::delete_emoji))
         .route("/search", get(search::search))
+        .route("/search/suggest", get(search::suggest))
         .route("/commands", get(commands))
         .route("/push/key", get(push::public_key))
         .route("/push/subscriptions", post(push::subscribe))

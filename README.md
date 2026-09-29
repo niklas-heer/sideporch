@@ -64,7 +64,7 @@ Open <http://localhost:8080> (or <http://127.0.0.1:8080> for the Homebrew versio
 - **Activity** collects mentions and replies to threads you're in. **Saved** keeps messages you want to come back to.
 - **Reminders**: `/remind me tomorrow to water the plants`, or *Remind me* in any message's menu. They arrive as a message to yourself, in your own time zone.
 - **Send later**: the clock next to Send schedules a message; **Scheduled** lists what's waiting.
-- **Search** every channel and conversation you're in.
+- **Search** every channel and conversation you're in, with results as you type. Best matches come first, favouring recent ones; narrow down with `from:ada`, `in:#ops`, `has:file`, `has:link`, `is:pinned`, `mentions:me`, `before:2026-09-01` or `on:yesterday`, `"exact phrases"`, `pizza OR tacos` and `-excluded` words. Misspelled words are corrected from what your team actually wrote.
 - **Push notifications** for direct messages, mentions and thread replies, straight from your server. Mute noisy channels; leave the ones you don't need.
 - **Keyboard shortcuts**:
 

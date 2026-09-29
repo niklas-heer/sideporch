@@ -11,10 +11,6 @@ use crate::error::{AppError, AppResult};
 /// can't express, such as rebuilding the search index.
 enum Migration {
     Sql(&'static str),
-    #[expect(
-        dead_code,
-        reason = "the first code migration comes with the search index rebuild"
-    )]
     Code(fn(&Transaction<'_>) -> AppResult<()>),
 }
 
@@ -431,7 +427,23 @@ CREATE TABLE poll_marks (
 );
 ",
     ),
+    Migration::Code(rebuild_search),
 ];
+
+/// Recreates the search index with prefix indexes, which make the prefix
+/// matching every search does fast, and a view of its vocabulary for
+/// spelling suggestions. Poll options become searchable too.
+fn rebuild_search(tx: &Transaction<'_>) -> AppResult<()> {
+    tx.execute_batch(
+        "DROP TABLE messages_fts;
+         CREATE VIRTUAL TABLE messages_fts USING fts5(
+             content, tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3');
+         CREATE VIRTUAL TABLE messages_fts_terms USING fts5vocab(messages_fts, 'row');",
+    )?;
+    crate::store::rebuild_search_index(tx)?;
+    tx.execute_batch("INSERT INTO messages_fts (messages_fts) VALUES ('optimize');")?;
+    Ok(())
+}
 
 /// The schema version this build writes: one per migration.
 pub fn schema_version() -> i64 {

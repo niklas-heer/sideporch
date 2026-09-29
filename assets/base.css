@@ -278,3 +278,7 @@ html, body {
 /* Forms in popovers, such as creating a poll, open centred over a dimmed page. */
 .dialog-popover:popover-open { position: fixed; inset: 0; margin: auto; height: fit-content; max-height: calc(100dvh - 2rem); overflow-y: auto; }
 .dialog-popover::backdrop { background: rgb(0 0 0 / 0.35); }
+
+/* The chosen entry in the sidebar's quick search results. */
+#quick-results [aria-selected="true"] > a { background: var(--screen); }
+.dark #quick-results [aria-selected="true"] > a { background: var(--night); }

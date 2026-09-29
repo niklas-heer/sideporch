@@ -91,11 +91,12 @@ async fn messages_can_be_edited_deleted_pinned_and_saved() {
             .await
             .contains(&format!("#m{id}"))
     );
+    // The old word no longer matches; search offers the new one instead.
     assert!(
-        !admin
+        admin
             .page("/search?q=helo")
             .await
-            .contains(&format!("#m{id}"))
+            .contains("Showing results for")
     );
     // Only the author edits.
     assert_eq!(

@@ -72,7 +72,109 @@ async fn search_finds_messages_people_may_read() {
     // Words match as prefixes, and search operators are just words.
     assert!(cat.page("/search?q=stak").await.contains("stakes"));
     let odd = cat.page("/search?q=%22NOT%20OR%20(%20*").await;
-    assert!(odd.contains("Nothing matches"));
+    assert!(odd.contains("No messages match"));
+}
+
+/// Filters narrow a search, with or without words; misspelled words are
+/// corrected from what the team actually wrote.
+#[tokio::test]
+async fn search_filters_sorting_and_spelling() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let bea = invite(&server, &admin, "Bea Baker", "bea").await;
+    let general = home_channel(&admin).await;
+    let ops = admin.post("/channels", &[("name", "ops")]).await;
+    let ops: i64 = location(&ops).trim_start_matches("/c/").parse().unwrap();
+
+    admin
+        .send(general, "Deploy notes for the garden release", None)
+        .await;
+    bea.send(
+        general,
+        "The garden release went out, see https://example.com/notes",
+        None,
+    )
+    .await;
+    bea.send(ops, "Garden deploy failed on the second server", None)
+        .await;
+    admin
+        .send(general, "Unrelated chatter about pizza", None)
+        .await;
+    bea.send(general, "/poll Lunch? | Pizza | Tacos", None)
+        .await;
+
+    // Words: every one must match, as a prefix.
+    let page = bea.page("/search?q=garden%20release").await;
+    assert!(page.contains("Deploy notes") && page.contains("went out"));
+    assert!(!page.contains("second server"));
+    // from: and in:
+    let page = bea.page("/search?q=garden%20from:bea").await;
+    assert!(page.contains("went out") && page.contains("second server"));
+    assert!(!page.contains("Deploy notes"));
+    let page = bea.page("/search?q=garden%20in:%23ops").await;
+    assert!(page.contains("second server") && !page.contains("went out"));
+    // Phrases, OR and exclusions.
+    let page = bea.page("/search?q=%22release%20went%22").await;
+    assert!(!page.contains("Deploy notes") && page.contains("out, see"));
+    let page = bea.page("/search?q=pizza%20OR%20failed").await;
+    assert!(page.contains("chatter") && page.contains("second server"));
+    let page = bea.page("/search?q=garden%20-deploy").await;
+    assert!(
+        page.contains("went out")
+            && !page.contains("second server")
+            && !page.contains("Deploy notes")
+    );
+    // Filters alone, newest first; poll options are searchable.
+    let page = bea.page("/search?q=has:link").await;
+    assert!(page.contains("went out") && !page.contains("Deploy notes"));
+    assert!(
+        bea.page("/search?q=tacos%20has:poll")
+            .await
+            .contains("Lunch?")
+    );
+    assert!(
+        bea.page("/search?q=from:me%20is:pinned")
+            .await
+            .contains("No messages match")
+    );
+    // Filters that name nothing say so.
+    let page = bea
+        .page("/search?q=garden%20from:nobody%20has:banana")
+        .await;
+    assert!(page.contains("Nobody here is called") && page.contains("has:banana isn"));
+    // Dates, in the searcher's time zone.
+    assert!(
+        bea.page("/search?q=garden%20on:today")
+            .await
+            .contains("went out")
+    );
+    assert!(
+        bea.page("/search?q=garden%20before:today")
+            .await
+            .contains("No messages match")
+    );
+    // A misspelled word is corrected.
+    let page = bea.page("/search?q=gardne%20relase").await;
+    assert!(
+        page.contains("Showing results for") && page.contains("garden release"),
+        "{page}"
+    );
+    // People and channels whose names match are listed.
+    let page = admin.page("/search?q=baker").await;
+    assert!(page.contains("@bea"));
+    let page = admin.page("/search?q=ops").await;
+    assert!(page.contains(&format!("href=\"/c/{ops}\"")));
+    // Quick results while typing.
+    let suggestions: serde_json::Value = bea
+        .get("/search/suggest?q=gard")
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        suggestions["items"].as_array().unwrap().len() >= 3,
+        "{suggestions}"
+    );
 }
 
 #[tokio::test]

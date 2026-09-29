@@ -314,12 +314,16 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                 img src="/assets/logo.svg" alt="" class="h-8 w-8";
                 span class="text-lg font-bold tracking-tight text-white" { "Sideporch" }
             }
-            form method="get" action="/search" role="search" class="px-3 pb-2" {
+            form method="get" action="/search" role="search" class="relative px-3 pb-2" data-quick-search {
                 label class="flex items-center gap-2 rounded-lg bg-floor-2 px-3 py-1.5 text-haint focus-within:bg-floor-3" {
                     (icon(icons::MAGNIFYING_GLASS, "h-4 w-4 shrink-0"))
-                    input type="search" name="q" placeholder="Search messages" aria-label="Search messages"
+                    input type="search" name="q" placeholder="Search" aria-label="Search messages, people and channels"
+                        autocomplete="off" role="combobox" aria-expanded="false" aria-controls="quick-results" aria-autocomplete="list"
                         class="min-w-0 flex-1 bg-transparent text-sm text-white outline-hidden placeholder:text-haint";
                 }
+                // app.js fills this with matches while typing.
+                ul id="quick-results" role="listbox" hidden
+                    class="absolute inset-x-3 top-full z-40 mt-1 max-h-96 overflow-y-auto rounded-xl border border-line bg-white p-1 text-ink shadow-2xl dark:border-night-line dark:bg-night-2 dark:text-haint-2" {}
             }
             div class="flex-1 overflow-y-auto px-3 pb-4" {
                 ul class="mb-4 space-y-0.5" data-sidebar-nav {
@@ -528,7 +532,15 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
                         (channel.topic)
                     }
                 }
-                a href={ "/c/" (channel.id) "/pins" } class="ml-auto flex items-center gap-1 rounded-lg p-2 text-sm text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night-2"
+                span class="ml-auto" {}
+                @if channel.kind != ChannelKind::Direct {
+                    a href={ "/search?q=in%3A%23" (channel.name) "%20" }
+                        class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night-2"
+                        aria-label="Search this channel" title="Search this channel" {
+                        (icon(icons::MAGNIFYING_GLASS, "h-5 w-5"))
+                    }
+                }
+                a href={ "/c/" (channel.id) "/pins" } class="flex items-center gap-1 rounded-lg p-2 text-sm text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night-2"
                     aria-label={ "Pinned messages: " (view.pins) } title="Pinned messages" {
                     (icon(icons::PUSH_PIN, "h-5 w-5"))
                     @if view.pins > 0 { span { (view.pins) } }

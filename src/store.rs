@@ -1043,7 +1043,7 @@ pub fn home_channel(conn: &Connection) -> AppResult<Option<i64>> {
 
 // Messages
 
-const MESSAGE_SELECT: &str = "SELECT m.id, m.channel_id, m.parent_id, m.user_id, u.display_name,
+pub const MESSAGE_SELECT: &str = "SELECT m.id, m.channel_id, m.parent_id, m.user_id, u.display_name,
         m.bot_name, m.bot_icon_url, m.body, m.attachments, m.created_at, (m.webhook_id IS NOT NULL OR m.slack_format),
         u.avatar_file_id, COALESCE(u.status_emoji, ''), m.gif,
         (SELECT COUNT(*) FROM messages r WHERE r.parent_id = m.id),
@@ -1054,9 +1054,9 @@ const MESSAGE_SELECT: &str = "SELECT m.id, m.channel_id, m.parent_id, m.user_id,
     FROM messages m LEFT JOIN users u ON u.id = m.user_id";
 
 /// How many columns [`MESSAGE_SELECT`] reads; queries add theirs after.
-const MESSAGE_COLUMNS: usize = 22;
+pub const MESSAGE_COLUMNS: usize = 22;
 
-fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
+pub fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
     let user_id: Option<i64> = row.get(3)?;
     let display_name: Option<String> = row.get(4)?;
     let bot_name: Option<String> = row.get(5)?;
@@ -1209,7 +1209,7 @@ fn hydrate_votes(conn: &Connection, messages: &mut [Message], ids: &str) -> AppR
 }
 
 /// Loads files and reactions for already loaded messages.
-fn hydrate(conn: &Connection, messages: &mut [Message]) -> AppResult<()> {
+pub fn hydrate(conn: &Connection, messages: &mut [Message]) -> AppResult<()> {
     if messages.is_empty() {
         return Ok(());
     }
@@ -1425,6 +1425,47 @@ pub fn latest_message_id(conn: &Connection, channel_id: i64) -> AppResult<Option
     )?)
 }
 
+/// Fills the search index from every message that isn't deleted. Used when
+/// the index changes shape.
+pub fn rebuild_search_index(conn: &Connection) -> AppResult<()> {
+    let mut statement = conn.prepare(
+        "SELECT m.id, m.body, m.attachments, m.gif, m.poll,
+                (SELECT group_concat(f.name, char(10)) FROM message_files mf JOIN files f ON f.id = mf.file_id
+                 WHERE mf.message_id = m.id)
+         FROM messages m WHERE m.deleted_at IS NULL",
+    )?;
+    let mut insert = conn.prepare("INSERT INTO messages_fts (rowid, content) VALUES (?1, ?2)")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        let mut searchable = vec![row.get::<_, String>(1)?];
+        if let Some(files) = row.get::<_, Option<String>>(5)? {
+            searchable.push(files);
+        }
+        let attachments: Vec<Attachment> = row
+            .get::<_, Option<String>>(2)?
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
+        for attachment in &attachments {
+            searchable.extend(attachment.searchable_text());
+        }
+        if let Some(gif) = row
+            .get::<_, Option<String>>(3)?
+            .and_then(|json| serde_json::from_str::<Gif>(&json).ok())
+        {
+            searchable.push(gif.title);
+        }
+        if let Some(poll) = row
+            .get::<_, Option<String>>(4)?
+            .and_then(|json| crate::polls::Spec::from_json(&json))
+        {
+            searchable.extend(poll.options);
+        }
+        insert.execute(params![id, searchable.join("\n")])?;
+    }
+    Ok(())
+}
+
 /// Rewrites a message's search entry from what it holds now.
 fn reindex(conn: &Connection, id: i64) -> AppResult<()> {
     conn.execute("DELETE FROM messages_fts WHERE rowid = ?1", [id])?;
@@ -1441,6 +1482,9 @@ fn reindex(conn: &Connection, id: i64) -> AppResult<()> {
     }
     if let Some(gif) = &message.gif {
         searchable.push(gif.title.clone());
+    }
+    if let Some(poll) = &message.poll {
+        searchable.extend(poll.options.iter().map(|option| option.label.clone()));
     }
     conn.execute(
         "INSERT INTO messages_fts (rowid, content) VALUES (?1, ?2)",
@@ -2467,48 +2511,6 @@ pub fn add_automation_reaction(
         params![message_id, automation_id, emoji, now],
     )?;
     Ok(added > 0)
-}
-
-// Search
-
-pub struct SearchHit {
-    pub message: Message,
-    pub channel: String,
-    pub is_direct: bool,
-    pub snippet: String,
-}
-
-/// Messages matching an FTS5 `query` that `user_id` may read, newest first.
-/// The snippet marks matches with U+0001 and U+0002.
-pub fn search(
-    conn: &Connection,
-    user_id: i64,
-    query: &str,
-    limit: u32,
-) -> AppResult<Vec<SearchHit>> {
-    let mut statement = conn.prepare(&format!(
-        "{MESSAGE_SELECT}, messages_fts f, channels c
-         WHERE f.rowid = m.id AND c.id = m.channel_id AND messages_fts MATCH ?1
-           AND ((c.kind = 'public' AND c.private = 0) OR EXISTS (
-               SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = ?2))
-         ORDER BY m.id DESC LIMIT ?3"
-    ).replace(
-        "FROM messages m LEFT JOIN",
-        ", snippet(messages_fts, 0, char(1), char(2), '…', 16), c.kind,
-         COALESCE(c.name, (SELECT u2.display_name FROM channel_members o JOIN users u2 ON u2.id = o.user_id
-                           WHERE o.channel_id = c.id AND o.user_id != ?2), 'yourself')
-         FROM messages m LEFT JOIN",
-    ))?;
-    let hits = statement.query_map(params![query, user_id, limit], |row| {
-        let kind: String = row.get(MESSAGE_COLUMNS.saturating_add(1))?;
-        Ok(SearchHit {
-            message: message_from_row(row)?,
-            snippet: row.get(MESSAGE_COLUMNS)?,
-            is_direct: kind == "dm",
-            channel: row.get(MESSAGE_COLUMNS.saturating_add(2))?,
-        })
-    })?;
-    Ok(hits.collect::<Result<_, _>>()?)
 }
 
 /// How much Sideporch holds, for the system page.

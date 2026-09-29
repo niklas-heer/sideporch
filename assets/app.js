@@ -1326,6 +1326,95 @@
     }
   }
 
+  // Matching channels, people and messages under the sidebar's search box,
+  // while typing. Enter without a choice opens the full results.
+  function setupQuickSearch() {
+    const form = document.querySelector("form[data-quick-search]");
+    const input = form?.querySelector("input[name=q]");
+    const list = form?.querySelector("#quick-results");
+    if (!input || !list) return;
+    let timer = 0;
+    let active = -1;
+    let latest = 0;
+    const items = () => [...list.querySelectorAll("[role=option]")];
+    const close = () => {
+      list.hidden = true;
+      input.setAttribute("aria-expanded", "false");
+      active = -1;
+    };
+    const highlight = (index) => {
+      const options = items();
+      active = Math.max(-1, Math.min(index, options.length - 1));
+      options.forEach((option, i) => option.setAttribute("aria-selected", i === active ? "true" : "false"));
+      options[active]?.scrollIntoView({ block: "nearest" });
+    };
+    const kinds = { channel: "Channel", person: "Person", message: "Message" };
+    const show = (data) => {
+      list.replaceChildren();
+      if (data.corrected) {
+        const note = document.createElement("li");
+        note.className = "px-3 py-1 text-xs text-muted";
+        note.textContent = `Showing results for “${data.corrected}”`;
+        list.append(note);
+      }
+      for (const item of data.items) {
+        const option = document.createElement("li");
+        option.setAttribute("role", "option");
+        option.setAttribute("aria-selected", "false");
+        const link = document.createElement("a");
+        link.href = item.href;
+        link.tabIndex = -1;
+        link.className = "block rounded-lg px-3 py-1.5 hover:bg-screen dark:hover:bg-night";
+        const label = document.createElement("span");
+        label.className = "block truncate text-sm font-semibold";
+        label.textContent = item.label;
+        const detail = document.createElement("span");
+        detail.className = "block truncate text-xs text-muted";
+        detail.textContent = [kinds[item.kind], item.detail].filter(Boolean).join(" · ");
+        link.append(label, detail);
+        option.append(link);
+        list.append(option);
+      }
+      const all = document.createElement("li");
+      all.setAttribute("role", "option");
+      all.setAttribute("aria-selected", "false");
+      const link = document.createElement("a");
+      link.href = `/search?q=${encodeURIComponent(input.value)}`;
+      link.tabIndex = -1;
+      link.className = "block rounded-lg px-3 py-1.5 text-sm font-semibold text-floor-3 hover:bg-screen dark:text-haint dark:hover:bg-night";
+      link.textContent = data.items.length ? "All results" : "Search everything";
+      all.append(link);
+      list.append(all);
+      list.hidden = false;
+      input.setAttribute("aria-expanded", "true");
+      active = -1;
+    };
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      const text = input.value.trim();
+      if (text.length < 2) return close();
+      timer = setTimeout(async () => {
+        const request = ++latest;
+        const response = await fetch(`/search/suggest?q=${encodeURIComponent(text)}`).catch(() => null);
+        if (!response?.ok || request !== latest) return;
+        show(await response.json());
+      }, 150);
+    });
+    input.addEventListener("keydown", (event) => {
+      if (list.hidden) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        highlight(active + (event.key === "ArrowDown" ? 1 : -1));
+      } else if (event.key === "Enter" && active >= 0) {
+        event.preventDefault();
+        items()[active]?.querySelector("a")?.click();
+      } else if (event.key === "Escape") {
+        close();
+      }
+    });
+    input.addEventListener("blur", () => setTimeout(close, 150));
+  }
+
   for (const link of document.querySelectorAll("a[data-nav-link]")) {
     if (link.pathname === location.pathname) link.setAttribute("aria-current", "page");
   }
@@ -1333,6 +1422,7 @@
   markOwnReactions(document);
   drawDiagrams(document);
   setupCopyButtons();
+  setupQuickSearch();
   setupReactions();
   setupPush().catch((error) => console.warn("sideporch: notifications unavailable", error));
   setupInstallHint();
