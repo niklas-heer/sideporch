@@ -12,6 +12,8 @@ Change the version in `Dockerfile`, then from this directory:
 fly deploy
 ```
 
+`fly deploy --build-arg VERSION=main` deploys the newest build of `main` instead, to try something before a release.
+
 ## Set it up from scratch
 
 ```sh
