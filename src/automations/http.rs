@@ -284,11 +284,10 @@ impl Http {
                 .header("user-agent", &self.user_agent)
                 .body(Full::new(Bytes::new()))
                 .map_err(|error| format!("invalid request: {error}"))?;
-            let answer =
-                tokio::time::timeout(Duration::from_mins(1), self.client.request(request))
-                    .await
-                    .map_err(|_| "the server didn't answer within a minute".to_owned())?
-                    .map_err(|error| describe(&error))?;
+            let answer = tokio::time::timeout(Duration::from_mins(1), self.client.request(request))
+                .await
+                .map_err(|_| "the server didn't answer within a minute".to_owned())?
+                .map_err(|error| describe(&error))?;
             if answer.status().is_redirection() {
                 let location = answer
                     .headers()
