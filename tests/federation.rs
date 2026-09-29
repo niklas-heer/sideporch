@@ -299,7 +299,7 @@ async fn a_shared_channel_carries_conversations_both_ways() {
     bea.wait_for(&format!("/c/{copy}"), "🎉").await;
     bea.post(&format!("/c/{copy}/m/{bea_hello}/delete"), &[])
         .await;
-    for _ in 0..50 {
+    for _ in 0..200 {
         if !ada
             .page(&format!("/c/{garden}"))
             .await

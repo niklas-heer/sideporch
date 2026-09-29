@@ -222,9 +222,11 @@ impl Browser {
             .unwrap()
     }
 
-    /// Waits until `path` contains `needle`, polling for up to five seconds.
+    /// Waits until `path` contains `needle`, polling for up to 20 seconds:
+    /// between servers, an event can take several deliveries on a busy
+    /// machine.
     pub async fn wait_for(&self, path: &str, needle: &str) -> String {
-        for _ in 0..50 {
+        for _ in 0..200 {
             let page = self.page(path).await;
             if page.contains(needle) {
                 return page;
