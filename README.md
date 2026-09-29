@@ -23,7 +23,7 @@ with the things people miss from Slack, on a server you control.</p>
 
 ## Why Sideporch
 
-- **Yours, and simple to run.** One program and one data directory. No database server, no email server, nothing else to install. It runs on a small VPS, a home server or an ARM board.
+- **Yours, and simple to run.** One program and one data directory. No database server, no mail server required, nothing else to install. It runs on a small VPS, a home server or an ARM board.
 - **Familiar.** Channels, threads, mentions, reactions, search and notifications work the way people know from Slack, and you can bring your Slack history along.
 - **Easy to back up and move.** Everything lives in one directory; download a complete backup from the browser, or have Sideporch write one every day.
 - **Works with your tools.** Monitors, CI and bots post through Slack-compatible webhooks, so tools like [Gatus](https://gatus.io/) and Grafana work unchanged. Automations in Lua do the rest.
@@ -163,7 +163,7 @@ On NixOS, the flake provides a module: import `sideporch.nixosModules.default` a
 sideporch --data /var/lib/sideporch --public-url https://chat.example.com
 ```
 
-Then open Sideporch in your browser. While no account exists, the first visitor creates the admin account; after that, new people need an invite link from **People**. No email is needed.
+Then open Sideporch in your browser. While no account exists, the first visitor creates the admin account; after that, new people need an invite link from **People**, unless you open sign-up under **Admin → Community**. No email is needed; set up an SMTP server under **Admin → Sign-in** if you want sign-in links and self-service password resets.
 
 If others can reach the server before you set it up, start it with `--require-setup-link`. Setup then needs a one-time link that stays out of service and container logs. Get it on the server:
 
@@ -314,7 +314,7 @@ Real servers are often slower than the test machine, so plan with a quarter of t
 
 - **It's for teams, not enterprises.** Sideporch runs on one server with SQLite. That is plenty for a team, a club, a company of a few thousand or a family, but not built for organisations of tens of thousands.
 - **The server can read everything.** Messages are not end-to-end encrypted. Whoever runs the server, and admins through backups, can read all of them. Use HTTPS.
-- **No calls, no email.** There are no voice or video calls, and notifications are push notifications, not email.
+- **No calls, no email notifications.** There are no voice or video calls, and notifications are push notifications, not email. Email, when set up, is only for signing in.
 - **No group direct messages.** Make a private channel instead.
 - **Automations only see public channels**, never private channels or direct messages.
 
