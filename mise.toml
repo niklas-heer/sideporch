@@ -9,6 +9,8 @@ zig = "0.16.0"
 dagger = "0.21.9"
 # Release notes from conventional commits; see cliff.toml.
 "aqua:orhun/git-cliff" = "2.14.2"
+# Signs release checksums (SHA256SUMS.minisig); Sideporch verifies them before updating itself.
+"aqua:jedisct1/minisign" = "0.12"
 # The website (website/): a static site generator and its search index.
 # Linux x64 uses Zola's static musl build: Vercel builds on Amazon Linux
 # 2023, whose glibc (2.34) is older than the gnu build needs (2.35).

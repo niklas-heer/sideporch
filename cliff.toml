@@ -71,6 +71,8 @@ commit_preprocessors = [
 # The HTML comments order the groups; they don't show in the notes.
 commit_parsers = [
   { message = "^chore: release", skip = true },
+  # Security fixes come first; Sideporch reminds admins of releases with them.
+  { message = "^fix\\(security\\)", group = "<!-- ! -->Security" },
   { message = "^feat", group = "<!-- 0 -->New" },
   { message = "^perf", group = "<!-- 1 -->Faster" },
   { message = "^fix\\(ci\\)", skip = true },

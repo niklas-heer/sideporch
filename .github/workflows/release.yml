@@ -104,7 +104,7 @@ jobs:
       - uses: jdx/mise-action@v4.3.0
         with:
           version: "2026.9.5"
-          install_args: "aqua:orhun/git-cliff"
+          install_args: "aqua:orhun/git-cliff aqua:jedisct1/minisign"
       - name: Write the release notes
         env:
           MISE_AUTO_INSTALL: "false"
@@ -114,15 +114,18 @@ jobs:
           pattern: sideporch-*
           merge-multiple: true
           path: dist
-      - name: Generate checksums and publish
+      - name: Generate and sign checksums, and publish
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          MISE_AUTO_INSTALL: "false"
+          SIDEPORCH_RELEASE_SIGNING_KEY: ${{ secrets.SIDEPORCH_RELEASE_SIGNING_KEY }}
         run: |
           version=${GITHUB_REF_NAME#v}
           sh scripts/release-checksums.sh "$version" dist
+          mise exec -- sh scripts/release-sign.sh "$version" dist
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "Sideporch $GITHUB_REF_NAME" \
-            --notes-file release-notes.md dist/*.tar.gz dist/SHA256SUMS
+            --notes-file release-notes.md dist/*.tar.gz dist/SHA256SUMS dist/SHA256SUMS.minisig
 
   image:
     name: Publish release images
