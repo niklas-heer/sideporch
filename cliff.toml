@@ -1,0 +1,87 @@
+# Release notes from conventional commits, for people who run Sideporch.
+# `mise run release-notes` prints the newest version's; the release
+# workflow publishes them. See https://git-cliff.org/docs/configuration.
+
+[changelog]
+header = """
+# Changelog
+
+What changed in each Sideporch release. Upgrading is installing the new
+version and restarting it; the database updates itself on start.\n
+"""
+body = """
+{%- macro area(commit) -%}
+  {%- if commit.scope and commit.scope not in ["deps"] -%}
+    {%- set scope = commit.scope -%}
+    **
+    {%- if scope == "db" %}Database
+    {%- elif scope == "pwa" %}Phone app
+    {%- elif scope == "readme" %}README
+    {%- elif scope == "ai" %}AI
+    {%- elif scope == "mcp" %}MCP
+    {%- elif scope == "gifs" %}GIFs
+    {%- elif scope == "ui" %}Interface
+    {%- else %}{{ scope | replace(from="-", to=" ") | upper_first }}
+    {%- endif -%}
+    :** {% endif -%}
+{%- endmacro -%}
+
+{% if version -%}
+## Sideporch {{ version | trim_start_matches(pat="v") }} ({{ timestamp | date(format="%Y-%m-%d") }})
+{% else -%}
+## Not released yet
+{% endif %}
+{%- set breaking = commits | filter(attribute="breaking", value=true) -%}
+{% if breaking | length > 0 %}
+### Before you upgrade
+{% for commit in breaking %}
+- {{ self::area(commit=commit) }}{{ commit.breaking_description | default(value=commit.message) | upper_first }}
+{%- endfor %}
+{% endif %}
+{%- for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {{ self::area(commit=commit) }}{{ commit.message | upper_first }} \
+  ([{{ commit.id | truncate(length=7, end="") }}](https://github.com/niklas-heer/sideporch/commit/{{ commit.id }}))
+{%- endfor %}
+{% endfor %}
+{% if version %}
+### Install or upgrade
+
+`brew upgrade sideporch`, `docker pull ghcr.io/niklas-heer/sideporch:{{ version | trim_start_matches(pat="v") }}`, \
+or run the [install script](https://github.com/niklas-heer/sideporch#install) again, then restart Sideporch. \
+It updates its database on start ([more on updating](https://github.com/niklas-heer/sideporch#update)). \
+The archives below are checked against `SHA256SUMS`.
+{% endif %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+protect_breaking_commits = true
+filter_commits = false
+tag_pattern = "v[0-9]+\\.[0-9]+\\.[0-9]+"
+sort_commits = "oldest"
+commit_preprocessors = [
+  # Issue and pull request numbers become links.
+  { pattern = '\(#([0-9]+)\)', replace = "([#${1}](https://github.com/niklas-heer/sideporch/issues/${1}))" },
+]
+# The HTML comments order the groups; they don't show in the notes.
+commit_parsers = [
+  { message = "^chore: release", skip = true },
+  { message = "^feat", group = "<!-- 0 -->New" },
+  { message = "^perf", group = "<!-- 1 -->Faster" },
+  { message = "^fix\\(ci\\)", skip = true },
+  { message = "^fix", group = "<!-- 2 -->Fixed" },
+  { message = "^docs\\(website\\)", skip = true },
+  { message = "^docs\\(decisions\\)", skip = true },
+  { message = "^docs", group = "<!-- 3 -->Documentation" },
+  { message = "^refactor", skip = true },
+  { message = "^style", skip = true },
+  { message = "^test", skip = true },
+  { message = "^build", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^chore", skip = true },
+]

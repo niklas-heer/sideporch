@@ -98,6 +98,17 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          # The release notes cover every commit since the previous tag.
+          fetch-depth: 0
+      - uses: jdx/mise-action@v4.3.0
+        with:
+          version: "2026.9.5"
+          install_args: "aqua:orhun/git-cliff"
+      - name: Write the release notes
+        env:
+          MISE_AUTO_INSTALL: "false"
+        run: mise run release-notes > release-notes.md
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: sideporch-*
@@ -111,7 +122,7 @@ jobs:
           version=${GITHUB_REF_NAME#v}
           sh scripts/release-checksums.sh "$version" dist
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "Sideporch $GITHUB_REF_NAME" \
-            --generate-notes dist/*.tar.gz dist/SHA256SUMS
+            --notes-file release-notes.md dist/*.tar.gz dist/SHA256SUMS
 
   image:
     name: Publish release images

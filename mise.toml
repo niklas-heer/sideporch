@@ -7,6 +7,8 @@ rust = { version = "1.97.1", profile = "minimal", components = "clippy,rustfmt",
 zig = "0.16.0"
 "github:rust-cross/cargo-zigbuild" = "0.23.4"
 dagger = "0.21.9"
+# Release notes from conventional commits; see cliff.toml.
+"aqua:orhun/git-cliff" = "2.14.2"
 
 [tasks.dev]
 description = "Run Sideporch locally with its data in ./data"
@@ -61,6 +63,14 @@ run = [
 [tasks.image]
 description = "Build the container image for this machine's architecture and load it into Docker"
 run = "dagger call image export --path target/sideporch-image.tar && docker load --input target/sideporch-image.tar"
+
+[tasks."release-notes"]
+description = "Print the release notes for the newest tag, or for unreleased commits: mise run release-notes [-- --unreleased]"
+run = "git-cliff --latest --strip header"
+
+[tasks.changelog]
+description = "Write the release notes of every version to CHANGELOG.md"
+run = "git-cliff --output CHANGELOG.md"
 
 [tasks.package]
 description = "Archive a built binary into dist/: mise run package -- VERSION TARGET [BINARY]"

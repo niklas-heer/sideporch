@@ -2,6 +2,31 @@
 
 lockfile_version = 1
 
+[[tools."aqua:orhun/git-cliff"]]
+version = "2.14.2"
+backend = "aqua:orhun/git-cliff"
+specifiers = ["2.14.2"]
+
+[tools."aqua:orhun/git-cliff"."platforms.linux-arm64"]
+checksum = "sha256:69e208f6e4baef3a0f9b759d5f44223aa9336b86c691072a3d0c98d35a816e69"
+url = "https://github.com/orhun/git-cliff/releases/download/v2.14.2/git-cliff-2.14.2-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/orhun/git-cliff/releases/assets/573483780"
+
+[tools."aqua:orhun/git-cliff"."platforms.linux-x64"]
+checksum = "sha256:24f397c733add5390fdceee3a2088588ab0d5f944ce00d34cb7029b888cf2db4"
+url = "https://github.com/orhun/git-cliff/releases/download/v2.14.2/git-cliff-2.14.2-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/orhun/git-cliff/releases/assets/573483509"
+
+[tools."aqua:orhun/git-cliff"."platforms.macos-arm64"]
+checksum = "sha256:a0be97e237d440d34c5e508ec21d070b2c85cbb8be48a46a56f9a4e8bd247f05"
+url = "https://github.com/orhun/git-cliff/releases/download/v2.14.2/git-cliff-2.14.2-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/orhun/git-cliff/releases/assets/573487203"
+
+[tools."aqua:orhun/git-cliff"."platforms.macos-x64"]
+checksum = "sha256:4e647d2deb152aca1e987f225cf42b080b991dd98f3bce4027ef95446d982ac3"
+url = "https://github.com/orhun/git-cliff/releases/download/v2.14.2/git-cliff-2.14.2-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/orhun/git-cliff/releases/assets/573484837"
+
 [[tools.dagger]]
 version = "0.21.9"
 backend = "aqua:dagger/dagger"

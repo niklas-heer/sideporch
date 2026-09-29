@@ -25,7 +25,7 @@ Use mise: `mise run check` runs formatting, Clippy with the strict lints in `Car
 
 Build output grows quickly (a debug build with tests is several GB); `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` keeps it near 1.5 GB. Clean up when you are done: `mise run clean-debug` removes debug builds and test binaries, `mise run clean` removes all of `target/` and `dist/`, and `mise run clean-ci` empties only this project's cache in the local Dagger engine.
 
-Releases: bump `version` in `Cargo.toml`, then push a matching `vX.Y.Z` tag. Linux release binaries must stay fully static; `scripts/package.sh` refuses dynamic ones.
+Releases: bump `version` in `Cargo.toml`, then push a matching `vX.Y.Z` tag. The release notes come from the commit subjects since the previous tag (`cliff.toml`; preview with `mise run release-notes -- --unreleased`): `feat`, `perf`, `fix` and `docs` commits are listed for people who run Sideporch, so write their subjects for them, and describe anything they must do before upgrading in a `BREAKING CHANGE:` footer. Linux release binaries must stay fully static; `scripts/package.sh` refuses dynamic ones.
 
 ## Conventions
 
