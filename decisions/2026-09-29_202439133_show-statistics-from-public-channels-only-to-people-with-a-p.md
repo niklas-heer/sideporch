@@ -28,10 +28,10 @@ On 2026-09-29 Niklas asked for statistics and a ranking of who writes most, avai
 - **Counting private channels and DMs in totals** would give truer numbers, but shows how much people talk privately, which members of a private channel may not expect to be shared.
 - **A separate admin switch** for statistics would duplicate what permissions already do; the permission covers "everyone", "trusted people only", and "only this role".
 - **No opt-out** would be simpler, but rankings put names on a public board. In an open community some people won't want that.
-- **Caching the report** isn't done yet: the page isn't hot, and the queries use a new index on `messages (created_at)`.
+- **Counting on the main connection** would be simplest, but Sideporch serves every request through one database connection. With a million messages, counting all time took seconds and held up everything else, including posting. Statistics are read on a separate read-only connection instead, from covering indexes, and the part that is the same for everyone (per period and time zone) is kept for 60 times as long as it took to count, at most five minutes. Measured on a million messages over two years: all time takes about 2 s the first time and 20 ms after; pages load in 30 ms while it counts.
 
 ## Consequences
 
 - Adding a kind of message or channel means deciding whether it counts here.
-- Statistics over all time scan every counted message; if large servers find the page slow, cache the shared part per period and time zone.
+- Statistics over all time still read every counted message's index entry once per cache period. If that grows too slow, keep running totals per hour instead.
 - The ranking is a leaderboard. Communities that dislike that can leave the permission to a role nobody has.

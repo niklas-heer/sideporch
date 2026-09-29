@@ -5,7 +5,7 @@ use maud::{Markup, PreEscaped, html};
 use super::{Shell, avatar, panel_page};
 use crate::{
     markup::Context,
-    statistics::{Bar, Period, Person, Report, Step},
+    statistics::{Bar, Period, Person, Report, Step, Summary},
     store::Author,
 };
 
@@ -49,17 +49,17 @@ fn share(count: i64, max: i64) -> f64 {
 }
 
 /// Messages per bar as an SVG bar chart; each bar names its count on hover.
-fn chart(report: &Report) -> Markup {
+fn chart(summary: &Summary) -> Markup {
     const HEIGHT: f64 = 100.0;
-    let max = report.bars.iter().map(|bar| bar.count).max().unwrap_or(0);
-    let width = report.bars.len().saturating_mul(10).max(10);
-    let unit = match report.step {
+    let max = summary.bars.iter().map(|bar| bar.count).max().unwrap_or(0);
+    let width = summary.bars.len().saturating_mul(10).max(10);
+    let unit = match summary.step {
         Step::Day => "day",
         Step::Month => "month",
         Step::Year => "year",
     };
-    let first = report.bars.first().map(|bar| bar_label(bar, report.step));
-    let last = report.bars.last().map(|bar| bar_label(bar, report.step));
+    let first = summary.bars.first().map(|bar| bar_label(bar, summary.step));
+    let last = summary.bars.last().map(|bar| bar_label(bar, summary.step));
     html! {
         figure {
             svg viewBox={ "0 0 " (width) " 100" } preserveAspectRatio="none" role="img"
@@ -68,10 +68,10 @@ fn chart(report: &Report) -> Markup {
                 // Closed explicitly: inside SVG, an open `<line>` would swallow the bars.
                 line x1="0" y1="99.5" x2=(width) y2="99.5" stroke="currentColor" stroke-opacity="0.25" vector-effect="non-scaling-stroke" {}
                 g fill="currentColor" {
-                    @for (x, bar) in (0_u32..).step_by(10).zip(&report.bars) {
+                    @for (x, bar) in (0_u32..).step_by(10).zip(&summary.bars) {
                         @let height = if bar.count > 0 { (share(bar.count, max) * (HEIGHT - 4.0) / 100.0).max(2.0) } else { 0.0 };
                         rect x=(x.saturating_add(1)) y=(format!("{:.1}", HEIGHT - height)) width="8" height=(format!("{height:.1}")) rx="1.5" {
-                            title { (bar_label(bar, report.step)) ": " (plural(bar.count, "message", "messages")) }
+                            title { (bar_label(bar, summary.step)) ": " (plural(bar.count, "message", "messages")) }
                         }
                     }
                 }
@@ -159,6 +159,7 @@ fn you(report: &Report) -> Markup {
 }
 
 pub fn page(shell: &Shell<'_>, report: &Report, ctx: &Context) -> Markup {
+    let summary = &*report.summary;
     panel_page(
         "Statistics",
         shell,
@@ -166,7 +167,7 @@ pub fn page(shell: &Shell<'_>, report: &Report, ctx: &Context) -> Markup {
         &html! {
             nav class="mb-4 flex flex-wrap gap-2" aria-label="Period" {
                 @for period in Period::ALL {
-                    a href={ "/statistics?period=" (period.key()) } aria-current=[(period == report.period).then_some("page")]
+                    a href={ "/statistics?period=" (period.key()) } aria-current=[(period == summary.period).then_some("page")]
                         class="rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-screen aria-[current=page]:bg-haint-2 aria-[current=page]:text-floor dark:hover:bg-night-2 dark:aria-[current=page]:bg-floor-2 dark:aria-[current=page]:text-haint-2" {
                         (period.label())
                     }
@@ -174,21 +175,21 @@ pub fn page(shell: &Shell<'_>, report: &Report, ctx: &Context) -> Markup {
             }
             (you(report))
             div class="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-4" {
-                (total("Messages", "messages", report.messages))
-                (total("People who wrote", "people", report.people))
-                (total("Reactions", "reactions", report.reactions))
-                (total("Files", "files", report.files))
+                (total("Messages", "messages", summary.messages))
+                (total("People who wrote", "people", summary.people))
+                (total("Reactions", "reactions", summary.reactions))
+                (total("Files", "files", summary.files))
             }
             div class="mb-6" {
-                (section(match report.step { Step::Day => "Messages per day", Step::Month => "Messages per month", Step::Year => "Messages per year" }, &chart(report)))
+                (section(match summary.step { Step::Day => "Messages per day", Step::Month => "Messages per month", Step::Year => "Messages per year" }, &chart(summary)))
             }
             div class="grid gap-4 sm:grid-cols-2" {
-                (section("Most messages", &ranking("messages", &report.writers, ("message", "messages"), ctx)))
-                (section("Most reactions received", &ranking("reactions", &report.appreciated, ("reaction", "reactions"), ctx)))
+                (section("Most messages", &ranking("messages", &summary.writers, ("message", "messages"), ctx)))
+                (section("Most reactions received", &ranking("reactions", &summary.appreciated, ("reaction", "reactions"), ctx)))
                 (section("Busiest channels", &html! {
-                    @if report.channels.is_empty() { (nobody()) } @else {
+                    @if summary.channels.is_empty() { (nobody()) } @else {
                         ol class="space-y-1.5 text-sm" data-ranking="channels" {
-                            @for (id, name, count) in &report.channels {
+                            @for (id, name, count) in &summary.channels {
                                 li class="flex justify-between gap-2" data-channel=(id) data-count=(count) {
                                     a href={ "/c/" (id) } class="truncate font-semibold hover:underline" { "#" (name) }
                                     span class="shrink-0 text-muted dark:text-haint" { (plural(*count, "message", "messages")) }
@@ -198,9 +199,9 @@ pub fn page(shell: &Shell<'_>, report: &Report, ctx: &Context) -> Markup {
                     }
                 }))
                 (section("Most used reactions", &html! {
-                    @if report.emoji.is_empty() { (nobody()) } @else {
+                    @if summary.emoji.is_empty() { (nobody()) } @else {
                         ol class="flex flex-wrap gap-2" data-ranking="emoji" {
-                            @for (name, count) in &report.emoji {
+                            @for (name, count) in &summary.emoji {
                                 li class="flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-sm dark:border-night-line" title={ ":" (name) ":" } data-count=(count) {
                                     span class="text-lg leading-none" { (PreEscaped(ctx.emoji_html(name).unwrap_or_else(|| format!(":{name}:")))) }
                                     span class="text-muted dark:text-haint" { (grouped(*count)) }

@@ -629,6 +629,15 @@ ALTER TABLE users ADD COLUMN hide_from_rankings INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX messages_by_time ON messages (created_at);
 ",
     ),
+    Migration::Sql(
+        r"
+-- Statistics read only these columns, so a period is read from the
+-- indexes alone, several times faster than from the tables.
+DROP INDEX messages_by_time;
+CREATE INDEX messages_for_statistics ON messages (created_at, channel_id, user_id, deleted_at, webhook_id, automation_id);
+CREATE INDEX reactions_for_statistics ON reactions (created_at, message_id, user_id, emoji);
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix
@@ -652,10 +661,12 @@ pub fn schema_version() -> i64 {
 }
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on
-/// Tokio's blocking pool behind one connection.
+/// Tokio's blocking pool behind one connection, and a second, read-only
+/// one for long reads that shouldn't hold up everything else.
 #[derive(Clone)]
 pub struct Db {
     conn: Arc<Mutex<Connection>>,
+    reader: Arc<Mutex<Connection>>,
 }
 
 impl Db {
@@ -678,7 +689,27 @@ impl Db {
         migrate(&mut conn, schema_version())?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            reader: Arc::new(Mutex::new(connect_reader(path)?)),
         })
+    }
+
+    /// Runs `f` on the read-only connection. With the write-ahead log,
+    /// reads there neither wait for writes nor hold them up, so heavy
+    /// reports such as statistics go here.
+    pub async fn read<T, F>(&self, f: F) -> AppResult<T>
+    where
+        F: FnOnce(&Connection) -> AppResult<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let conn = Arc::clone(&self.reader);
+        tokio::task::spawn_blocking(move || {
+            let guard = conn
+                .lock()
+                .map_err(|_| AppError::internal("database lock poisoned"))?;
+            f(&guard)
+        })
+        .await
+        .map_err(AppError::internal)?
     }
 
     /// Runs `f` with exclusive access to the connection.
@@ -706,6 +737,16 @@ pub fn connect(path: &Path) -> AppResult<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.pragma_update(None, "busy_timeout", 5000)?;
+    Ok(conn)
+}
+
+/// A read-only connection next to the one [`connect`] opens.
+fn connect_reader(path: &Path) -> AppResult<Connection> {
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
     conn.pragma_update(None, "busy_timeout", 5000)?;
     Ok(conn)
 }

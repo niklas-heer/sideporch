@@ -1,5 +1,7 @@
 //! The statistics page.
 
+use std::{sync::Arc, time::Instant};
+
 use axum::{
     Router,
     extract::{Query, State},
@@ -41,16 +43,37 @@ async fn page(
         .and_then(Period::from_key)
         .unwrap_or_default();
     let viewer = user.id;
-    let (report, ctx) = state
+    let zone = state
         .db
-        .call(move |conn| {
-            let zone = later::now_for(conn, viewer)?.time_zone().clone();
+        .call(move |conn| Ok(later::now_for(conn, viewer)?.time_zone().clone()))
+        .await?;
+    let zone_name = zone.iana_name().unwrap_or("UTC").to_owned();
+    let summary = if let Some(summary) = state.statistics.get(period, &zone_name) {
+        summary
+    } else {
+        let started = Instant::now();
+        let summary = Arc::new(
+            state
+                .db
+                .read(move |conn| statistics::summary(conn, period, &zone))
+                .await?,
+        );
+        state
+            .statistics
+            .put(period, &zone_name, Arc::clone(&summary), started.elapsed());
+        summary
+    };
+    let shared = Arc::clone(&summary);
+    let (you, ctx) = state
+        .db
+        .read(move |conn| {
             Ok((
-                statistics::report(conn, period, &zone, viewer)?,
+                statistics::standing(conn, &shared, viewer)?,
                 store::render_context(conn)?,
             ))
         })
         .await?;
+    let report = statistics::Report { summary, you };
     let sidebar = shell_data(&state, user.id).await?;
     let shell = Shell {
         user: &user,

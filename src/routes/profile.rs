@@ -393,6 +393,8 @@ async fn save(
             Ok(())
         })
         .await?;
+    // Rankings show whether someone left them right away.
+    state.statistics.clear();
     Ok(Redirect::to("/settings/profile?saved=1").into_response())
 }
 

@@ -20,6 +20,8 @@ weight = 5
 
 Only public channels count. Private channels and direct messages never do, not in the totals and not in the rankings.
 
+On a big server, counting takes a moment, so the numbers are kept for up to a few minutes: about a minute for every second they took to count. Small servers always show them fresh.
+
 Messages from bots, webhooks and automations count in the totals, and so do people from [other servers](@/docs/community/connect/other-servers.md) in shared channels, but they aren't ranked. Deleted messages don't count.
 
 ## Leaving the rankings

@@ -2,8 +2,17 @@
 //! channels count, never private channels or direct messages. Rankings
 //! list people from this server who haven't left them; bots, automations
 //! and people from other servers count in the totals but aren't ranked.
+//!
+//! A [`Summary`] is the same for everyone who picks the same period in the
+//! same time zone. On a big server it takes a while to count, so it's read
+//! on the database's read-only connection and kept in a [`Cache`] for a
+//! time that grows with how long it took.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use jiff::{Timestamp, ToSpan, civil::Date, tz::TimeZone};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -17,11 +26,12 @@ const RANKED: &str = "m.webhook_id IS NULL AND m.automation_id IS NULL AND u.ins
      AND u.deactivated_at IS NULL AND u.hide_from_rankings = 0";
 /// How many entries a ranking shows.
 const TOP: i64 = 10;
+const TOP_SHOWN: usize = 10;
 /// Messages are counted per quarter hour, then placed in the reader's
 /// days; that suits every time zone in use, including half-hour offsets.
 const QUARTER_HOUR_MS: i64 = 15 * 60 * 1000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Period {
     Week,
     #[default]
@@ -112,10 +122,13 @@ pub struct Standing {
     pub hidden: bool,
 }
 
+/// Everything the page shows except the reader's own standing.
 #[derive(Debug, Clone)]
-pub struct Report {
+pub struct Summary {
     pub period: Period,
     pub step: Step,
+    /// When the period starts, in milliseconds.
+    since: i64,
     pub messages: i64,
     pub people: i64,
     pub reactions: i64,
@@ -127,7 +140,69 @@ pub struct Report {
     pub channels: Vec<(i64, String, i64)>,
     /// Most used reactions: emoji name and count.
     pub emoji: Vec<(String, i64)>,
+    /// Messages of every ranked person, most first.
+    ranked: Vec<(i64, i64)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Report {
+    pub summary: Arc<Summary>,
     pub you: Standing,
+}
+
+/// The longest a summary is kept.
+const KEEP_AT_MOST: Duration = Duration::from_mins(5);
+/// A summary is kept this many times as long as it took to count, so small
+/// servers always see fresh numbers and big ones aren't counted over and
+/// over.
+const KEEP_FACTOR: u32 = 60;
+/// Summaries kept at once, across periods and time zones.
+const KEEP_ENTRIES: usize = 64;
+
+struct Kept {
+    made: Instant,
+    keep: Duration,
+    summary: Arc<Summary>,
+}
+
+/// Recent summaries, by period and time zone.
+#[derive(Default)]
+pub struct Cache(Mutex<HashMap<(Period, String), Kept>>);
+
+impl Cache {
+    pub fn get(&self, period: Period, zone: &str) -> Option<Arc<Summary>> {
+        let kept = self.0.lock().ok()?;
+        kept.get(&(period, zone.to_owned()))
+            .filter(|kept| kept.made.elapsed() < kept.keep)
+            .map(|kept| Arc::clone(&kept.summary))
+    }
+
+    /// Keeps `summary`, which took `took` to count.
+    pub fn put(&self, period: Period, zone: &str, summary: Arc<Summary>, took: Duration) {
+        if let Ok(mut kept) = self.0.lock() {
+            if kept.len() >= KEEP_ENTRIES {
+                kept.retain(|_, kept| kept.made.elapsed() < kept.keep);
+                if kept.len() >= KEEP_ENTRIES {
+                    kept.clear();
+                }
+            }
+            kept.insert(
+                (period, zone.to_owned()),
+                Kept {
+                    made: Instant::now(),
+                    keep: took.saturating_mul(KEEP_FACTOR).min(KEEP_AT_MOST),
+                    summary,
+                },
+            );
+        }
+    }
+
+    /// Forgets every summary, such as after someone left the rankings.
+    pub fn clear(&self) {
+        if let Ok(mut kept) = self.0.lock() {
+            kept.clear();
+        }
+    }
 }
 
 /// Whether `user_id` left the rankings.
@@ -204,9 +279,10 @@ fn bars(
     bars
 }
 
-fn people(conn: &Connection, sql: &str, since: i64) -> AppResult<Vec<Person>> {
+/// People and their counts; `limit` -1 for everyone.
+fn people(conn: &Connection, sql: &str, since: i64, limit: i64) -> AppResult<Vec<Person>> {
     let mut statement = conn.prepare(sql)?;
-    let rows = statement.query_map(params![since, TOP], |row| {
+    let rows = statement.query_map(params![since, limit], |row| {
         Ok(Person {
             id: row.get(0)?,
             name: row.get(1)?,
@@ -254,13 +330,8 @@ fn count(conn: &Connection, sql: &str, since: i64) -> AppResult<i64> {
     Ok(conn.query_row(sql, [since], |row| row.get(0))?)
 }
 
-/// The statistics for `period`, with days in `zone` and `viewer`'s standing.
-pub fn report(
-    conn: &Connection,
-    period: Period,
-    zone: &TimeZone,
-    viewer: i64,
-) -> AppResult<Report> {
+/// Everything but the reader's standing for `period`, with days in `zone`.
+pub fn summary(conn: &Connection, period: Period, zone: &TimeZone) -> AppResult<Summary> {
     let today = Timestamp::now().to_zoned(zone.clone()).date();
     let (start, _) = window(period, today);
     let since = match start {
@@ -295,7 +366,8 @@ pub fn report(
         since,
     )?;
 
-    let writers = people(
+    // Everyone ranked, once: the top of the list, and where each reader stands.
+    let everyone = people(
         conn,
         &format!(
             "SELECT u.id, u.display_name, u.avatar_file_id, COUNT(*) AS n FROM messages m
@@ -304,7 +376,13 @@ pub fn report(
              GROUP BY u.id ORDER BY n DESC, u.display_name COLLATE NOCASE LIMIT ?2"
         ),
         since,
+        -1,
     )?;
+    let ranked = everyone
+        .iter()
+        .map(|person| (person.id, person.count))
+        .collect();
+    let writers = everyone.into_iter().take(TOP_SHOWN).collect();
     // Reactions to your own messages don't count.
     let appreciated = people(
         conn,
@@ -316,6 +394,7 @@ pub fn report(
              GROUP BY u.id ORDER BY n DESC, u.display_name COLLATE NOCASE LIMIT ?2"
         ),
         since,
+        TOP,
     )?;
 
     let mut statement = conn.prepare(&format!(
@@ -338,9 +417,10 @@ pub fn report(
         .query_map(params![since, TOP], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<Result<_, _>>()?;
 
-    Ok(Report {
+    Ok(Summary {
         period,
         step,
+        since,
         messages,
         people: people_count,
         reactions,
@@ -350,34 +430,40 @@ pub fn report(
         appreciated,
         channels,
         emoji,
-        you: standing(conn, viewer, since)?,
+        ranked,
     })
 }
 
-fn standing(conn: &Connection, viewer: i64, since: i64) -> AppResult<Standing> {
-    let messages: i64 = conn.query_row(
+/// Where `viewer` stands in `summary`.
+pub fn standing(conn: &Connection, summary: &Summary, viewer: i64) -> AppResult<Standing> {
+    let hidden = hidden(conn, viewer)?;
+    let of = i64::try_from(summary.ranked.len()).unwrap_or(i64::MAX);
+    if let Some((_, messages)) = summary.ranked.iter().find(|(id, _)| *id == viewer) {
+        let ahead = summary
+            .ranked
+            .iter()
+            .take_while(|(_, count)| count > messages)
+            .count();
+        return Ok(Standing {
+            messages: *messages,
+            rank: Some(i64::try_from(ahead).unwrap_or(i64::MAX).saturating_add(1)),
+            of,
+            hidden,
+        });
+    }
+    // Not ranked: they left the rankings, or wrote nothing in the period.
+    let messages = conn.query_row(
         &format!(
             "SELECT COUNT(*) FROM messages m JOIN channels c ON c.id = m.channel_id
              WHERE {COUNTED} AND m.user_id = ?1 AND m.webhook_id IS NULL AND m.automation_id IS NULL
                AND m.created_at >= ?2"
         ),
-        params![viewer, since],
+        params![viewer, summary.since],
         |row| row.get(0),
-    )?;
-    let hidden = hidden(conn, viewer)?;
-    let (ahead, of): (i64, i64) = conn.query_row(
-        &format!(
-            "SELECT COALESCE(SUM(n > ?2), 0), COUNT(*) FROM (
-                 SELECT COUNT(*) AS n FROM messages m
-                 JOIN channels c ON c.id = m.channel_id JOIN users u ON u.id = m.user_id
-                 WHERE {COUNTED} AND {RANKED} AND m.created_at >= ?1 GROUP BY u.id)"
-        ),
-        params![since, messages],
-        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     Ok(Standing {
         messages,
-        rank: (messages > 0 && !hidden).then(|| ahead.saturating_add(1)),
+        rank: None,
         of,
         hidden,
     })

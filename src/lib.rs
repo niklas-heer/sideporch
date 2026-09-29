@@ -125,6 +125,8 @@ pub(crate) struct AppState {
     updates: Arc<updates::Updates>,
     /// Other Sideporch servers.
     federation: federation::Shared,
+    /// Recent statistics, so big servers don't count them for every visit.
+    statistics: Arc<statistics::Cache>,
 }
 
 /// Whether and how the first account can still be created.
@@ -274,6 +276,7 @@ impl Sideporch {
                 )?,
             }),
             federation: Arc::new(federation),
+            statistics: Arc::default(),
         };
         let updates = Arc::clone(&state.updates);
         state.db.call(move |conn| updates.load(conn)).await?;
