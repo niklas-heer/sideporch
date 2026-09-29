@@ -319,7 +319,7 @@ async fn roles_grant_permissions_and_admins_can_turn_uploads_off() {
         StatusCode::SEE_OTHER
     );
     let page = admin.page("/admin/permissions").await;
-    let role_id = between(&page, "/admin/roles/", "/delete").to_owned();
+    let role_id = between(&page, "/admin/roles/", "/badge").to_owned();
     let upload_key = format!("role_{role_id}_upload_files");
     let invite_key = format!("role_{role_id}_invite_people");
     let mut pairs = pairs.clone();
@@ -383,7 +383,7 @@ async fn reports_and_time_outs() {
     // A moderator role handles it.
     admin.post("/admin/roles", &[("name", "Moderators")]).await;
     let page = admin.page("/admin/permissions").await;
-    let role_id = between(&page, "/admin/roles/", "/delete").to_owned();
+    let role_id = between(&page, "/admin/roles/", "/badge").to_owned();
     let moderate = format!("role_{role_id}_moderate");
     admin
         .post(

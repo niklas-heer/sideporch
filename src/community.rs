@@ -290,6 +290,58 @@ fn number(conn: &Connection, key: &str, default: u32) -> AppResult<u32> {
         .unwrap_or(default))
 }
 
+/// A level `user_id` reached and wasn't told about yet, with the
+/// permissions it brought. The first time, it just notes the current level.
+pub fn level_up(conn: &Connection, user_id: i64) -> AppResult<Option<(u8, Vec<&'static str>)>> {
+    let (level, noticed): (u8, Option<u8>) = conn.query_row(
+        "SELECT trust_level, level_noticed FROM users WHERE id = ?1",
+        [user_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let Some(noticed) = noticed else {
+        notice_level(conn, user_id)?;
+        return Ok(None);
+    };
+    if level <= noticed {
+        return Ok(None);
+    }
+    let unlocked = levels(conn)?
+        .into_iter()
+        .filter(|(_, needed)| needed.is_some_and(|needed| needed > noticed && needed <= level))
+        .map(|(permission, _)| permission.label())
+        .collect();
+    Ok(Some((level, unlocked)))
+}
+
+/// Remembers that `user_id` saw their current level.
+pub fn notice_level(conn: &Connection, user_id: i64) -> AppResult<()> {
+    conn.execute(
+        "UPDATE users SET level_noticed = trust_level WHERE id = ?1",
+        [user_id],
+    )?;
+    Ok(())
+}
+
+/// What `progress` still needs for the next level, or `None` at the top,
+/// or when an admin keeps them where they are.
+pub fn next_level(conn: &Connection, progress: &Progress) -> AppResult<Option<(u8, Requirement)>> {
+    if progress.locked {
+        return Ok(None);
+    }
+    let requirements = requirements(conn)?;
+    let Some(next) = requirements.get(usize::from(progress.level)) else {
+        return Ok(None);
+    };
+    Ok(Some((
+        progress.level.saturating_add(1),
+        Requirement {
+            days: next.days.saturating_sub(progress.days),
+            visits: next.visits.saturating_sub(progress.visits),
+            messages: next.messages.saturating_sub(progress.messages),
+        },
+    )))
+}
+
 /// The requirements for levels 1 to 3.
 pub fn requirements(conn: &Connection) -> AppResult<[Requirement; 3]> {
     let mut all = REQUIREMENTS;
@@ -438,11 +490,74 @@ pub struct Role {
     pub description: String,
     pub permissions: Vec<Permission>,
     pub members: i64,
+    /// Whether it shows as a badge next to its people's names.
+    pub badge: bool,
+    /// A key from [`BADGE_COLORS`].
+    pub color: String,
+}
+
+/// Colors a role's badge can have: key, name, and the classes that draw it.
+pub const BADGE_COLORS: [(&str, &str, &str); 6] = [
+    (
+        "green",
+        "Green",
+        "bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200",
+    ),
+    (
+        "blue",
+        "Blue",
+        "bg-sky-100 text-sky-900 dark:bg-sky-950 dark:text-sky-200",
+    ),
+    (
+        "purple",
+        "Purple",
+        "bg-violet-100 text-violet-900 dark:bg-violet-950 dark:text-violet-200",
+    ),
+    (
+        "amber",
+        "Amber",
+        "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200",
+    ),
+    (
+        "rose",
+        "Rose",
+        "bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200",
+    ),
+    (
+        "gray",
+        "Gray",
+        "bg-screen text-ink dark:bg-night-2 dark:text-haint-2",
+    ),
+];
+
+/// The classes for a badge of `color`; admins' badge for an empty one.
+pub fn badge_classes(color: &str) -> &'static str {
+    BADGE_COLORS
+        .iter()
+        .find(|(key, _, _)| *key == color)
+        .map_or(
+            "bg-haint-2 text-floor dark:bg-floor-2 dark:text-haint-2",
+            |(_, _, classes)| classes,
+        )
+}
+
+pub fn set_role_badge(conn: &Connection, role_id: i64, badge: bool, color: &str) -> AppResult<()> {
+    let color = if BADGE_COLORS.iter().any(|(key, _, _)| *key == color) {
+        color
+    } else {
+        "gray"
+    };
+    conn.execute(
+        "UPDATE roles SET badge = ?1, color = ?2 WHERE id = ?3",
+        params![badge, color, role_id],
+    )?;
+    Ok(())
 }
 
 pub fn roles(conn: &Connection) -> AppResult<Vec<Role>> {
     let mut statement = conn.prepare(
-        "SELECT r.id, r.name, r.description, (SELECT COUNT(*) FROM user_roles ur WHERE ur.role_id = r.id)
+        "SELECT r.id, r.name, r.description, (SELECT COUNT(*) FROM user_roles ur WHERE ur.role_id = r.id),
+                r.badge, r.color
          FROM roles r ORDER BY r.name COLLATE NOCASE",
     )?;
     let mut roles: Vec<Role> = statement
@@ -453,6 +568,8 @@ pub fn roles(conn: &Connection) -> AppResult<Vec<Role>> {
                 description: row.get(2)?,
                 permissions: Vec::new(),
                 members: row.get(3)?,
+                badge: row.get(4)?,
+                color: row.get(5)?,
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -525,16 +642,6 @@ pub fn set_user_roles(conn: &Connection, user_id: i64, role_ids: &[i64]) -> AppR
         )?;
     }
     Ok(())
-}
-
-/// The names of someone's roles, for their profile.
-pub fn role_names(conn: &Connection, user_id: i64) -> AppResult<Vec<String>> {
-    let mut statement = conn.prepare(
-        "SELECT r.name FROM roles r JOIN user_roles ur ON ur.role_id = r.id
-         WHERE ur.user_id = ?1 ORDER BY r.name COLLATE NOCASE",
-    )?;
-    let names = statement.query_map([user_id], |row| row.get(0))?;
-    Ok(names.collect::<Result<_, _>>()?)
 }
 
 // Joining

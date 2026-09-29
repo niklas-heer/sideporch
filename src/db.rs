@@ -662,6 +662,15 @@ CREATE TABLE bans (
 );
 ",
     ),
+    Migration::Sql(
+        r"
+-- Roles can show as a badge next to their people's names, in a color.
+ALTER TABLE roles ADD COLUMN badge INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE roles ADD COLUMN color TEXT NOT NULL DEFAULT 'gray';
+-- The trust level someone was last told about; NULL until first noted.
+ALTER TABLE users ADD COLUMN level_noticed INTEGER;
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

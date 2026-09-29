@@ -129,6 +129,9 @@ pub struct Sidebar {
     pub activity: bool,
     /// A reminder to update Sideporch, for admins.
     pub update: Option<crate::updates::Notice>,
+    /// A trust level the person reached and hasn't been told about, with
+    /// what it lets them do.
+    pub level_up: Option<(u8, Vec<&'static str>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -1040,6 +1043,7 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
         direct,
         activity,
         update: None,
+        level_up: None,
     })
 }
 
@@ -2484,9 +2488,14 @@ pub fn render_context(conn: &Connection) -> AppResult<std::sync::Arc<crate::mark
     type Cached = (String, Arc<crate::markup::Context>);
     static CACHE: LazyLock<Mutex<Map<String, Cached>>> = LazyLock::new(Mutex::default);
 
+    // Anything that changes what renders: new people and emoji, and who
+    // has which badge.
     let fingerprint: String = conn.query_row(
         "SELECT COALESCE((SELECT MAX(id) FROM users), 0) || ':' ||
-                (SELECT COUNT(*) || ':' || COALESCE(MAX(created_at), 0) FROM custom_emoji)",
+                (SELECT COUNT(*) || ':' || COALESCE(MAX(created_at), 0) FROM custom_emoji) || ':' ||
+                (SELECT COALESCE(group_concat(id), '') FROM users WHERE is_admin = 1) || ':' ||
+                (SELECT COALESCE(group_concat(id || name || badge || color), '') FROM roles) || ':' ||
+                (SELECT COUNT(*) || ':' || COALESCE(SUM(user_id * 1000003 + role_id), 0) FROM user_roles)",
         [],
         |row| row.get(0),
     )?;
@@ -2513,6 +2522,25 @@ pub fn render_context(conn: &Connection) -> AppResult<std::sync::Arc<crate::mark
     })? {
         let (id, username) = remote?;
         ctx.remote.insert(id, username);
+    }
+    let mut statement = conn.prepare(
+        "SELECT u.id, CASE WHEN u.is_admin THEN 'Admin' ELSE r.name END, CASE WHEN u.is_admin THEN '' ELSE r.color END
+         FROM users u LEFT JOIN user_roles ur ON ur.user_id = u.id
+         LEFT JOIN roles r ON r.id = ur.role_id AND r.badge = 1
+         WHERE u.is_admin = 1 OR r.id IS NOT NULL
+         ORDER BY u.id, r.name COLLATE NOCASE",
+    )?;
+    for badge in statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })? {
+        let (id, label, color) = badge?;
+        ctx.badges
+            .entry(id)
+            .or_insert(crate::markup::Badge { label, color });
     }
     let ctx = Arc::new(ctx);
     // An in-memory database has no path, so it can't share a cache entry.

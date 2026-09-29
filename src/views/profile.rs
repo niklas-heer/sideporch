@@ -37,7 +37,8 @@ fn status(user: &User, ctx: &Context) -> Markup {
 
 /// Someone's roles and trust level, and what an admin can change.
 pub struct Standing {
-    pub roles: Vec<String>,
+    /// For their own profile: the next level and what it still takes.
+    pub next_level: Option<(u8, crate::community::Requirement)>,
     pub role_ids: Vec<i64>,
     pub all_roles: Vec<crate::community::Role>,
     pub progress: crate::community::Progress,
@@ -72,18 +73,15 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context, standing: &St
                             "On " strong { (server) } ", a connected server. Their own server's admins look after their account."
                         }
                     }
-                    @if !standing.roles.is_empty() {
-                        p class="mt-2 flex flex-wrap gap-1.5" {
-                            @for role in &standing.roles {
-                                span class="rounded-full border border-line px-2 py-0.5 text-xs font-semibold dark:border-night-line" { (role) }
-                            }
-                        }
-                    }
+                    (role_chips(standing))
                     @if own || moderator {
                         p class="mt-2 text-sm text-muted dark:text-haint" title="Trust grows as people stay and take part." {
                             "Trust level " (standing.progress.level) ": " (crate::community::level_name(standing.progress.level))
                             @if standing.progress.locked { " (set by an admin)" }
                         }
+                    }
+                    @if let (true, Some((next, needs))) = (own, &standing.next_level) {
+                        (next_level(*next, needs))
                     }
                     @if let Some(until) = standing.timed_out_until {
                         p class="mt-2 rounded-lg bg-screen px-3 py-2 text-sm dark:bg-night-2" { "Timed out until " (super::timestamp(until)) "." }
@@ -129,6 +127,127 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context, standing: &St
             p class="mt-8 text-sm text-muted dark:text-haint" { "Joined " (timestamp_date(user.created_at)) }
         },
     )
+}
+
+/// Someone's roles; the ones that show as badges in their color.
+fn role_chips(standing: &Standing) -> Markup {
+    let theirs: Vec<&crate::community::Role> = standing
+        .all_roles
+        .iter()
+        .filter(|role| standing.role_ids.contains(&role.id))
+        .collect();
+    html! {
+        @if !theirs.is_empty() {
+            p class="mt-2 flex flex-wrap gap-1.5" data-roles {
+                @for role in theirs {
+                    @if role.badge {
+                        span class={ "rounded-full px-2 py-0.5 text-xs font-semibold " (crate::community::badge_classes(&role.color)) } { (role.name) }
+                    } @else {
+                        span class="rounded-full border border-line px-2 py-0.5 text-xs font-semibold dark:border-night-line" { (role.name) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// What someone still needs for the next trust level.
+fn next_level(level: u8, needs: &crate::community::Requirement) -> Markup {
+    let mut parts = Vec::new();
+    if needs.days > 0 {
+        parts.push(format!(
+            "{} more {}",
+            needs.days,
+            if needs.days == 1 { "day" } else { "days" }
+        ));
+    }
+    if needs.visits > 0 {
+        parts.push(format!(
+            "{} more {}",
+            needs.visits,
+            if needs.visits == 1 {
+                "day visiting"
+            } else {
+                "days visiting"
+            }
+        ));
+    }
+    if needs.messages > 0 {
+        parts.push(format!(
+            "{} more {}",
+            needs.messages,
+            if needs.messages == 1 {
+                "message"
+            } else {
+                "messages"
+            }
+        ));
+    }
+    html! {
+        p class="mt-1 text-sm text-muted dark:text-haint" data-next-level {
+            "Level " (level) " (" (crate::community::level_name(level)) ")"
+            @if parts.is_empty() { " comes with your next visit." } @else { " after " (parts.join(", ")) "." }
+        }
+    }
+}
+
+/// What a hover card shows besides the profile.
+pub struct CardData {
+    pub level: u8,
+    pub local_time: String,
+    pub roles: Vec<crate::community::Role>,
+    pub timed_out_until: Option<i64>,
+}
+
+/// A small card about someone, shown when hovering their name in chat.
+pub fn card(user: &User, ctx: &Context, data: &CardData) -> Markup {
+    let small = html! {
+        @if let Some(file_id) = user.avatar_file_id {
+            img src={ "/files/" (file_id) } alt="" class="h-14 w-14 shrink-0 rounded-xl bg-screen object-cover dark:bg-night-2";
+        } @else {
+            div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-floor-3 text-2xl font-bold text-white" aria-hidden="true" {
+                (user.display_name.chars().next().unwrap_or('?').to_uppercase().collect::<String>())
+            }
+        }
+    };
+    html! {
+        div class="w-72 rounded-xl border border-line bg-white p-4 text-ink shadow-2xl dark:border-night-line dark:bg-night-2 dark:text-haint-2" data-card=(user.id) {
+            div class="flex gap-3" {
+                (small)
+                div class="min-w-0" {
+                    p class="truncate font-bold" { (user.display_name) }
+                    p class="truncate text-sm text-muted dark:text-haint" {
+                        "@" (user.username)
+                        @if let Some(server) = &user.server { " · " (server) }
+                    }
+                    p class="mt-1 flex flex-wrap gap-1" {
+                        @if user.is_admin {
+                            span class={ "rounded px-1.5 text-xs font-semibold " (crate::community::badge_classes("")) } { "Admin" }
+                        }
+                        @for role in &data.roles {
+                            span class={ "rounded px-1.5 text-xs font-semibold " (if role.badge { crate::community::badge_classes(&role.color) } else { "border border-line dark:border-night-line" }) } { (role.name) }
+                        }
+                    }
+                }
+            }
+            (status(user, ctx))
+            dl class="mt-3 space-y-0.5 text-sm text-muted dark:text-haint" {
+                @if user.server.is_none() {
+                    div { dt class="inline" { "Level " } dd class="inline" { (data.level) " · " (crate::community::level_name(data.level)) } }
+                }
+                div { dt class="inline" { "Local time " } dd class="inline" { (data.local_time) } }
+                div { dt class="inline" { "Joined " } dd class="inline" { (timestamp_date(user.created_at)) } }
+                @if let Some(until) = data.timed_out_until {
+                    div { dd { "Timed out until " (super::timestamp(until)) } }
+                }
+                @if user.deactivated { div { dd { "Deactivated" } } }
+            }
+            div class="mt-3 flex gap-2" {
+                a href={ "/dm/" (user.id) } class="btn px-3 py-1 text-sm" { (icon(icons::CHAT_CIRCLE_TEXT, "h-4 w-4")) "Message" }
+                a href={ "/people/" (user.id) } class="btn-quiet px-3 py-1 text-sm" { "Profile" }
+            }
+        }
+    }
 }
 
 /// Banning someone, and the addresses they used, for moderators.

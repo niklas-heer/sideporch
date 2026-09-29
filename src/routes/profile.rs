@@ -29,6 +29,11 @@ pub const MAX_FAVORITES: usize = 12;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/people/{user_id}", get(profile))
+        .route("/people/{user_id}/card", get(card))
+        .route(
+            "/settings/level-noticed",
+            axum::routing::post(level_noticed),
+        )
         .route("/settings/profile", get(edit).post(save))
         .route(
             "/settings/appearance",
@@ -119,6 +124,7 @@ async fn profile(
 ) -> AppResult<Markup> {
     let now = crate::now_ms();
     let moderator = user.may(crate::community::Permission::Moderate) && user.id != user_id;
+    let own = user.id == user_id;
     let (person, ctx, standing) = state
         .db
         .call(move |conn| {
@@ -130,13 +136,19 @@ async fn profile(
             } else {
                 (Vec::new(), false)
             };
+            let progress = crate::community::progress(conn, user_id, now)?.unwrap_or_default();
+            let next_level = if own {
+                crate::community::next_level(conn, &progress)?
+            } else {
+                None
+            };
             let standing = views::profile::Standing {
                 addresses,
                 has_email,
-                roles: crate::community::role_names(conn, user_id)?,
+                next_level,
                 role_ids: crate::community::user_roles(conn, user_id)?,
                 all_roles: crate::community::roles(conn)?,
-                progress: crate::community::progress(conn, user_id, now)?.unwrap_or_default(),
+                progress,
                 timed_out_until: conn
                     .query_row(
                         "SELECT muted_until FROM users WHERE id = ?1 AND muted_until > ?2",
@@ -162,6 +174,56 @@ async fn profile(
     Ok(views::profile::profile_page(
         &shell, &person, &ctx, &standing,
     ))
+}
+
+/// The hover card for someone, as a piece of a page.
+async fn card(
+    _user: CurrentUser,
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>,
+) -> AppResult<Markup> {
+    let now = crate::now_ms();
+    let (person, ctx, data) = state
+        .db
+        .call(move |conn| {
+            let person = store::user(conn, user_id)?.ok_or(AppError::NotFound)?;
+            let theirs = crate::community::user_roles(conn, user_id)?;
+            let roles = crate::community::roles(conn)?
+                .into_iter()
+                .filter(|role| theirs.contains(&role.id))
+                .collect();
+            let zone = crate::later::zone(&store::user_timezone(conn, user_id)?);
+            let data = views::profile::CardData {
+                level: crate::community::progress(conn, user_id, now)?
+                    .unwrap_or_default()
+                    .level,
+                local_time: jiff::Timestamp::now()
+                    .to_zoned(zone)
+                    .strftime("%H:%M")
+                    .to_string(),
+                roles,
+                timed_out_until: conn
+                    .query_row(
+                        "SELECT muted_until FROM users WHERE id = ?1 AND muted_until > ?2",
+                        rusqlite::params![user_id, now],
+                        |row| row.get(0),
+                    )
+                    .optional()?,
+            };
+            Ok((person, store::render_context(conn)?, data))
+        })
+        .await?;
+    Ok(views::profile::card(&person, &ctx, &data))
+}
+
+/// Hides the note about reaching a new trust level.
+async fn level_noticed(user: CurrentUser, State(state): State<AppState>) -> AppResult<Response> {
+    let user_id = user.id;
+    state
+        .db
+        .call(move |conn| crate::community::notice_level(conn, user_id))
+        .await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 async fn render_edit(

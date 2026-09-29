@@ -429,7 +429,31 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
             @if let (true, Some(notice)) = (shell.user.is_admin, &shell.sidebar.update) {
                 (updates::notice(notice))
             }
+            @if let Some((level, unlocked)) = &shell.sidebar.level_up {
+                (level_up_note(*level, unlocked))
+            }
             (account_menu(shell))
+        }
+    }
+}
+
+/// Tells someone they reached a trust level, and what they can do now.
+fn level_up_note(level: u8, unlocked: &[&str]) -> Markup {
+    html! {
+        form method="post" action="/settings/level-noticed" data-level-up
+            class="mx-3 mb-3 rounded-xl bg-floor-2 p-3 text-sm text-haint-2" {
+            p class="font-semibold text-white" {
+                "You reached level " (level) ": " (crate::community::level_name(level))
+            }
+            @if unlocked.is_empty() {
+                p class="mt-1" { "Thanks for taking part." }
+            } @else {
+                p class="mt-1" { "You can now:" }
+                ul class="mt-1 list-disc pl-5" {
+                    @for what in unlocked { li { (what) } }
+                }
+            }
+            button type="submit" class="mt-2 rounded-lg bg-lamp px-3 py-1 text-sm font-semibold text-floor" { "Nice" }
         }
     }
 }
@@ -904,6 +928,29 @@ pub fn author_key(author: &Author) -> String {
     }
 }
 
+/// A badge like Admin or Moderator, next to someone's name.
+pub fn badge_chip(badge: &markup::Badge) -> Markup {
+    html! {
+        span class={ "rounded px-1.5 text-xs font-semibold " (crate::community::badge_classes(&badge.color)) } data-badge { (badge.label) }
+    }
+}
+
+/// The picture beside a message; people's opens their hover card too.
+fn message_avatar(message: &Message, user_id: Option<i64>, render: &Render<'_>) -> Markup {
+    html! {
+        div class="w-9 shrink-0 pt-0.5" {
+            @if let Some(id) = user_id {
+                // The name next to it is the same link for screen readers.
+                a href={ "/people/" (id) } data-person-card=(id) tabindex="-1" aria-hidden="true" class="block group-data-[compact]:hidden" {
+                    (avatar(&message.author, render.ctx))
+                }
+            } @else {
+                div class="group-data-[compact]:hidden" { (avatar(&message.author, render.ctx)) }
+            }
+        }
+    }
+}
+
 /// One message. Live updates send exactly this markup to browsers.
 pub fn message_item(
     message: &Message,
@@ -927,9 +974,7 @@ pub fn message_item(
             data-saved[render.is_saved(message.id)] data-deleted[message.deleted]
             data-created=(message.created_at) data-compact[compact]
             class="group relative flex gap-3 px-5 py-1 hover:bg-screen data-[compact]:py-0.5 data-[pinned]:bg-amber-50 dark:hover:bg-night-2 dark:data-[pinned]:bg-floor/40" {
-            div class="w-9 shrink-0 pt-0.5" {
-                div class="group-data-[compact]:hidden" { (avatar(&message.author, render.ctx)) }
-            }
+            (message_avatar(message, user_id, render))
             div class="min-w-0 flex-1" {
                 @if let Some(pinner) = &message.pinned_by {
                     p class="mb-0.5 flex items-center gap-1 text-xs font-semibold text-amber-800 dark:text-lamp" {
@@ -938,7 +983,8 @@ pub fn message_item(
                 }
                 div class="flex items-baseline gap-2 group-data-[compact]:hidden" {
                     @if let Author::User { id, status_emoji, .. } = &message.author {
-                        a href={ "/people/" (id) } class="font-bold hover:underline" { (name) }
+                        a href={ "/people/" (id) } data-person-card=(id) class="font-bold hover:underline" { (name) }
+                        @if let Some(badge) = render.ctx.badges.get(id) { (badge_chip(badge)) }
                         @if let Some(username) = render.ctx.remote.get(id) {
                             span class="text-xs text-muted dark:text-haint" title="On another Sideporch server" { "@" (username) }
                         }

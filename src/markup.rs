@@ -17,6 +17,17 @@ pub struct Context {
     /// People from other servers: their account here, and their username
     /// with its server, like `bea@chat.example.org`.
     pub remote: HashMap<i64, String>,
+    /// The badge shown next to each person's name: Admin, or their first
+    /// role that shows as a badge.
+    pub badges: HashMap<i64, Badge>,
+}
+
+/// A label next to someone's name, like Admin or Moderator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Badge {
+    pub label: String,
+    /// A key from `community::BADGE_COLORS`; empty for admins.
+    pub color: String,
 }
 
 impl Context {

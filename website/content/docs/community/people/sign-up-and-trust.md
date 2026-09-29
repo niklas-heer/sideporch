@@ -43,6 +43,8 @@ People who sign up on their own start at level **0**; people who join with an in
 
 Admins change the requirements under **Admin → Community**. Levels never go down on their own. On someone's profile, an admin can set their level and **keep it there**, so it neither rises nor falls.
 
+People see their own level on their profile, and what the next one still takes ("Level 2 after 3 more days, 12 more messages"). When they reach a level, a note in the sidebar says so, and what they can do now.
+
 ## Permissions
 
 Each permission asks for a trust level, or is left to roles. Admins may always do everything. The defaults:
@@ -68,3 +70,5 @@ Someone who may not do something yet is told so, and that they'll earn more as t
 ## Roles
 
 Roles give permissions to people regardless of their level, such as "Moderators" or "Designers". Create them under **Admin → Permissions**, pick their permissions, and give them to people from their profiles. A role's name shows on the profiles of the people who have it.
+
+Tick **Show as a badge** and pick a color, and the role also shows next to its people's names in chat and on their hover cards, so everyone can tell who the moderators are. Admins always have an **Admin** badge. Someone with several badge roles shows the first in alphabetical order next to their name, and all of them on their profile.

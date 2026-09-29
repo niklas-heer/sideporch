@@ -88,6 +88,79 @@
     });
   }
 
+  // Hover cards: pointing at a name or picture in chat, or tabbing to a
+  // name, shows who that is. Touch screens follow the link instead.
+  const cardBox = document.createElement("div");
+  cardBox.className = "person-card";
+  cardBox.hidden = true;
+  document.body.append(cardBox);
+  const cards = new Map();
+  let cardTimer = 0;
+  let cardAnchor = null;
+  function loadCard(id) {
+    if (!cards.has(id)) cards.set(id, fetch(`/people/${id}/card`).then((response) => (response.ok ? response.text() : "")).catch(() => ""));
+    return cards.get(id);
+  }
+  function placeCard(anchor) {
+    const box = anchor.getBoundingClientRect();
+    const width = cardBox.offsetWidth;
+    const height = cardBox.offsetHeight;
+    cardBox.style.left = `${Math.max(8, Math.min(box.left, innerWidth - width - 8))}px`;
+    const below = box.bottom + 6;
+    cardBox.style.top = `${below + height > innerHeight - 8 ? Math.max(8, box.top - height - 6) : below}px`;
+  }
+  function showCard(anchor) {
+    clearTimeout(cardTimer);
+    cardAnchor = anchor;
+    cardTimer = setTimeout(async () => {
+      const html = await loadCard(anchor.dataset.personCard);
+      if (!html || cardAnchor !== anchor) return;
+      cardBox.innerHTML = html;
+      cardBox.hidden = false;
+      placeCard(anchor);
+    }, 350);
+  }
+  function hideCard(delay = 200) {
+    clearTimeout(cardTimer);
+    cardTimer = setTimeout(() => {
+      if (cardBox.matches(":hover") || cardBox.contains(document.activeElement)) return;
+      cardBox.hidden = true;
+      cardAnchor = null;
+    }, delay);
+  }
+  document.addEventListener("pointerover", (event) => {
+    if (event.pointerType !== "mouse") return;
+    const anchor = event.target.closest?.("[data-person-card]");
+    if (anchor && anchor !== cardAnchor) showCard(anchor);
+  });
+  document.addEventListener("pointerout", (event) => {
+    const anchor = event.target.closest?.("[data-person-card]");
+    if (anchor && !anchor.contains(event.relatedTarget)) hideCard();
+  });
+  cardBox.addEventListener("pointerleave", () => hideCard());
+  document.addEventListener("focusin", (event) => {
+    const anchor = event.target.closest?.("a[data-person-card]:not([tabindex='-1'])");
+    if (anchor) showCard(anchor);
+    else if (!cardBox.contains(event.target)) hideCard(0);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !cardBox.hidden) {
+      cardBox.hidden = true;
+      cardAnchor = null;
+    }
+  });
+  document.addEventListener("scroll", () => {
+    if (!cardBox.hidden) hideCard(0);
+  }, true);
+
+  // The note about a new trust level goes away without leaving the page.
+  for (const note of document.querySelectorAll("form[data-level-up]")) {
+    note.addEventListener("submit", (event) => {
+      event.preventDefault();
+      fetch(note.action, { method: "POST", headers: { "x-sideporch-fetch": "1" } }).finally(() => note.remove());
+    });
+  }
+
   function localizeTimes(root) {
     for (const time of root.querySelectorAll("time[datetime]")) {
       const date = new Date(time.getAttribute("datetime"));

@@ -36,6 +36,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/admin/roles", post(create_role))
         .route("/admin/roles/{role_id}/delete", post(delete_role))
+        .route("/admin/roles/{role_id}/badge", post(role_badge))
         .route("/moderation", get(moderation))
         .route("/moderation/signups/{signup_id}/approve", post(approve))
         .route("/moderation/signups/{signup_id}/decline", post(decline))
@@ -413,6 +414,28 @@ async fn create_role(
             .into_response());
     }
     Ok(Redirect::to("/admin/permissions#roles").into_response())
+}
+
+#[derive(Deserialize)]
+struct BadgeForm {
+    badge: Option<String>,
+    #[serde(default)]
+    color: String,
+}
+
+async fn role_badge(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path(role_id): Path<i64>,
+    Form(form): Form<BadgeForm>,
+) -> AppResult<Redirect> {
+    require_admin(&user)?;
+    let badge = form.badge.is_some();
+    state
+        .db
+        .call(move |conn| community::set_role_badge(conn, role_id, badge, &form.color))
+        .await?;
+    Ok(Redirect::to("/admin/permissions#roles"))
 }
 
 async fn delete_role(

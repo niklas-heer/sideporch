@@ -20,6 +20,8 @@ Admins set the team's default under **Admin → Appearance**; everyone can still
 
 Everyone has a profile with a picture, a display name, a status with an emoji, a short bio and links. Click someone's name or picture to see theirs.
 
+Point at a name or picture in chat, or move to a name with the keyboard, and a **card** shows who that is: their picture, username, status, badges such as **Admin** or **Moderators**, trust level, what time it is where they are, and when they joined, with buttons to message them or open their profile.
+
 Under **Edit profile** you also pick the emoji your reaction picker shows first.
 
 ## Sign-in and security

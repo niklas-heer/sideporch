@@ -439,3 +439,73 @@ async fn admins_see_system_resources() {
         StatusCode::FORBIDDEN
     );
 }
+
+#[tokio::test]
+async fn badges_hover_cards_and_leveling_up_show_who_is_who() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let mo = invite(&server, &admin, "Mo Member", "mo").await;
+    let mo_id = mo.user_id().await;
+
+    // A role shown as a badge, in a color.
+    admin.post("/admin/roles", &[("name", "Moderators")]).await;
+    let permissions = admin.page("/admin/permissions").await;
+    let role_id = between(&permissions, "/admin/roles/", "/badge").to_owned();
+    admin
+        .post(
+            &format!("/admin/roles/{role_id}/badge"),
+            &[("badge", "on"), ("color", "green")],
+        )
+        .await;
+    let role_field = format!("role_{role_id}");
+    admin
+        .post(
+            &format!("/people/{mo_id}/roles"),
+            &[(role_field.as_str(), "on")],
+        )
+        .await;
+
+    mo.send(general, "Hi from a moderator", None).await;
+    admin.send(general, "Hi from an admin", None).await;
+    let channel = mo.page(&format!("/c/{general}")).await;
+    let mo_line = between(
+        &channel,
+        &format!(r#"data-person-card="{mo_id}" class"#),
+        "</div>",
+    );
+    assert!(
+        mo_line.contains("Moderators") && mo_line.contains("bg-emerald-100"),
+        "{mo_line}"
+    );
+    let admin_id = admin.user_id().await;
+    let admin_line = between(
+        &channel,
+        &format!(r#"data-person-card="{admin_id}" class"#),
+        "</div>",
+    );
+    assert!(admin_line.contains(">Admin<"), "{admin_line}");
+
+    // The hover card.
+    let card = admin.page(&format!("/people/{mo_id}/card")).await;
+    assert!(card.contains("Mo Member") && card.contains("@mo"));
+    assert!(card.contains("Moderators") && card.contains("Local time"));
+    assert!(card.contains("Level ") && card.contains(&format!("/dm/{mo_id}")));
+
+    // Their own profile says what the next level takes.
+    let profile = mo.page(&format!("/people/{mo_id}")).await;
+    assert!(between(&profile, "data-next-level", "</p>").contains("Level 2"));
+
+    // Reaching a level is announced once.
+    assert!(!mo.page("/home").await.contains("data-level-up"));
+    admin
+        .post(&format!("/people/{mo_id}/trust"), &[("level", "2")])
+        .await;
+    let home = mo.page("/home").await;
+    assert!(between(&home, "data-level-up", "</form>").contains("You reached level 2"));
+    assert_eq!(
+        mo.post("/settings/level-noticed", &[]).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(!mo.page("/home").await.contains("data-level-up"));
+}

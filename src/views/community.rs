@@ -211,6 +211,59 @@ fn level_label(level: Option<u8>) -> String {
     }
 }
 
+/// Roles, with their badges, and a form for adding one.
+fn roles_section(roles: &[Role]) -> Markup {
+    html! {
+        div id="roles" class="mt-10" {
+            (section("Roles", "Group people for what they may do, such as moderators or the design team. Their names show on profiles; roles shown as a badge also show next to their people's names in chat and on hover cards.", &html! {
+                @if !roles.is_empty() {
+                    ul class="mb-4 space-y-2" {
+                        @for role in roles {
+                            li class="flex items-center gap-3 rounded-lg border border-line px-3 py-2 dark:border-night-line" {
+                                div class="min-w-0 flex-1" {
+                                    p class="font-semibold" { (role.name) }
+                                    p class="text-sm text-muted dark:text-haint" {
+                                        (role.members) (if role.members == 1 { " person" } else { " people" })
+                                        @if !role.description.is_empty() { " · " (role.description) }
+                                    }
+                                }
+                                form method="post" action={ "/admin/roles/" (role.id) "/badge" } class="flex items-center gap-2" {
+                                    label class="flex items-center gap-1.5 text-sm" {
+                                        input type="checkbox" name="badge" value="on" checked[role.badge] class="h-4 w-4 accent-floor";
+                                        "Show as a badge"
+                                    }
+                                    select name="color" aria-label={ "Badge color for " (role.name) } class="field w-auto py-1 text-sm" {
+                                        @for (key, label, _) in crate::community::BADGE_COLORS {
+                                            option value=(key) selected[role.color == key] { (label) }
+                                        }
+                                    }
+                                    button type="submit" class="btn-quiet px-2 py-1 text-sm" { "Save" }
+                                }
+                                form method="post" action={ "/admin/roles/" (role.id) "/delete" } {
+                                    button type="submit" class="btn-quiet p-1.5" aria-label={ "Delete the role " (role.name) } title="Delete role" {
+                                        (icon(icons::TRASH, "h-4 w-4"))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                form method="post" action="/admin/roles" class="flex flex-wrap items-end gap-2" {
+                    label class="min-w-40 flex-1" {
+                        span class="field-label" { "Name" }
+                        input name="name" required maxlength="40" placeholder="Moderators" class="field";
+                    }
+                    label class="min-w-40 flex-[2]" {
+                        span class="field-label" { "What it's for" }
+                        input name="description" maxlength="200" placeholder="Keep an eye on the public channels" class="field";
+                    }
+                    button type="submit" class="btn" { (icon(icons::PLUS, "h-5 w-5")) "Add role" }
+                }
+            }))
+        }
+    }
+}
+
 pub fn permissions_page(
     shell: &Shell<'_>,
     levels: &[(Permission, Option<u8>)],
@@ -276,41 +329,7 @@ pub fn permissions_page(
                 }
                 button type="submit" class="btn mt-4" { "Save permissions" }
             }
-            div id="roles" class="mt-10" {
-                (section("Roles", "Group people for what they may do, such as moderators or the design team. Their names show on profiles.", &html! {
-                    @if !roles.is_empty() {
-                        ul class="mb-4 space-y-2" {
-                            @for role in roles {
-                                li class="flex items-center gap-3 rounded-lg border border-line px-3 py-2 dark:border-night-line" {
-                                    div class="min-w-0 flex-1" {
-                                        p class="font-semibold" { (role.name) }
-                                        p class="text-sm text-muted dark:text-haint" {
-                                            (role.members) (if role.members == 1 { " person" } else { " people" })
-                                            @if !role.description.is_empty() { " · " (role.description) }
-                                        }
-                                    }
-                                    form method="post" action={ "/admin/roles/" (role.id) "/delete" } {
-                                        button type="submit" class="btn-quiet p-1.5" aria-label={ "Delete the role " (role.name) } title="Delete role" {
-                                            (icon(icons::TRASH, "h-4 w-4"))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    form method="post" action="/admin/roles" class="flex flex-wrap items-end gap-2" {
-                        label class="min-w-40 flex-1" {
-                            span class="field-label" { "Name" }
-                            input name="name" required maxlength="40" placeholder="Moderators" class="field";
-                        }
-                        label class="min-w-40 flex-[2]" {
-                            span class="field-label" { "What it's for" }
-                            input name="description" maxlength="200" placeholder="Keep an eye on the public channels" class="field";
-                        }
-                        button type="submit" class="btn" { (icon(icons::PLUS, "h-5 w-5")) "Add role" }
-                    }
-                }))
-            }
+            (roles_section(roles))
         },
     )
 }

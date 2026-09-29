@@ -228,6 +228,7 @@ pub fn sidebar_with_update(
     user_id: i64,
 ) -> AppResult<store::Sidebar> {
     let mut sidebar = store::sidebar(conn, user_id)?;
+    sidebar.level_up = crate::community::level_up(conn, user_id)?;
     let is_admin: bool = conn.query_row(
         "SELECT is_admin FROM users WHERE id = ?1",
         [user_id],

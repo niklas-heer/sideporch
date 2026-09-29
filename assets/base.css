@@ -244,6 +244,9 @@
 .dark .test-log, .dark .code-preview { background: var(--night-2); }
 .dark .test-action { color: var(--haint); }
 
+/* A hover card about someone, placed by app.js. */
+.person-card { position: fixed; z-index: 60; }
+
 /* Someone is typing: three dots that rise in turn, under the message box
    and on a direct conversation in the sidebar. */
 .typing-dots { display: inline-flex; align-items: center; gap: 2px; height: 0.75rem; }
