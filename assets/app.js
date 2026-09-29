@@ -831,7 +831,7 @@
     if (!item || !messageMenu.showPopover) return false;
     const base = `/c/${item.dataset.channelId}/m/${item.dataset.messageId}`;
     const mine = item.dataset.user === app?.dataset.me;
-    const admin = app?.dataset.admin !== undefined;
+    const moderator = app?.dataset.moderator !== undefined;
     const deleted = item.dataset.deleted !== undefined;
     const entries = [];
     if (mine && !deleted && stillEditable(item)) entries.push(["Edit message", () => startEdit(item)]);
@@ -852,7 +852,18 @@
     }
     entries.push(...extraEntries.map((entry) => entry(item, base)).filter(Boolean));
     entries.push(["Copy link", () => navigator.clipboard?.writeText(`${location.origin}${base}`)]);
-    if ((mine || admin) && !deleted) {
+    if (!mine && !deleted && item.dataset.user) {
+      entries.push([
+        "Report message",
+        async () => {
+          const reason = prompt("What's wrong with this message? Moderators will look at it.");
+          if (reason === null) return;
+          const response = await post(`${base}/report`, { reason });
+          toast(response.ok ? "Thanks. Moderators will look at it." : "That report didn't go through. Try again.");
+        },
+      ]);
+    }
+    if ((mine || moderator) && !deleted) {
       entries.push([
         "Delete message",
         async () => {

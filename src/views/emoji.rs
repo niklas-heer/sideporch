@@ -14,6 +14,7 @@ pub fn page(shell: &Shell<'_>, emoji: &[CustomEmoji], error: Option<&str>) -> Ma
         shell,
         &html! { "Custom emoji" },
         &html! {
+            @if shell.user.may(crate::community::Permission::AddEmoji) {
             (section("Add an emoji", "Upload a small square image. Everyone can then use it as :name: in messages and reactions.", &html! {
                 (form_error(error))
                 form method="post" action="/emoji" enctype="multipart/form-data" class="flex flex-wrap items-end gap-3" {
@@ -29,7 +30,8 @@ pub fn page(shell: &Shell<'_>, emoji: &[CustomEmoji], error: Option<&str>) -> Ma
                     button type="submit" class="btn" { (icon(icons::PLUS, "h-5 w-5")) "Add emoji" }
                 }
             }))
-            (section("This porch's emoji", "Anyone can add emoji. The person who added one, or an admin, can remove it.", &html! {
+            }
+            (section("This porch's emoji", "The person who added an emoji, or an admin, can remove it.", &html! {
                 @if emoji.is_empty() {
                     p class="text-muted dark:text-haint" { "No custom emoji yet." }
                 } @else {

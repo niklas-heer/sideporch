@@ -19,6 +19,7 @@ pub fn library_page(shell: &Shell<'_>, gifs: &[LibraryGif], error: Option<&str>)
                 "Give each a title and a few tags, so the picker's search finds it."
             }
             (form_error(error))
+            @if shell.user.may(crate::community::Permission::UploadFiles) {
             form method="post" action="/gifs/library" enctype="multipart/form-data"
                 class="mb-8 grid max-w-2xl gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end" {
                 div class="sm:col-span-3" {
@@ -34,6 +35,7 @@ pub fn library_page(shell: &Shell<'_>, gifs: &[LibraryGif], error: Option<&str>)
                     input id="gif-tags" name="tags" maxlength="200" placeholder="yay party dance" class="field";
                 }
                 button type="submit" class="btn" { (icon(icons::GIF, "h-5 w-5")) "Add" }
+            }
             }
             @if gifs.is_empty() {
                 p class="text-muted dark:text-haint" { "No GIFs yet. Add the first one above." }

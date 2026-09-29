@@ -395,6 +395,7 @@ pub async fn add_emoji(
     State(state): State<AppState>,
     mut form: Multipart,
 ) -> AppResult<Response> {
+    user.require(crate::community::Permission::AddEmoji)?;
     let mut name = String::new();
     let mut image: Option<Upload> = None;
     while let Some(field) = form.next_field().await.map_err(bad_upload)? {

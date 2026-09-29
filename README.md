@@ -103,6 +103,15 @@ Admins write small **Lua scripts** in the browser that react to messages and rea
 
 ![The automation editor: a Lua script that asks for deploy approvals, with what it listens to, a test run panel and Ask AI.](docs/screenshots/automation.webp)
 
+### Run it for a public community
+
+Sideporch works for a team behind invite links, and just as well for a community anyone can join.
+
+- **Sign-up**: invite links only (the default), anyone can ask and a moderator lets them in, or anyone can sign up. Optional rules people agree to, a limit on sign-ups per hour and a trap for simple bots.
+- **Trust levels** keep newcomers from doing harm while they're new. People start at level 0 when they sign up on their own (or 1 when invited) and move up as they stay and take part: days since joining, days visited, messages sent. Admins tune the requirements, and can set someone's level and keep it there.
+- **Permissions** for uploading files, posting links, notifying everyone with `@channel`, starting direct messages, creating channels and polls, adding emoji, inviting people and moderating. Each asks for a trust level, or is left to admins and **roles** you create, such as "Moderators" or "Designers". To turn uploads off, leave them to admins.
+- **Moderation**: anyone can report a message; moderators delete it or dismiss the report, let people in who asked to join, and time people out, so they can read but not post. New members can only send a few messages a minute.
+
 ### For admins
 
 - **Backups** from the browser, on a schedule, and `sideporch restore`. See [Back up and move](#back-up-and-move).

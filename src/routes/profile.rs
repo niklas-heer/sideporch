@@ -8,6 +8,7 @@ use axum::{
     routing::get,
 };
 use maud::Markup;
+use rusqlite::OptionalExtension as _;
 
 use super::shell_data;
 use crate::{
@@ -109,9 +110,29 @@ async fn profile(
     State(state): State<AppState>,
     Path(user_id): Path<i64>,
 ) -> AppResult<Markup> {
-    let (person, ctx) = state
+    let now = crate::now_ms();
+    let (person, ctx, standing) = state
         .db
-        .call(move |conn| Ok((store::user(conn, user_id)?, store::render_context(conn)?)))
+        .call(move |conn| {
+            let standing = views::profile::Standing {
+                roles: crate::community::role_names(conn, user_id)?,
+                role_ids: crate::community::user_roles(conn, user_id)?,
+                all_roles: crate::community::roles(conn)?,
+                progress: crate::community::progress(conn, user_id, now)?.unwrap_or_default(),
+                timed_out_until: conn
+                    .query_row(
+                        "SELECT muted_until FROM users WHERE id = ?1 AND muted_until > ?2",
+                        rusqlite::params![user_id, now],
+                        |row| row.get(0),
+                    )
+                    .optional()?,
+            };
+            Ok((
+                store::user(conn, user_id)?,
+                store::render_context(conn)?,
+                standing,
+            ))
+        })
         .await?;
     let person = person.ok_or(AppError::NotFound)?;
     let sidebar = shell_data(&state, user.id).await?;
@@ -120,7 +141,9 @@ async fn profile(
         sidebar: &sidebar,
         current: None,
     };
-    Ok(views::profile::profile_page(&shell, &person, &ctx))
+    Ok(views::profile::profile_page(
+        &shell, &person, &ctx, &standing,
+    ))
 }
 
 async fn render_edit(

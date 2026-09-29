@@ -9,6 +9,7 @@ mod auth;
 mod automations;
 mod backup;
 mod blobs;
+mod community;
 mod db;
 mod emoji;
 mod error;

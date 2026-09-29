@@ -119,6 +119,26 @@ pub struct CurrentUser {
     pub choice: crate::themes::Choice,
     /// Their profile picture.
     pub avatar: Option<i64>,
+    pub trust_level: u8,
+    /// What their level and roles let them do.
+    pub grants: crate::community::Grants,
+    /// Until when a moderator timed them out, if they did.
+    pub timed_out_until: Option<i64>,
+}
+
+impl CurrentUser {
+    pub const fn may(&self, permission: crate::community::Permission) -> bool {
+        self.grants.has(permission)
+    }
+
+    /// Refuses unless they have `permission`.
+    pub fn require(&self, permission: crate::community::Permission) -> AppResult<()> {
+        if self.may(permission) {
+            Ok(())
+        } else {
+            Err(AppError::bad_request(crate::community::refusal(permission)))
+        }
+    }
 }
 
 pub async fn lookup_session(state: &AppState, token: String) -> AppResult<Option<CurrentUser>> {
@@ -127,30 +147,53 @@ pub async fn lookup_session(state: &AppState, token: String) -> AppResult<Option
     state
         .db
         .call(move |conn| {
-            Ok(conn
+            let found = conn
                 .query_row(
                     "SELECT u.id, u.display_name, u.is_admin, u.theme, u.appearance, u.avatar_file_id,
                          COALESCE((SELECT value FROM settings WHERE key = 'appearance.theme'), ''),
-                         COALESCE((SELECT value FROM settings WHERE key = 'appearance.mode'), '')
+                         COALESCE((SELECT value FROM settings WHERE key = 'appearance.mode'), ''),
+                         u.last_visit_day, u.muted_until
                      FROM sessions s JOIN users u ON u.id = s.user_id
                      WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.deactivated_at IS NULL",
                     params![token_hash, now],
                     |row| {
-                        Ok(CurrentUser {
-                            id: row.get(0)?,
-                            display_name: row.get(1)?,
-                            is_admin: row.get(2)?,
-                            choice: crate::themes::Choice::resolve(
-                                &row.get::<_, String>(3)?,
-                                &row.get::<_, String>(4)?,
-                                &row.get::<_, String>(6)?,
-                                &row.get::<_, String>(7)?,
-                            ),
-                            avatar: row.get(5)?,
-                        })
+                        Ok((
+                            CurrentUser {
+                                id: row.get(0)?,
+                                display_name: row.get(1)?,
+                                is_admin: row.get(2)?,
+                                choice: crate::themes::Choice::resolve(
+                                    &row.get::<_, String>(3)?,
+                                    &row.get::<_, String>(4)?,
+                                    &row.get::<_, String>(6)?,
+                                    &row.get::<_, String>(7)?,
+                                ),
+                                avatar: row.get(5)?,
+                                trust_level: 0,
+                                grants: crate::community::Grants::default(),
+                                timed_out_until: row
+                                    .get::<_, Option<i64>>(9)?
+                                    .filter(|until| *until > now),
+                            },
+                            row.get::<_, String>(8)?,
+                        ))
                     },
                 )
-                .optional()?)
+                .optional()?;
+            let Some((mut user, last_visit)) = found else {
+                return Ok(None);
+            };
+            if last_visit != now.checked_div(crate::community::DAY_MS).unwrap_or(0).to_string() {
+                crate::community::record_visit(conn, user.id, now)?;
+            }
+            user.trust_level = conn.query_row(
+                "SELECT trust_level FROM users WHERE id = ?1",
+                [user.id],
+                |row| row.get(0),
+            )?;
+            user.grants =
+                crate::community::grants(conn, user.id, user.is_admin, user.trust_level)?;
+            Ok(Some(user))
         })
         .await
 }

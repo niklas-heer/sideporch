@@ -428,6 +428,66 @@ CREATE TABLE poll_marks (
 ",
     ),
     Migration::Code(rebuild_search),
+    Migration::Sql(
+        r"
+-- Trust levels: 0 New, 1 Basic, 2 Member, 3 Regular, 4 Leader. People who
+-- were already here keep doing everything they could: members start at 2.
+ALTER TABLE users ADD COLUMN trust_level INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE users ADD COLUMN trust_locked INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN days_visited INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN last_visit_day TEXT NOT NULL DEFAULT '';
+-- Timed out by a moderator until then: they read but don't post.
+ALTER TABLE users ADD COLUMN muted_until INTEGER;
+UPDATE users SET trust_level = CASE WHEN is_admin THEN 4 ELSE 2 END;
+CREATE INDEX messages_by_user ON messages (user_id, created_at);
+
+CREATE TABLE roles (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    description TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE user_roles (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, role_id)
+);
+CREATE TABLE role_permissions (
+    role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    permission TEXT NOT NULL,
+    PRIMARY KEY (role_id, permission)
+);
+-- The trust level a permission asks for, when an admin changed it from
+-- the default; NULL for admins and roles only.
+CREATE TABLE permission_levels (
+    permission TEXT PRIMARY KEY,
+    min_level INTEGER
+);
+
+-- People who asked to join and wait for approval.
+CREATE TABLE signups (
+    id INTEGER PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE reports (
+    id INTEGER PRIMARY KEY,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    reporter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER,
+    resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    outcome TEXT,
+    UNIQUE (message_id, reporter_id)
+);
+CREATE INDEX reports_open ON reports (resolved_at);
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

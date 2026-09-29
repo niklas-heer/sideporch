@@ -20,6 +20,7 @@ pub mod admin;
 pub mod appearance;
 pub mod automations;
 pub mod channels;
+pub mod community;
 pub use channels::{ChannelSettings, channel_settings_page};
 pub mod emoji;
 pub mod gifs;
@@ -167,7 +168,12 @@ pub fn text_field(
     }
 }
 
-pub fn login_page(error: Option<&str>, username: &str, next: Option<&str>) -> Markup {
+pub fn login_page(
+    error: Option<&str>,
+    username: &str,
+    next: Option<&str>,
+    registration: crate::community::Registration,
+) -> Markup {
     auth_page(
         "Sign in",
         &html! {
@@ -182,7 +188,11 @@ pub fn login_page(error: Option<&str>, username: &str, next: Option<&str>) -> Ma
                 button type="submit" class="btn mt-2 w-full" { "Sign in" }
             }
             p class="mt-5 text-sm text-muted dark:text-haint" {
-                "New here? Ask someone on this porch for an invite link."
+                @match registration {
+                    crate::community::Registration::Invite => { "New here? Ask someone on this porch for an invite link." }
+                    crate::community::Registration::Open => { "New here? " a href="/signup" class="font-semibold underline underline-offset-2" { "Create an account" } }
+                    crate::community::Registration::Approval => { "New here? " a href="/signup" class="font-semibold underline underline-offset-2" { "Ask to join" } }
+                }
             }
         },
     )
@@ -194,7 +204,7 @@ pub struct AccountForm {
     pub username: String,
 }
 
-fn account_fields(form: &AccountForm) -> Markup {
+pub fn account_fields(form: &AccountForm) -> Markup {
     html! {
         (text_field("Your name", "display_name", "text", &form.display_name, "name", Some("Shown next to your messages.")))
         (text_field("Username", "username", "text", &form.username, "username", Some("Used to sign in. Letters, numbers, dots, dashes and underscores.")))
@@ -338,8 +348,10 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                         a href="/channels/browse" class="rounded-md p-1 hover:bg-floor-2 hover:text-white" aria-label="Browse channels" title="Browse channels" {
                             (icon(icons::COMPASS, "h-4 w-4"))
                         }
-                        a href="/channels/new" class="rounded-md p-1 hover:bg-floor-2 hover:text-white" aria-label="Create a channel" title="Create a channel" {
-                            (icon(icons::PLUS, "h-4 w-4"))
+                        @if shell.user.may(crate::community::Permission::CreateChannels) || shell.user.may(crate::community::Permission::CreatePrivateChannels) {
+                            a href="/channels/new" class="rounded-md p-1 hover:bg-floor-2 hover:text-white" aria-label="Create a channel" title="Create a channel" {
+                                (icon(icons::PLUS, "h-4 w-4"))
+                            }
                         }
                     }
                 }
@@ -415,8 +427,11 @@ fn account_menu(shell: &Shell<'_>) -> Markup {
                     span class="flex-1" { "Notifications" }
                     span data-push-state class="text-xs text-haint" { "Off" }
                 }
-                @if user.is_admin {
+                @if user.is_admin || user.may(crate::community::Permission::Moderate) {
                     div class="my-1 border-t border-floor-2" {}
+                    (menu_link("/moderation", icons::SHIELD_CHECK, "Moderation"))
+                }
+                @if user.is_admin {
                     (menu_link("/automations", icons::LIGHTNING, "Automations"))
                     (menu_link("/admin/system", icons::GAUGE, "Admin"))
                 }
@@ -442,7 +457,7 @@ const APP_BODY: &str = "bg-white text-ink antialiased dark:bg-night dark:text-ha
 
 fn app_page(title: &str, shell: &Shell<'_>, data: &PageData, main: &Markup) -> Markup {
     let page = html! {
-        div id="app" data-me=(shell.user.id) data-admin[shell.user.is_admin] data-channel=[data.channel] data-thread=[data.thread] class="flex h-dvh overflow-hidden" {
+        div id="app" data-me=(shell.user.id) data-admin[shell.user.is_admin] data-moderator[shell.user.may(crate::community::Permission::Moderate)] data-channel=[data.channel] data-thread=[data.thread] class="flex h-dvh overflow-hidden" {
             (sidebar(shell, false))
             (main)
         }
@@ -580,15 +595,15 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
                 }
             }
             @if channel.may_write(false) {
-                (composer(&format!("/c/{}/messages", channel.id), None, &composer_label))
+                (composer(&format!("/c/{}/messages", channel.id), None, &composer_label, shell.user.grants))
             } @else {
                 (read_only_notice(channel, false))
             }
         }
     };
-    let thread = view
-        .thread
-        .map(|(root, replies)| thread_panel(channel, root, replies, view.render));
+    let thread = view.thread.map(|(root, replies)| {
+        thread_panel(channel, root, replies, view.render, shell.user.grants)
+    });
     app_page(
         &channel.name,
         shell,
@@ -638,6 +653,7 @@ fn thread_panel(
     root: &Message,
     replies: &[Message],
     render: &Render<'_>,
+    grants: crate::community::Grants,
 ) -> Markup {
     html! {
         aside aria-label="Thread" class="flex min-w-0 flex-1 flex-col border-line lg:border-l lg:w-96 lg:flex-none xl:w-[28rem] dark:border-night-line" {
@@ -659,7 +675,7 @@ fn thread_panel(
                 ol id="replies" { (message_list(replies, render)) }
             }
             @if channel.may_write(true) {
-                (composer(&format!("/c/{}/messages", channel.id), Some(root.id), "Reply"))
+                (composer(&format!("/c/{}/messages", channel.id), Some(root.id), "Reply", grants))
             } @else {
                 (read_only_notice(channel, true))
             }
@@ -693,31 +709,42 @@ fn reply_label(count: i64) -> String {
     }
 }
 
-fn composer(action: &str, parent: Option<i64>, label: &str) -> Markup {
+fn composer(
+    action: &str,
+    parent: Option<i64>,
+    label: &str,
+    grants: crate::community::Grants,
+) -> Markup {
+    let may_upload = grants.has(crate::community::Permission::UploadFiles);
+    let may_poll = grants.has(crate::community::Permission::CreatePolls);
     let poll_id = if parent.is_some() {
         "poll-form-thread"
     } else {
         "poll-form"
     };
     html! {
-        (poll_form(poll_id, action.trim_end_matches("/messages"), parent))
-        form data-composer method="post" action=(action) enctype="multipart/form-data" class="shrink-0 px-4 pb-4 pt-2" {
+        @if may_poll { (poll_form(poll_id, action.trim_end_matches("/messages"), parent)) }
+        form data-composer data-uploads[may_upload] method="post" action=(action) enctype="multipart/form-data" class="shrink-0 px-4 pb-4 pt-2" {
             @if let Some(parent) = parent {
                 input type="hidden" name="parent_id" value=(parent);
             }
             ul data-file-list class="mb-1.5 hidden flex-wrap gap-1.5 px-1 text-sm" {}
             div class="flex items-end gap-1 rounded-xl border border-line bg-white py-1.5 pl-1.5 pr-1.5 focus-within:border-floor-3 dark:border-night-line dark:bg-night-2" {
-                label class="cursor-pointer rounded-lg p-2 text-muted hover:bg-screen hover:text-ink focus-within:bg-screen dark:text-haint dark:hover:bg-night" title="Attach files or images (you can also paste or drop them)" {
-                    input type="file" name="files" multiple class="sr-only" aria-label="Attach files";
-                    (icon(icons::PAPERCLIP, "h-5 w-5"))
+                @if may_upload {
+                    label class="cursor-pointer rounded-lg p-2 text-muted hover:bg-screen hover:text-ink focus-within:bg-screen dark:text-haint dark:hover:bg-night" title="Attach files or images (you can also paste or drop them)" {
+                        input type="file" name="files" multiple class="sr-only" aria-label="Attach files";
+                        (icon(icons::PAPERCLIP, "h-5 w-5"))
+                    }
                 }
                 button type="button" data-gif-button hidden title="Send a GIF" aria-label="Send a GIF"
                     class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night" {
                     (icon(icons::GIF, "h-5 w-5"))
                 }
-                button type="button" popovertarget=(poll_id) title="Create a poll" aria-label="Create a poll"
-                    class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night" {
-                    (icon(icons::CHART_BAR_HORIZONTAL, "h-5 w-5"))
+                @if may_poll {
+                    button type="button" popovertarget=(poll_id) title="Create a poll" aria-label="Create a poll"
+                        class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night" {
+                        (icon(icons::CHART_BAR_HORIZONTAL, "h-5 w-5"))
+                    }
                 }
                 textarea name="body" rows="1" maxlength="10000" aria-label=(label) placeholder=(label)
                     class="max-h-48 min-h-6 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-hidden placeholder:text-muted dark:placeholder:text-haint" {}
@@ -1541,12 +1568,14 @@ pub fn new_channel_page(
             (form_error(error))
             form method="post" action="/channels" class="max-w-md" {
                 (text_field("Name", "name", "text", name, "off", Some("Lowercase letters, numbers, dashes and underscores, like garden-club.")))
+                @if shell.user.may(crate::community::Permission::CreatePrivateChannels) {
                 label class="mb-5 flex gap-3" {
-                    input type="checkbox" name="private" value="on" checked[private] class="mt-1";
+                    input type="checkbox" name="private" value="on" checked[private || !shell.user.may(crate::community::Permission::CreateChannels)] class="mt-1";
                     span {
                         span class="block font-semibold" { "Private" }
                         span class="block text-sm text-muted dark:text-haint" { "Only people you add can find and read it. Automations can't see it." }
                     }
+                }
                 }
                 button type="submit" class="btn" { "Create channel" }
             }
@@ -1625,7 +1654,7 @@ pub fn people_page(
                     }
                 }))
             }
-            @if shell.user.is_admin {
+            @if shell.user.may(crate::community::Permission::InvitePeople) {
                 (section("Invite links", "Anyone with an active link can create an account. Links expire after 7 days.", &html! {
                     @if !invites.is_empty() {
                         ul class="mb-5 space-y-4" {

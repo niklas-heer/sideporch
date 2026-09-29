@@ -112,6 +112,8 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
             )?;
             if let Some(user_id) = user_id {
                 store::mark_read(&tx, user_id, draft.channel_id, id)?;
+                // Taking part is how people earn trust.
+                crate::community::refresh(&tx, user_id, now)?;
             }
             tx.commit()?;
 
@@ -268,8 +270,8 @@ pub fn editable(window: Option<i64>, created_at: i64, now: i64) -> bool {
     window.is_none_or(|minutes| now.saturating_sub(created_at) <= minutes.saturating_mul(60_000))
 }
 
-/// Who may change a message: its author edits it; its author or an admin
-/// deletes it.
+/// Who may change a message: its author edits it; its author or a
+/// moderator (admins are) deletes it.
 pub enum Change {
     Edit(String),
     Delete,
@@ -285,7 +287,7 @@ pub async fn change(
     change: Change,
 ) -> AppResult<()> {
     let user_id = user.id;
-    let is_admin = user.is_admin;
+    let is_admin = user.may(crate::community::Permission::Moderate);
     let now = now_ms();
     let deleting = matches!(change, Change::Delete);
     let (before, after, audience, ctx, reply_count) = state

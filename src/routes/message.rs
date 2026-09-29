@@ -162,6 +162,7 @@ async fn edit(
             "Messages can be at most 10,000 characters long.",
         ));
     }
+    crate::community::check_content(&user, &body)?;
     let message = readable(&state, &user, channel_id, message_id).await?;
     messages::change(&state, &user, channel_id, message_id, Change::Edit(body)).await?;
     Ok(done(
@@ -349,6 +350,7 @@ async fn open_poll(
     channel_id: i64,
     message_id: i64,
 ) -> AppResult<(store::Message, store::Poll)> {
+    crate::community::check_not_timed_out(user)?;
     let message = readable(state, user, channel_id, message_id).await?;
     let user_id = user.id;
     let channel = state
@@ -455,7 +457,7 @@ async fn close_poll(
     if message.poll.is_none() || message.deleted {
         return Err(AppError::NotFound);
     }
-    if !own && !user.is_admin {
+    if !own && !user.may(crate::community::Permission::Moderate) {
         return Err(AppError::Forbidden);
     }
     let now = now_ms();

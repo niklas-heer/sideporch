@@ -927,6 +927,16 @@ pub fn channel_directory(conn: &Connection, user_id: i64) -> AppResult<Vec<Direc
 }
 
 /// Finds or creates the direct conversation between two users.
+/// Whether two people already have a conversation.
+pub fn direct_channel_exists(conn: &Connection, user: i64, other: i64) -> AppResult<bool> {
+    let key = format!("{}:{}", user.min(other), user.max(other));
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM channels WHERE dm_key = ?1)",
+        [&key],
+        |row| row.get(0),
+    )?)
+}
+
 pub fn direct_channel(conn: &mut Connection, user: i64, other: i64, now: i64) -> AppResult<i64> {
     let key = format!("{}:{}", user.min(other), user.max(other));
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -2791,6 +2801,11 @@ pub fn activity(conn: &Connection, user_id: i64) -> AppResult<Vec<ActivityItem>>
         [user_id],
     )?;
     Ok(items)
+}
+
+/// Whether lowercase `text` notifies a whole channel.
+pub fn mentions_everyone(text: &str) -> bool {
+    mentions(text, "channel") || mentions(text, "here")
 }
 
 /// Whether lowercase `text` contains `@name` as a whole word.

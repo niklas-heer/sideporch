@@ -30,6 +30,7 @@ mod admin;
 mod automation;
 mod backups;
 mod channels;
+mod community;
 mod gifs;
 mod later;
 mod message;
@@ -105,6 +106,7 @@ pub fn router(state: AppState) -> Router {
         .merge(channels::router())
         .merge(later::router())
         .merge(backups::router())
+        .merge(community::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -231,7 +233,8 @@ async fn login_form(
     if signed_in(&state, &headers).await?.is_some() {
         return Ok(Redirect::to(next.unwrap_or("/")).into_response());
     }
-    Ok(views::login_page(None, "", next).into_response())
+    let registration = registration(&state).await?;
+    Ok(views::login_page(None, "", next, registration).into_response())
 }
 
 async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -> AppResult<Response> {
@@ -253,18 +256,37 @@ async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -> Ap
         None => None,
     };
     let Some(user_id) = verified else {
+        let waiting_name = username.clone();
+        let waiting = state
+            .db
+            .call(move |conn| crate::community::is_waiting(conn, &waiting_name))
+            .await?;
+        let error = if waiting {
+            "Your request to join is still waiting. You can sign in once someone lets you in."
+        } else {
+            "That username and password don't match."
+        };
         return Ok((
             StatusCode::UNAUTHORIZED,
             views::login_page(
-                Some("That username and password don't match."),
+                Some(error),
                 &username,
                 next.as_deref(),
+                registration(&state).await?,
             ),
         )
             .into_response());
     };
     let cookie = auth::start_session(&state, user_id).await?;
     redirect_with_cookie(next.as_deref().unwrap_or("/"), &cookie)
+}
+
+async fn registration(state: &AppState) -> AppResult<crate::community::Registration> {
+    Ok(state
+        .db
+        .call(|conn| crate::community::Joining::load(conn))
+        .await?
+        .registration)
 }
 
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
@@ -634,6 +656,7 @@ async fn post_message(
         if let Some(refusal) = refusal {
             return Err(refusal);
         }
+        check_post(&state, &user, &body, false).await?;
         if !input.files.is_empty() || input.gif.is_some() {
             return Err(AppError::bad_request(
                 "Only text can be scheduled. Send files and GIFs right away.",
@@ -652,6 +675,8 @@ async fn post_message(
         if let Some(refusal) = refusal {
             return Err(refusal);
         }
+        user.require(crate::community::Permission::CreatePolls)?;
+        check_post(&state, &user, &text, false).await?;
         return post_poll(&state, &user, channel_id, input.parent_id, &text, &headers).await;
     }
     if input.files.is_empty()
@@ -670,6 +695,7 @@ async fn post_message(
     if let Some(refusal) = refusal {
         return Err(refusal);
     }
+    check_post(&state, &user, &body, !input.files.is_empty()).await?;
     let gif = match input.gif {
         Some(posted) => Some(gifs::resolve(&state, posted).await?),
         None => None,
@@ -705,6 +731,22 @@ async fn post_message(
         |parent| format!("/c/{channel_id}/t/{parent}"),
     );
     Ok(Redirect::to(&target).into_response())
+}
+
+/// Checks that `user` may post this now: see [`crate::community::check_message`].
+pub async fn check_post(
+    state: &AppState,
+    user: &CurrentUser,
+    body: &str,
+    files: bool,
+) -> AppResult<()> {
+    let user = user.clone();
+    let body = body.to_owned();
+    let now = now_ms();
+    state
+        .db
+        .call(move |conn| crate::community::check_message(conn, &user, &body, files, now))
+        .await
 }
 
 /// The text after `/poll`, unless an automation took the command.
@@ -784,8 +826,16 @@ async fn create_poll(
     if !channel.may_write(reply) {
         return Err(AppError::bad_request(channel.write_refusal(reply)));
     }
+    user.require(crate::community::Permission::CreatePolls)?;
     let kind = crate::polls::Kind::parse(&form.kind).unwrap_or_default();
     let question = form.question.trim().to_owned();
+    check_post(
+        &state,
+        &user,
+        &format!("{question}\n{}", form.options),
+        false,
+    )
+    .await?;
     let spec = crate::polls::Spec::new(
         kind,
         &question,
@@ -1001,6 +1051,7 @@ async fn react(
     headers: HeaderMap,
     Form(form): Form<ReactionForm>,
 ) -> AppResult<Response> {
+    crate::community::check_not_timed_out(&user)?;
     let emoji = form.emoji.trim().trim_matches(':').to_owned();
     messages::toggle_reaction(&state, user.id, channel_id, message_id, emoji).await?;
     if wants_no_content(&headers) {
@@ -1048,6 +1099,11 @@ async fn create_channel(
     let user_id = user.id;
     let now = now_ms();
     let private = form.private.is_some();
+    user.require(if private {
+        crate::community::Permission::CreatePrivateChannels
+    } else {
+        crate::community::Permission::CreateChannels
+    })?;
     let result = match normalize_channel_name(&form.name) {
         Some(name) => {
             state
@@ -1299,11 +1355,22 @@ async fn direct_message(
 ) -> AppResult<Response> {
     let user_id = user.id;
     let now = now_ms();
+    let may_start = user.may(crate::community::Permission::StartDirectMessages);
     let channel_id = state
         .db
         .call(move |conn| {
             if !store::user_exists(conn, other)? {
                 return Err(AppError::NotFound);
+            }
+            // Anyone may answer a conversation that already exists, and
+            // write notes to themselves.
+            if !may_start
+                && other != user_id
+                && !store::direct_channel_exists(conn, user_id, other)?
+            {
+                return Err(AppError::bad_request(crate::community::refusal(
+                    crate::community::Permission::StartDirectMessages,
+                )));
             }
             store::direct_channel(conn, user_id, other, now)
         })
@@ -1317,7 +1384,7 @@ async fn people(
     headers: HeaderMap,
 ) -> AppResult<Markup> {
     let user_id = user.id;
-    let is_admin = user.is_admin;
+    let is_admin = user.may(crate::community::Permission::InvitePeople);
     let now = now_ms();
     let (users, invites, sidebar) = state
         .db
@@ -1344,7 +1411,7 @@ async fn people(
 }
 
 async fn create_invite(user: CurrentUser, State(state): State<AppState>) -> AppResult<Response> {
-    if !user.is_admin {
+    if !user.may(crate::community::Permission::InvitePeople) {
         return Err(AppError::Forbidden);
     }
     let token = auth::random_token()?;
@@ -1363,7 +1430,7 @@ async fn revoke_invite(
     State(state): State<AppState>,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
-    if !user.is_admin {
+    if !user.may(crate::community::Permission::InvitePeople) {
         return Err(AppError::Forbidden);
     }
     state

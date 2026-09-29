@@ -179,6 +179,7 @@ async fn add(
     State(state): State<AppState>,
     mut form: Multipart,
 ) -> AppResult<Response> {
+    user.require(crate::community::Permission::UploadFiles)?;
     let mut title = String::new();
     let mut tags = String::new();
     let mut upload: Option<Upload> = None;

@@ -27,7 +27,8 @@ fn located_heading(item: &Located) -> Markup {
 pub fn actions_page(shell: &Shell<'_>, message: &Message, render: &Render<'_>) -> Markup {
     let base = format!("/c/{}/m/{}", message.channel_id, message.id);
     let own = matches!(message.author, Author::User { id, .. } if Some(id) == render.viewer);
-    let can_delete = !message.deleted && (own || shell.user.is_admin);
+    let can_delete =
+        !message.deleted && (own || shell.user.may(crate::community::Permission::Moderate));
     panel_page(
         "Message",
         shell,
@@ -69,6 +70,12 @@ pub fn actions_page(shell: &Shell<'_>, message: &Message, render: &Render<'_>) -
                             (icon(icons::TRASH, "h-4 w-4")) "Delete"
                         }
                     }
+                }
+            }
+            @if !own && !message.deleted && matches!(message.author, Author::User { .. }) {
+                details class="mt-6" {
+                    summary class="cursor-pointer text-sm font-semibold" { "Report this message" }
+                    div class="mt-3" { (super::community::report_form(message)) }
                 }
             }
             a href=(crate::routes::message_href(message)) class="btn-quiet mt-6" { (icon(icons::ARROW_LEFT, "h-4 w-4")) "Back to the conversation" }

@@ -35,8 +35,18 @@ fn status(user: &User, ctx: &Context) -> Markup {
     }
 }
 
-pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context) -> Markup {
+/// Someone's roles and trust level, and what an admin can change.
+pub struct Standing {
+    pub roles: Vec<String>,
+    pub role_ids: Vec<i64>,
+    pub all_roles: Vec<crate::community::Role>,
+    pub progress: crate::community::Progress,
+    pub timed_out_until: Option<i64>,
+}
+
+pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context, standing: &Standing) -> Markup {
     let own = user.id == shell.user.id;
+    let moderator = shell.user.may(crate::community::Permission::Moderate);
     panel_page(
         &user.display_name,
         shell,
@@ -52,6 +62,22 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context) -> Markup {
                         }
                     }
                     p class="text-muted dark:text-haint" { "@" (user.username) }
+                    @if !standing.roles.is_empty() {
+                        p class="mt-2 flex flex-wrap gap-1.5" {
+                            @for role in &standing.roles {
+                                span class="rounded-full border border-line px-2 py-0.5 text-xs font-semibold dark:border-night-line" { (role) }
+                            }
+                        }
+                    }
+                    @if own || moderator {
+                        p class="mt-2 text-sm text-muted dark:text-haint" title="Trust grows as people stay and take part." {
+                            "Trust level " (standing.progress.level) ": " (crate::community::level_name(standing.progress.level))
+                            @if standing.progress.locked { " (set by an admin)" }
+                        }
+                    }
+                    @if let Some(until) = standing.timed_out_until {
+                        p class="mt-2 rounded-lg bg-screen px-3 py-2 text-sm dark:bg-night-2" { "Timed out until " (super::timestamp(until)) "." }
+                    }
                     (status(user, ctx))
                     div class="mt-4 flex flex-wrap gap-2" {
                         a href={ "/dm/" (user.id) } class="btn" {
@@ -69,7 +95,9 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context) -> Markup {
                 }
             }
             @if shell.user.is_admin && !own {
-                (admin_controls(user))
+                (admin_controls(user, standing))
+            } @else if moderator && !own && !user.is_admin {
+                (timeout_controls(user, standing))
             }
             @if !user.bio.is_empty() {
                 div class="rich mt-8 max-w-prose" { (PreEscaped(markdown::render(&user.bio, ctx))) }
@@ -89,12 +117,73 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context) -> Markup {
     )
 }
 
+/// Pausing someone's posting, for moderators.
+fn timeout_controls(user: &User, standing: &Standing) -> Markup {
+    html! {
+        form method="post" action={ "/people/" (user.id) "/timeout" } class="flex flex-wrap items-end gap-2" {
+            label {
+                span class="field-label" { "Time out" }
+                select name="duration" class="field py-1.5" {
+                    @if standing.timed_out_until.is_some() { option value="0" { "End the time-out" } }
+                    @for (duration, label) in crate::community::TIMEOUTS {
+                        option value=(duration) { "For " (label) }
+                    }
+                }
+            }
+            button type="submit" class="btn-quiet" { "Apply" }
+            p class="w-full text-sm text-muted dark:text-haint" { "Timed-out people can read but not post, react or vote." }
+        }
+    }
+}
+
 /// What an admin can do about someone else's account.
-fn admin_controls(user: &User) -> Markup {
+fn admin_controls(user: &User, standing: &Standing) -> Markup {
     let base = format!("/people/{}", user.id);
     html! {
-        section class="mt-10 rounded-xl border border-line p-4 dark:border-night-line" {
-            h2 class="mb-3 font-bold" { "Admin" }
+        section class="mt-10 space-y-6 rounded-xl border border-line p-4 dark:border-night-line" {
+            h2 class="font-bold" { "Admin" }
+            @if !user.is_admin {
+                form method="post" action={ (base) "/trust" } class="flex flex-wrap items-end gap-2" {
+                    label {
+                        span class="field-label" { "Trust level" }
+                        select name="level" class="field py-1.5" {
+                            @for (level, name, _) in crate::community::LEVELS {
+                                option value=(level) selected[level == standing.progress.level] { (level) ": " (name) }
+                            }
+                        }
+                    }
+                    label class="mb-2 flex items-center gap-2 text-sm" {
+                        input type="checkbox" name="locked" value="on" checked[standing.progress.locked];
+                        "Keep it there"
+                    }
+                    button type="submit" class="btn-quiet" { "Set level" }
+                    p class="w-full text-sm text-muted dark:text-haint" {
+                        (standing.progress.days) " days here, visited on " (standing.progress.visits) " days, "
+                        (standing.progress.messages) " messages."
+                    }
+                }
+                @if !standing.all_roles.is_empty() {
+                    form method="post" action={ (base) "/roles" } {
+                        fieldset {
+                            legend class="field-label" { "Roles" }
+                            div class="flex flex-wrap gap-3" {
+                                @for role in &standing.all_roles {
+                                    label class="flex items-center gap-2 text-sm" {
+                                        input type="checkbox" name={ "role_" (role.id) } value="on" checked[standing.role_ids.contains(&role.id)];
+                                        (role.name)
+                                    }
+                                }
+                            }
+                        }
+                        button type="submit" class="btn-quiet mt-2" { "Save roles" }
+                    }
+                } @else {
+                    p class="text-sm text-muted dark:text-haint" {
+                        "Create roles, such as moderators, under " a href="/admin/permissions#roles" class="underline underline-offset-2" { "Permissions" } "."
+                    }
+                }
+                (timeout_controls(user, standing))
+            }
             div class="flex flex-wrap gap-2" {
                 @if user.deactivated {
                     form method="post" action={ (base) "/reactivate" } {
