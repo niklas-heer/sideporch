@@ -38,7 +38,7 @@ Environment variables change what it does:
 | `SIDEPORCH_INSTALL_DIR` | `/usr/local/bin` or `~/.local/bin` | Where to put the program. |
 | `SIDEPORCH_DOWNLOAD_URL` | GitHub | Where the release files are, for a mirror. |
 
-For example, as root: `curl -fsSL …/install.sh | SIDEPORCH_INSTALL_DIR=/usr/local/bin sh`.
+For example, to install into `/opt/sideporch/bin`: `curl -fsSL https://raw.githubusercontent.com/niklas-heer/sideporch/main/install.sh | SIDEPORCH_INSTALL_DIR=/opt/sideporch/bin sh`.
 
 ## Docker
 

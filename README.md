@@ -74,6 +74,7 @@ Docker, Homebrew, Nix and NixOS work too. The documentation walks through [insta
 
 ## Documentation
 
+<a name="a-tour"></a><a name="run-it"></a><a name="update"></a><a name="back-up-and-move"></a><a name="move-from-slack"></a><a name="connect-gatus-and-other-tools"></a><a name="automations"></a><a name="let-ai-write-automations"></a><a name="how-big-a-server"></a><a name="good-to-know"></a>
 Everything else lives at **[sideporch.app/docs](https://sideporch.app/docs/)**: [running it](https://sideporch.app/docs/get-started/run-on-a-server/), [updates](https://sideporch.app/docs/get-started/update/), [backups and moving](https://sideporch.app/docs/community/backups/), [moving from Slack](https://sideporch.app/docs/community/move-from-slack/), [webhooks for Gatus and other tools](https://sideporch.app/docs/integrations/incoming-webhooks/), [automations](https://sideporch.app/docs/integrations/automations/) and [their API](https://sideporch.app/docs/integrations/automation-api/), [AI and MCP](https://sideporch.app/docs/integrations/ai-and-mcp/), [how big a server](https://sideporch.app/docs/community/server-size/) and [what Sideporch deliberately isn't](https://sideporch.app/docs/get-started/what-is-sideporch/#good-to-know).
 
 ## Develop

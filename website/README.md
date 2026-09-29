@@ -21,7 +21,10 @@ To look at a build with a plain static server, give it the address:
   with `weight` in their front matter. `content/docs/integrations/automation-api.md`
   is generated from `src/automations/api.rs`; see its first lines.
 - `templates/`: `base.html` (head, navigation, footer), the landing page, the
-  docs page and section layouts, and shortcodes.
+  docs page and section layouts, and Tera components in `components/`. Pages
+  use them for screenshots and callouts:
+  `{{<shot name="search" alt="…" caption="…" />}}` and
+  `{% <note kind="tip"> %}…{% </note> %}` (`kind` is `info`, `tip` or `warning`).
 - `static/`: the stylesheet, `site.js` (the hero conversation, copy buttons,
   search, the docs menu and the screenshot viewer), fonts, the logo and
   `img/`, where every screenshot lives (`mise run screenshots` retakes them). The README uses them too.
