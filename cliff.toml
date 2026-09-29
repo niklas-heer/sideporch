@@ -49,8 +49,8 @@ body = """
 ### Install or upgrade
 
 `brew upgrade sideporch`, `docker pull ghcr.io/niklas-heer/sideporch:{{ version | trim_start_matches(pat="v") }}`, \
-or run the [install script](https://github.com/niklas-heer/sideporch#install) again, then restart Sideporch. \
-It updates its database on start ([more on updating](https://github.com/niklas-heer/sideporch#update)). \
+or run the [install script](https://sideporch.app/docs/get-started/install/) again, then restart Sideporch. \
+It updates its database on start ([more on updating](https://sideporch.app/docs/get-started/update/)). \
 The archives below are checked against `SHA256SUMS`.
 {% endif %}
 """
