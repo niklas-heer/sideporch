@@ -1054,6 +1054,131 @@ async fn polls_count_one_vote_per_person() {
     );
 }
 
+async fn rank(who: &Browser, channel: i64, poll: i64, ranks: &[(&str, &str)]) -> StatusCode {
+    fetch_post(who, &format!("/c/{channel}/m/{poll}/rank"), ranks)
+        .await
+        .status()
+}
+
+/// A team picks a restaurant by ranking: Pizza leads the first choices,
+/// but once Soup is out its fans prefer Tacos, which wins.
+#[tokio::test]
+async fn ranked_polls_find_the_option_most_people_can_live_with() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let mo = invite(&server, &admin, "Mo Member", "mo").await;
+    let jo = invite(&server, &admin, "Jo Member", "jo").await;
+    let al = invite(&server, &admin, "Al Member", "al").await;
+    let bo = invite(&server, &admin, "Bo Member", "bo").await;
+
+    let response = fetch_post(
+        &admin,
+        &format!("/c/{general}/polls"),
+        &[
+            ("question", "Where do we eat on Friday?"),
+            ("options", "Pizza\nTacos\n\nSoup\n"),
+            ("kind", "ranked"),
+        ],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let page = admin.page(&format!("/c/{general}")).await;
+    let poll = last_message_id(&page);
+    assert!(page.contains("No rankings yet."));
+
+    // Pizza 2, Tacos 2, Soup 1 in the first round.
+    assert_eq!(
+        rank(&admin, general, poll, &[("r0", "1")]).await,
+        StatusCode::NO_CONTENT
+    );
+    rank(&mo, general, poll, &[("r0", "1"), ("r1", "2")]).await;
+    rank(&jo, general, poll, &[("r1", "1")]).await;
+    rank(&al, general, poll, &[("r1", "1"), ("r0", "2")]).await;
+    rank(&bo, general, poll, &[("r2", "1"), ("r1", "2")]).await;
+    let page = admin.page(&format!("/c/{general}")).await;
+    let result = between(&page, "data-poll-result", "</p>");
+    assert!(
+        result.contains("<strong>Tacos</strong> leads with 3 of 5 votes after 2 rounds"),
+        "{result}"
+    );
+    assert!(page.contains("Soup is out"));
+    assert!(page.contains("5 people ranked"));
+    // The viewer sees their own ranking.
+    let mine = mo.page(&format!("/c/{general}")).await;
+    let pizza = between(&mine, "name=\"r0\"", "</select>");
+    assert!(pizza.contains("value=\"1\" selected"), "{pizza}");
+
+    // Changing a ranking changes the result; an empty one takes it back.
+    rank(&bo, general, poll, &[]).await;
+    let page = admin.page(&format!("/c/{general}")).await;
+    assert!(page.contains("4 people ranked"));
+    assert!(between(&page, "data-poll-result", "</p>").contains("are tied"));
+
+    // Only the author (or an admin) ends it; then nobody can vote.
+    assert_eq!(
+        fetch_post(&mo, &format!("/c/{general}/m/{poll}/close-poll"), &[])
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        fetch_post(&admin, &format!("/c/{general}/m/{poll}/close-poll"), &[])
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let page = admin.page(&format!("/c/{general}")).await;
+    assert!(page.contains("were tied") && page.contains("Voting has ended"));
+    assert_eq!(
+        rank(&bo, general, poll, &[("r2", "1")]).await,
+        StatusCode::BAD_REQUEST
+    );
+    // Single-choice voting doesn't apply to a ranked poll.
+    assert_eq!(
+        vote(&admin, general, poll, "0").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn polls_where_people_pick_several_options() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    assert_eq!(
+        admin
+            .send(
+                general,
+                "/poll multiple Which days work? | Mon | Tue | Wed",
+                None
+            )
+            .await,
+        StatusCode::NO_CONTENT
+    );
+    let page = admin.page(&format!("/c/{general}")).await;
+    let poll = last_message_id(&page);
+    assert!(page.contains("Pick every option that works for you."));
+    vote(&admin, general, poll, "0").await;
+    vote(&admin, general, poll, "1").await;
+    vote(&member, general, poll, "1").await;
+    let page = admin.page(&format!("/c/{general}")).await;
+    assert!(page.contains("2 people voted"));
+    // Tuesday suits both people.
+    let tuesday = between(&page, "name=\"option\" value=\"1\"", "</button>");
+    assert!(
+        tuesday.contains("width: 100%") && tuesday.contains(">2<"),
+        "{tuesday}"
+    );
+    // Picking again takes just that option back.
+    vote(&admin, general, poll, "0").await;
+    let page = admin.page(&format!("/c/{general}")).await;
+    let monday = between(&page, "name=\"option\" value=\"0\"", "</button>");
+    assert!(monday.contains(">0<"), "{monday}");
+    assert!(page.contains("2 people voted"));
+}
+
 #[tokio::test]
 async fn automation_buttons_reach_their_automation() {
     let server = start().await;

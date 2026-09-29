@@ -512,7 +512,7 @@ async fn post(
             attachments: Vec::new(),
             files: Vec::new(),
             gif: None,
-            poll: Vec::new(),
+            poll: None,
             buttons,
         },
     )

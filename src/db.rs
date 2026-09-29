@@ -417,6 +417,20 @@ ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN appearance TEXT NOT NULL DEFAULT '';
 ",
     ),
+    Migration::Sql(
+        r"
+-- Choices in polls where people pick several options (rank 0) or rank
+-- them (1 is the favorite). Single-choice polls keep using poll_votes.
+CREATE TABLE poll_marks (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    option INTEGER NOT NULL,
+    rank INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (message_id, user_id, option)
+);
+",
+    ),
 ];
 
 /// The schema version this build writes: one per migration.

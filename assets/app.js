@@ -75,14 +75,78 @@
     if (follow) scrollToEnd(scroller);
   }
 
-  // Reactions are rendered once for everyone; highlight the viewer's own.
+  // Reactions and polls are rendered once for everyone; mark the viewer's
+  // own reactions, votes and ranking, and offer to end their own polls.
   function markOwnReactions(root) {
     const me = app?.dataset.me;
     for (const button of root.querySelectorAll("[data-users]")) {
       const mine = button.dataset.users.split(",").includes(me);
       button.setAttribute("aria-pressed", mine ? "true" : "false");
     }
+    for (const form of root.querySelectorAll("form[data-rank-form]")) {
+      let ranking = [];
+      try {
+        ranking = JSON.parse(form.dataset.ballots || "{}")[me] || [];
+      } catch {}
+      for (const select of form.querySelectorAll("select")) {
+        const option = Number(select.name.slice(1));
+        const place = ranking.indexOf(option);
+        select.value = place === -1 ? "" : String(place + 1);
+      }
+      const save = form.querySelector("[data-rank-save]");
+      if (save) save.hidden = true;
+    }
+    for (const close of root.querySelectorAll("form[data-poll-close]")) {
+      close.hidden = !(close.dataset.pollClose === me || app?.dataset.admin !== undefined);
+    }
   }
+
+  // Ranks save as soon as they change. Giving an option a rank another
+  // option has swaps the two, so every rank stays unique.
+  document.addEventListener("focusin", (event) => {
+    const select = event.target.closest("form[data-rank-form] select");
+    if (select) select.dataset.previous = select.value;
+  });
+  document.addEventListener("change", (event) => {
+    const select = event.target.closest("form[data-rank-form] select");
+    if (!select) return;
+    const form = select.form;
+    const previous = select.dataset.previous ?? "";
+    if (select.value) {
+      for (const other of form.querySelectorAll("select")) {
+        if (other !== select && other.value === select.value) other.value = previous;
+      }
+    }
+    select.dataset.previous = select.value;
+    fetch(form.action, { method: "POST", headers: { "x-sideporch-fetch": "1" }, body: new URLSearchParams(new FormData(form)) })
+      .then((response) => {
+        if (!response.ok) toast("Your ranking wasn't saved. Try again.");
+      })
+      .catch(() => toast("Your ranking wasn't saved. Check your connection."));
+  });
+
+  // The poll form posts in the background and closes when the poll is up.
+  document.addEventListener("submit", async (event) => {
+    const form = event.target.closest("form[data-poll-form]");
+    if (!form) return;
+    event.preventDefault();
+    const error = form.querySelector("[data-poll-error]");
+    const response = await fetch(form.action, {
+      method: "POST",
+      headers: { "x-sideporch-fetch": "1" },
+      body: new URLSearchParams(new FormData(form)),
+    }).catch(() => null);
+    if (response?.ok) {
+      form.reset();
+      error.classList.add("hidden");
+      form.closest("[popover]")?.hidePopover();
+      return;
+    }
+    const page = response ? await response.text() : "";
+    const message = new DOMParser().parseFromString(page, "text/html").querySelector("main p, p")?.textContent;
+    error.textContent = response ? message || "That poll didn't work. Check it and try again." : "That didn't work. Check your connection.";
+    error.classList.remove("hidden");
+  });
 
   function replaceReactions(messageId, html) {
     const current = document.getElementById(`reactions-${messageId}`);

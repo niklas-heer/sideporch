@@ -64,6 +64,7 @@ pub fn router(state: AppState) -> Router {
             "/c/{channel_id}/messages",
             post(post_message).layer(DefaultBodyLimit::max(files::UPLOAD_BODY_LIMIT)),
         )
+        .route("/c/{channel_id}/polls", post(create_poll))
         .route("/c/{channel_id}/m/{message_id}/react", get(react_page))
         .route("/c/{channel_id}/m/{message_id}/reactions", post(react))
         .route("/files/{file_id}", get(files::download))
@@ -690,7 +691,7 @@ async fn post_message(
             attachments: Vec::new(),
             files,
             gif,
-            poll: Vec::new(),
+            poll: None,
             buttons: Vec::new(),
         },
     )
@@ -716,26 +717,6 @@ fn builtin_poll(state: &AppState, body: &str, input: &MessageInput) -> Option<St
     (input.files.is_empty() && name == "poll" && !taken).then_some(text)
 }
 
-/// Reads `/poll Question? | One | Two` or `/poll "Question?" "One" "Two"`.
-fn parse_poll(text: &str) -> Option<(String, Vec<String>)> {
-    let parts: Vec<String> = if text.contains('|') {
-        text.split('|').map(|part| part.trim().to_owned()).collect()
-    } else {
-        text.split(['"', '“', '”'])
-            .skip(1)
-            .step_by(2)
-            .map(|part| part.trim().to_owned())
-            .collect()
-    };
-    let mut parts = parts.into_iter().filter(|part| !part.is_empty());
-    let question = parts.next()?;
-    let options: Vec<String> = parts
-        .map(|option| option.chars().take(100).collect())
-        .collect();
-    ((2..=10).contains(&options.len()) && question.chars().count() <= 300)
-        .then_some((question, options))
-}
-
 /// Posts a poll from `/poll`, or explains how to write one.
 async fn post_poll(
     state: &AppState,
@@ -745,12 +726,12 @@ async fn post_poll(
     text: &str,
     headers: &HeaderMap,
 ) -> AppResult<Response> {
-    let Some((question, options)) = parse_poll(text) else {
+    let Some((question, spec)) = crate::polls::parse_command(text) else {
         return Ok(command_answer(
             headers,
             channel_id,
             parent_id,
-            &["Write a poll like `/poll Where do we eat? | Pizza | Tacos` or `/poll \"Where do we eat?\" \"Pizza\" \"Tacos\"`, with 2 to 10 options.".to_owned()],
+            &["Write a poll like `/poll Where do we eat? | Pizza | Tacos`, with 2 to 10 options. Start with `ranked` to have people rank the options, or `multiple` to let them pick several: `/poll ranked Where do we eat? | Pizza | Tacos | Soup`.".to_owned()],
         ));
     };
     messages::post(
@@ -763,7 +744,7 @@ async fn post_poll(
             attachments: Vec::new(),
             files: Vec::new(),
             gif: None,
-            poll: options,
+            poll: Some(spec),
             buttons: Vec::new(),
         },
     )
@@ -772,6 +753,63 @@ async fn post_poll(
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
     Ok(Redirect::to(&format!("/c/{channel_id}")).into_response())
+}
+
+#[derive(Deserialize)]
+struct PollForm {
+    question: String,
+    /// One option per line.
+    options: String,
+    #[serde(default)]
+    kind: String,
+    parent_id: Option<i64>,
+}
+
+/// Posts a poll from the composer's poll form.
+async fn create_poll(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path(channel_id): Path<i64>,
+    headers: HeaderMap,
+    Form(form): Form<PollForm>,
+) -> AppResult<Response> {
+    let user_id = user.id;
+    let channel = state
+        .db
+        .call(move |conn| store::channel_for(conn, channel_id, user_id))
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let reply = form.parent_id.is_some();
+    if !channel.may_write(reply) {
+        return Err(AppError::bad_request(channel.write_refusal(reply)));
+    }
+    let kind = crate::polls::Kind::parse(&form.kind).unwrap_or_default();
+    let question = form.question.trim().to_owned();
+    let spec = crate::polls::Spec::new(
+        kind,
+        &question,
+        form.options.lines().map(ToOwned::to_owned).collect(),
+    )
+    .map_err(AppError::bad_request)?;
+    let message = messages::post(
+        &state,
+        Draft {
+            channel_id,
+            parent_id: form.parent_id,
+            sender: Sender::User(user_id),
+            body: question,
+            attachments: Vec::new(),
+            files: Vec::new(),
+            gif: None,
+            poll: Some(spec),
+            buttons: Vec::new(),
+        },
+    )
+    .await?;
+    if wants_no_content(&headers) {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+    Ok(Redirect::to(&message_href(&message)).into_response())
 }
 
 /// Runs a slash command and returns its private answers, or `None` if no
@@ -888,8 +926,8 @@ const BUILT_IN_COMMANDS: &[(&str, &str, &str)] = &[
     ("remind", "me <when> to <what>", "Remind yourself later"),
     (
         "poll",
-        "Question? | Option | Option",
-        "Ask everyone to vote",
+        "[ranked|multiple] Question? | Option | Option",
+        "Ask everyone to vote, pick several, or rank the options",
     ),
 ];
 
@@ -1239,7 +1277,7 @@ async fn incoming_webhook(
         attachments: parsed.attachments,
         files: Vec::new(),
         gif: None,
-        poll: Vec::new(),
+        poll: None,
         buttons: Vec::new(),
     };
     match messages::post(&state, draft).await {

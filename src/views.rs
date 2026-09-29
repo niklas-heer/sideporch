@@ -682,7 +682,13 @@ fn reply_label(count: i64) -> String {
 }
 
 fn composer(action: &str, parent: Option<i64>, label: &str) -> Markup {
+    let poll_id = if parent.is_some() {
+        "poll-form-thread"
+    } else {
+        "poll-form"
+    };
     html! {
+        (poll_form(poll_id, action.trim_end_matches("/messages"), parent))
         form data-composer method="post" action=(action) enctype="multipart/form-data" class="shrink-0 px-4 pb-4 pt-2" {
             @if let Some(parent) = parent {
                 input type="hidden" name="parent_id" value=(parent);
@@ -697,6 +703,10 @@ fn composer(action: &str, parent: Option<i64>, label: &str) -> Markup {
                     class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night" {
                     (icon(icons::GIF, "h-5 w-5"))
                 }
+                button type="button" popovertarget=(poll_id) title="Create a poll" aria-label="Create a poll"
+                    class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night" {
+                    (icon(icons::CHART_BAR_HORIZONTAL, "h-5 w-5"))
+                }
                 textarea name="body" rows="1" maxlength="10000" aria-label=(label) placeholder=(label)
                     class="max-h-48 min-h-6 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-hidden placeholder:text-muted dark:placeholder:text-haint" {}
                 button type="button" data-schedule-button hidden title="Send later" aria-label="Send later"
@@ -709,6 +719,59 @@ fn composer(action: &str, parent: Option<i64>, label: &str) -> Markup {
             }
             p class="mt-1 hidden px-1 text-xs text-red-700 dark:text-red-300" data-composer-error role="alert" {}
             p class="mt-0.5 h-4 truncate px-1 text-xs text-muted dark:text-haint" data-typing aria-live="polite" {}
+        }
+    }
+}
+
+/// Asks for a poll's question, options and kind. A popover, so it opens
+/// without scripts; app.js sends it in the background.
+fn poll_form(id: &str, channel_path: &str, parent: Option<i64>) -> Markup {
+    let kinds = [
+        ("single", "Pick one", "Everyone votes for one option."),
+        (
+            "multiple",
+            "Pick several",
+            "Good for finding a day that works for everyone.",
+        ),
+        (
+            "ranked",
+            "Rank them",
+            "Everyone ranks the options. The one most people can live with wins, by instant runoff.",
+        ),
+    ];
+    html! {
+        div id=(id) popover class="dialog-popover w-[min(28rem,92vw)] rounded-2xl border border-line bg-white p-5 text-ink shadow-2xl dark:border-night-line dark:bg-night-2 dark:text-haint-2" {
+            form method="post" action={ (channel_path) "/polls" } data-poll-form class="space-y-3" {
+                h2 class="text-lg font-bold" { "Create a poll" }
+                @if let Some(parent) = parent {
+                    input type="hidden" name="parent_id" value=(parent);
+                }
+                label class="block" {
+                    span class="mb-1 block text-sm font-semibold" { "Question" }
+                    input type="text" name="question" required maxlength="300" placeholder="Where do we eat on Friday?" class="field";
+                }
+                label class="block" {
+                    span class="mb-1 block text-sm font-semibold" { "Options, one per line" }
+                    textarea name="options" required rows="5" placeholder="Pizza\nTacos\nRamen" class="field" {}
+                }
+                fieldset class="space-y-1.5" {
+                    legend class="mb-1 text-sm font-semibold" { "How people vote" }
+                    @for (index, (value, name, hint)) in kinds.iter().enumerate() {
+                        label class="flex cursor-pointer items-start gap-2 rounded-lg border border-line p-2 has-[:checked]:border-floor-3 dark:border-night-line" {
+                            input type="radio" name="kind" value=(value) checked[index == 0] class="mt-1";
+                            span {
+                                span class="block text-sm font-semibold" { (name) }
+                                span class="block text-xs text-muted dark:text-haint" { (hint) }
+                            }
+                        }
+                    }
+                }
+                p class="hidden text-sm text-red-700 dark:text-red-300" data-poll-error role="alert" {}
+                div class="flex justify-end gap-2" {
+                    button type="button" popovertarget=(id) popovertargetaction="hide" class="btn-quiet" { "Cancel" }
+                    button type="submit" class="btn" { "Post poll" }
+                }
+            }
         }
     }
 }
@@ -859,35 +922,219 @@ fn gif_card(gif: &Gif) -> Markup {
     }
 }
 
-/// A poll: the question, then an option per button with a bar for its
-/// share of the votes. Buttons carry their voters, so app.js marks the
-/// viewer's own vote in live updates.
+/// A poll, drawn for its kind. Everything the viewer did is marked by
+/// app.js from data attributes too, since live updates are rendered once
+/// for everyone.
 fn poll_card(message: &Message, poll: &crate::store::Poll, render: &Render<'_>) -> Markup {
-    let total = poll.total();
-    let action = format!("/c/{}/m/{}/vote", message.channel_id, message.id);
+    let author = match &message.author {
+        Author::User { id, .. } => Some(*id),
+        _ => None,
+    };
+    let can_close = !poll.closed && render.viewer.is_some_and(|viewer| Some(viewer) == author);
     html! {
-        div data-poll class="mt-1 max-w-md rounded-xl border border-line p-3 dark:border-night-line" {
+        div data-poll=(poll.kind.key()) class="mt-1 max-w-md rounded-xl border border-line p-3 dark:border-night-line" {
             div class="rich mb-2 font-bold" data-body { (render.body(message)) }
-            @for (index, option) in poll.options.iter().enumerate() {
-                @let share = option.voters.len().saturating_mul(100).checked_div(total).unwrap_or(0);
-                @let mine = render.viewer.is_some_and(|viewer| option.voters.contains(&viewer));
+            @match poll.kind {
+                crate::polls::Kind::Ranked => (ranked_poll(message, poll, render)),
+                _ => (choice_poll(message, poll, render)),
+            }
+            @if !poll.closed {
+                form method="post" action={ "/c/" (message.channel_id) "/m/" (message.id) "/close-poll" } data-background
+                    data-poll-close=[author] hidden[!can_close] class="mt-1" {
+                    button type="submit" class="text-xs font-semibold text-muted underline underline-offset-2 hover:text-ink dark:text-haint" { "End the poll" }
+                }
+            }
+        }
+    }
+}
+
+/// A poll where people pick one option, or several: an option per button
+/// with a bar for its share. Buttons carry their voters, so app.js marks
+/// the viewer's own votes in live updates.
+fn choice_poll(message: &Message, poll: &crate::store::Poll, render: &Render<'_>) -> Markup {
+    let people = poll.voters();
+    let total: usize = poll.options.iter().map(|option| option.voters.len()).sum();
+    let action = format!("/c/{}/m/{}/vote", message.channel_id, message.id);
+    let several = poll.kind == crate::polls::Kind::Multiple;
+    html! {
+        @if several && !poll.closed {
+            p class="-mt-1 mb-2 text-xs text-muted dark:text-haint" { "Pick every option that works for you." }
+        }
+        @for (index, option) in poll.options.iter().enumerate() {
+            @let share = option.voters.len().saturating_mul(100).checked_div(if several { people } else { total }).unwrap_or(0);
+            @let mine = render.viewer.is_some_and(|viewer| option.voters.contains(&viewer));
+            @let bar = html! {
+                span class="absolute inset-y-0 left-0 bg-haint-2 dark:bg-floor-2" style={ "width: " (share) "%" } {}
+                span class="relative flex items-center justify-between gap-2 px-3 py-1.5" {
+                    span class="flex items-center gap-2" {
+                        @if several {
+                            span aria-hidden="true" class="poll-check" {}
+                        }
+                        (option.label)
+                    }
+                    span class="text-sm font-semibold" { (option.voters.len()) }
+                }
+            };
+            @if poll.closed {
+                div data-users=(joined(&option.voters)) title=(option.names.join(", "))
+                    class="relative mb-1.5 block w-full overflow-hidden rounded-lg border border-line text-left aria-pressed:border-floor-3 dark:border-night-line" { (bar) }
+            } @else {
                 form method="post" action=(action) data-background class="mb-1.5" {
                     input type="hidden" name="option" value=(index);
-                    button type="submit" data-users=(option.voters.iter().map(ToString::to_string).collect::<Vec<_>>().join(","))
+                    button type="submit" data-users=(joined(&option.voters))
                         aria-pressed=(if mine { "true" } else { "false" }) title=(option.names.join(", "))
-                        class="relative block w-full overflow-hidden rounded-lg border border-line text-left hover:border-floor-3 aria-pressed:border-floor-3 dark:border-night-line" {
-                        span class="absolute inset-y-0 left-0 bg-haint-2 dark:bg-floor-2" style={ "width: " (share) "%" } {}
-                        span class="relative flex items-center justify-between gap-2 px-3 py-1.5" {
-                            span { (option.label) }
-                            span class="text-sm font-semibold" { (option.voters.len()) }
+                        class="relative block w-full overflow-hidden rounded-lg border border-line text-left hover:border-floor-3 aria-pressed:border-floor-3 dark:border-night-line" { (bar) }
+                }
+            }
+        }
+        p class="mt-2 text-xs text-muted dark:text-haint" {
+            @if several {
+                (people) (if people == 1 { " person voted" } else { " people voted" })
+            } @else {
+                (total) (if total == 1 { " vote" } else { " votes" })
+            }
+            @if poll.closed { ". Voting has ended." }
+            @else if several { ". Pick an option again to take it back." }
+            @else { ". Pick again to take your vote back." }
+        }
+    }
+}
+
+fn joined(ids: &[i64]) -> String {
+    ids.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// A ranked poll: a rank per option, the instant-runoff result, and how the
+/// count went round by round.
+fn ranked_poll(message: &Message, poll: &crate::store::Poll, render: &Render<'_>) -> Markup {
+    let outcome = poll.outcome();
+    let last = outcome.rounds.last();
+    let valid: usize = last.map_or(0, |round| round.counts.iter().flatten().sum());
+    let label = |option: usize| {
+        poll.options
+            .get(option)
+            .map_or("?", |option| option.label.as_str())
+    };
+    let mine = render.viewer.and_then(|viewer| poll.ballot_of(viewer));
+    let ballots: serde_json::Map<String, serde_json::Value> = poll
+        .ballots
+        .iter()
+        .map(|ballot| {
+            (
+                ballot.user_id.to_string(),
+                serde_json::json!(ballot.ranking),
+            )
+        })
+        .collect();
+    let out_in: Vec<Option<usize>> = (0..poll.options.len())
+        .map(|option| {
+            outcome
+                .rounds
+                .iter()
+                .position(|round| round.eliminated.contains(&option))
+                .map(|round| round.saturating_add(1))
+        })
+        .collect();
+    let count = poll.options.len();
+    let action = format!("/c/{}/m/{}/rank", message.channel_id, message.id);
+    html! {
+        @if !poll.closed {
+            p class="-mt-1 mb-2 text-xs text-muted dark:text-haint" {
+                "Rank the options, 1 for your favorite. Rank as few or as many as you like."
+            }
+        }
+        form method="post" action=(action) data-rank-form data-ballots=(serde_json::Value::Object(ballots).to_string()) {
+            @for (index, option) in poll.options.iter().enumerate() {
+                @let votes = last.and_then(|round| round.counts.get(index).copied().flatten());
+                @let share = votes.unwrap_or(0).saturating_mul(100).checked_div(valid).unwrap_or(0);
+                @let winner = outcome.winners.contains(&index);
+                @let rank = mine.and_then(|ballot| ballot.ranking.iter().position(|&choice| choice == index)).map(|position| position.saturating_add(1));
+                div class="relative mb-1.5 flex items-center gap-2 overflow-hidden rounded-lg border border-line py-1 pl-1 pr-3 dark:border-night-line" {
+                    span class="absolute inset-y-0 left-0 bg-haint-2 dark:bg-floor-2" style={ "width: " (share) "%" } {}
+                    select name={ "r" (index) } aria-label={ "Your rank for " (option.label) } disabled[poll.closed]
+                        class="relative rounded-md border border-line bg-white py-0.5 pl-1.5 pr-6 text-sm dark:border-night-line dark:bg-night-2" {
+                        option value="" { "–" }
+                        @for place in 1..=count {
+                            option value=(place) selected[rank == Some(place)] { (place) }
+                        }
+                    }
+                    span class="relative flex-1" { (option.label) }
+                    span class="relative text-sm font-semibold" {
+                        @if winner && outcome.winners.len() == 1 {
+                            span class="rounded bg-lamp px-1.5 py-0.5 text-xs text-ink" { (if poll.closed { "Won" } else { "Leads" }) }
+                            " "
+                        }
+                        @if let Some(votes) = votes {
+                            (votes)
+                        } @else if let Some(round) = out_in.get(index).copied().flatten() {
+                            span class="text-xs font-normal text-muted dark:text-haint" { "out in round " (round) }
                         }
                     }
                 }
             }
-            p class="mt-2 text-xs text-muted dark:text-haint" {
-                (total) (if total == 1 { " vote" } else { " votes" }) ". Pick again to take your vote back."
+            @if !poll.closed {
+                button type="submit" data-rank-save class="btn-quiet mt-1 px-3 py-1 text-sm" { "Save my ranking" }
             }
         }
+        p class="mt-2 text-sm" data-poll-result {
+            @match outcome.winners.as_slice() {
+                [] => { "No rankings yet." }
+                [winner] => {
+                    strong { (label(*winner)) }
+                    (if poll.closed { " won with " } else { " leads with " })
+                    (last.and_then(|round| round.counts.get(*winner).copied().flatten()).unwrap_or(0))
+                    " of " (valid) (if valid == 1 { " vote" } else { " votes" })
+                    @if outcome.rounds.len() > 1 { " after " (outcome.rounds.len()) " rounds" }
+                    "."
+                }
+                tied => {
+                    @for (position, option) in tied.iter().enumerate() {
+                        @if position > 0 { @if position.saturating_add(1) == tied.len() { " and " } @else { ", " } }
+                        strong { (label(*option)) }
+                    }
+                    (if poll.closed { " were tied." } else { " are tied." })
+                }
+            }
+        }
+        @if outcome.rounds.len() > 1 { (count_details(&outcome, &label)) }
+        p class="mt-2 text-xs text-muted dark:text-haint" title=(poll.ballots.iter().map(|ballot| ballot.name.as_str()).collect::<Vec<_>>().join(", ")) {
+            (poll.ballots.len()) (if poll.ballots.len() == 1 { " person ranked" } else { " people ranked" })
+            @if poll.closed { ". Voting has ended." } @else { ". Change your ranking any time; the winner needs more than half of the votes, counting each person's highest choice still in the running." }
+        }
+    }
+}
+
+/// How an instant-runoff count went, round by round.
+fn count_details<'a>(outcome: &crate::polls::Outcome, label: &dyn Fn(usize) -> &'a str) -> Markup {
+    html! {
+            details class="mt-1 text-sm" {
+                summary class="cursor-pointer text-xs font-semibold text-muted dark:text-haint" { "How the votes moved" }
+                ol class="mt-1 space-y-1 text-xs" {
+                    @for (number, round) in outcome.rounds.iter().enumerate() {
+                        li {
+                            span class="font-semibold" { "Round " (number.saturating_add(1)) ": " }
+                            @for (position, (option, votes)) in round.counts.iter().enumerate().filter_map(|(option, votes)| votes.map(|votes| (option, votes))).enumerate() {
+                                @if position > 0 { " · " }
+                                (label(option)) " " (votes)
+                            }
+                            @if round.exhausted > 0 {
+                                " (" (round.exhausted) (if round.exhausted == 1 { " ranking had" } else { " rankings had" }) " no options left)"
+                            }
+                            @if !round.eliminated.is_empty() {
+                                ". "
+                                @for (position, option) in round.eliminated.iter().enumerate() {
+                                    @if position > 0 { " and " }
+                                    (label(*option))
+                                }
+                                (if round.eliminated.len() == 1 { " is out; its votes go to each voter's next choice." } else { " are out; their votes go to each voter's next choice." })
+                            }
+                        }
+                    }
+                }
+            }
     }
 }
 

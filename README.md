@@ -53,7 +53,7 @@ Open <http://localhost:8080> (or <http://127.0.0.1:8080> for the Homebrew versio
 - Messages appear live, with unread markers in the sidebar and **someone is typing…** under the box.
 - **Markdown** as on GitHub: bold and italics, lists and task lists, tables, code blocks, quotes, links, `@mentions`, `:emoji:`, and diagrams drawn from [Mermaid](https://mermaid.js.org) code blocks.
 - **Reactions** with every emoji, **custom emoji** anyone can add, **GIFs** from the team's own library (or GIPHY or KLIPY, if an admin sets them up), **files and images** you paste or drop in, and **link previews**.
-- **Polls**: `/poll Where do we eat? | Pizza | Tacos`.
+- **Polls** from the chart button or `/poll Where do we eat? | Pizza | Tacos`. People pick one option, pick several (`/poll multiple …`, for finding a day that suits everyone), or rank them (`/poll ranked …`): ranked polls find the option most people can live with by instant runoff, and show how the votes moved round by round.
 - **Edit and delete** your messages (press ↑ in an empty box to edit your last one), and **pin** the important ones to the channel. Admins can limit editing to a while after sending; by default there's no limit.
 - **Announcement channels**: let only a channel's managers start posts, while everyone else replies in threads and reacts, or limit replies and reactions too.
 

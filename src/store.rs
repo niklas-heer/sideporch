@@ -335,9 +335,14 @@ pub struct Message {
 /// A poll: the message text is its question.
 #[derive(Debug, Clone, Default)]
 pub struct Poll {
+    pub kind: crate::polls::Kind,
     pub options: Vec<PollOption>,
+    /// Everyone's ranking, in ranked polls.
+    pub ballots: Vec<Ballot>,
+    pub closed: bool,
 }
 
+/// An option and who picked it. In ranked polls, who ranked it first.
 #[derive(Debug, Clone, Default)]
 pub struct PollOption {
     pub label: String,
@@ -345,9 +350,47 @@ pub struct PollOption {
     pub names: Vec<String>,
 }
 
+/// One person's ranking: option indexes, favorite first.
+#[derive(Debug, Clone, Default)]
+pub struct Ballot {
+    pub user_id: i64,
+    pub name: String,
+    pub ranking: Vec<usize>,
+}
+
 impl Poll {
-    pub fn total(&self) -> usize {
-        self.options.iter().map(|option| option.voters.len()).sum()
+    /// How many people voted.
+    pub fn voters(&self) -> usize {
+        match self.kind {
+            crate::polls::Kind::Ranked => self.ballots.len(),
+            crate::polls::Kind::Single => {
+                self.options.iter().map(|option| option.voters.len()).sum()
+            }
+            crate::polls::Kind::Multiple => {
+                let mut everyone: Vec<i64> = self
+                    .options
+                    .iter()
+                    .flat_map(|option| option.voters.iter().copied())
+                    .collect();
+                everyone.sort_unstable();
+                everyone.dedup();
+                everyone.len()
+            }
+        }
+    }
+
+    /// Counts a ranked poll.
+    pub fn outcome(&self) -> crate::polls::Outcome {
+        let ballots: Vec<Vec<usize>> = self
+            .ballots
+            .iter()
+            .map(|ballot| ballot.ranking.clone())
+            .collect();
+        crate::polls::instant_runoff(self.options.len(), &ballots)
+    }
+
+    pub fn ballot_of(&self, user_id: i64) -> Option<&Ballot> {
+        self.ballots.iter().find(|ballot| ballot.user_id == user_id)
     }
 }
 
@@ -421,8 +464,8 @@ pub struct NewMessage<'a> {
     pub attachments: &'a [Attachment],
     pub files: &'a [i64],
     pub gif: Option<&'a Gif>,
-    /// A poll's options; the body is its question.
-    pub poll: &'a [String],
+    /// A poll; the body is its question.
+    pub poll: Option<&'a crate::polls::Spec>,
     pub buttons: &'a [Button],
     pub created_at: i64,
 }
@@ -1056,15 +1099,19 @@ fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
             .and_then(|json| serde_json::from_str(&json).ok()),
         poll: row
             .get::<_, Option<String>>(19)?
-            .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
-            .map(|labels| Poll {
-                options: labels
+            .and_then(|json| crate::polls::Spec::from_json(&json))
+            .map(|spec| Poll {
+                kind: spec.kind,
+                options: spec
+                    .options
                     .into_iter()
                     .map(|label| PollOption {
                         label,
                         ..PollOption::default()
                     })
                     .collect(),
+                ballots: Vec::new(),
+                closed: spec.closed_at.is_some(),
             }),
         buttons: row
             .get::<_, Option<String>>(20)?
@@ -1099,6 +1146,63 @@ fn hydrate_votes(conn: &Connection, messages: &mut [Message], ids: &str) -> AppR
         if let Some(option) = option {
             option.voters.push(user_id);
             option.names.push(name);
+        }
+    }
+    let mut statement = conn.prepare(
+        "SELECT v.message_id, v.option, v.user_id, COALESCE(u.display_name, 'Someone')
+         FROM poll_marks v LEFT JOIN users u ON u.id = v.user_id
+         WHERE v.message_id IN (SELECT value FROM json_each(?1))
+         ORDER BY v.message_id, v.user_id, v.rank, v.option",
+    )?;
+    let marks = statement.query_map([ids], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    for mark in marks {
+        let (message_id, option, user_id, name) = mark?;
+        let Some(poll) = messages
+            .iter_mut()
+            .find(|m| m.id == message_id)
+            .and_then(|message| message.poll.as_mut())
+        else {
+            continue;
+        };
+        let Some(option) = usize::try_from(option)
+            .ok()
+            .filter(|option| *option < poll.options.len())
+        else {
+            continue;
+        };
+        match poll.kind {
+            crate::polls::Kind::Ranked => {
+                if let Some(ballot) = poll
+                    .ballots
+                    .iter_mut()
+                    .find(|ballot| ballot.user_id == user_id)
+                {
+                    ballot.ranking.push(option);
+                } else {
+                    if let Some(first) = poll.options.get_mut(option) {
+                        first.voters.push(user_id);
+                        first.names.push(name.clone());
+                    }
+                    poll.ballots.push(Ballot {
+                        user_id,
+                        name,
+                        ranking: vec![option],
+                    });
+                }
+            }
+            _ => {
+                if let Some(option) = poll.options.get_mut(option) {
+                    option.voters.push(user_id);
+                    option.names.push(name);
+                }
+            }
         }
     }
     Ok(())
@@ -1263,9 +1367,7 @@ pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64>
             attachments,
             new.created_at,
             new.gif.and_then(|gif| serde_json::to_string(gif).ok()),
-            (!new.poll.is_empty())
-                .then(|| serde_json::to_string(new.poll).ok())
-                .flatten(),
+            new.poll.map(crate::polls::Spec::to_json),
             (!new.buttons.is_empty())
                 .then(|| serde_json::to_string(new.buttons).ok())
                 .flatten()
@@ -1289,6 +1391,9 @@ pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64>
     }
     if let Some(gif) = new.gif {
         searchable.push(gif.title.clone());
+    }
+    if let Some(poll) = new.poll {
+        searchable.extend(poll.options.iter().cloned());
     }
     conn.execute(
         "INSERT INTO messages_fts (rowid, content) VALUES (?1, ?2)",
@@ -1444,6 +1549,69 @@ pub fn vote(
             params![message_id, user_id, option, now],
         )?;
     }
+    Ok(())
+}
+
+/// Picks `option` in a poll where people pick several, or takes it back.
+pub fn toggle_mark(
+    conn: &Connection,
+    message_id: i64,
+    user_id: i64,
+    option: i64,
+    now: i64,
+) -> AppResult<()> {
+    let removed = conn.execute(
+        "DELETE FROM poll_marks WHERE message_id = ?1 AND user_id = ?2 AND option = ?3",
+        params![message_id, user_id, option],
+    )?;
+    if removed == 0 {
+        conn.execute(
+            "INSERT INTO poll_marks (message_id, user_id, option, rank, created_at) VALUES (?1, ?2, ?3, 0, ?4)",
+            params![message_id, user_id, option, now],
+        )?;
+    }
+    Ok(())
+}
+
+/// Replaces someone's ranking in a ranked poll; an empty one takes it back.
+pub fn set_ranking(
+    conn: &Connection,
+    message_id: i64,
+    user_id: i64,
+    ranking: &[usize],
+    now: i64,
+) -> AppResult<()> {
+    conn.execute(
+        "DELETE FROM poll_marks WHERE message_id = ?1 AND user_id = ?2",
+        params![message_id, user_id],
+    )?;
+    for (rank, option) in (1_i64..).zip(ranking) {
+        conn.execute(
+            "INSERT INTO poll_marks (message_id, user_id, option, rank, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![message_id, user_id, i64::try_from(*option).unwrap_or(i64::MAX), rank, now],
+        )?;
+    }
+    Ok(())
+}
+
+/// Ends voting in a poll.
+pub fn close_poll(conn: &Connection, message_id: i64, now: i64) -> AppResult<()> {
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT poll FROM messages WHERE id = ?1",
+            [message_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    let Some(mut spec) = json.as_deref().and_then(crate::polls::Spec::from_json) else {
+        return Err(crate::error::AppError::NotFound);
+    };
+    spec.closed_at.get_or_insert(now);
+    conn.execute(
+        "UPDATE messages SET poll = ?1 WHERE id = ?2",
+        params![spec.to_json(), message_id],
+    )?;
     Ok(())
 }
 

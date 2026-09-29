@@ -198,7 +198,7 @@ async fn answer(
             attachments: Vec::new(),
             files: Vec::new(),
             gif: None,
-            poll: Vec::new(),
+            poll: None,
             buttons: Vec::new(),
         },
     )

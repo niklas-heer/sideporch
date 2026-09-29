@@ -270,7 +270,7 @@ pub async fn deliver_due(state: &AppState) -> AppResult<()> {
             attachments: Vec::new(),
             files: Vec::new(),
             gif: None,
-            poll: Vec::new(),
+            poll: None,
             buttons: Vec::new(),
         };
         if let Err(error) = messages::post(state, draft).await {
@@ -323,7 +323,7 @@ async fn send_reminder(state: &AppState, reminder: &store::Reminder) -> AppResul
             attachments: Vec::new(),
             files: Vec::new(),
             gif: None,
-            poll: Vec::new(),
+            poll: None,
             buttons: Vec::new(),
         },
     )

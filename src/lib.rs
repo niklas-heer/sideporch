@@ -22,6 +22,7 @@ mod markup;
 mod mcp;
 mod messages;
 mod outgoing;
+mod polls;
 mod previews;
 mod push;
 mod realtime;

@@ -40,8 +40,8 @@ pub struct Draft {
     pub attachments: Vec<Attachment>,
     pub files: Vec<i64>,
     pub gif: Option<store::Gif>,
-    /// A poll's options; the body is the question.
-    pub poll: Vec<String>,
+    /// A poll; the body is the question.
+    pub poll: Option<crate::polls::Spec>,
     pub buttons: Vec<store::Button>,
 }
 
@@ -105,7 +105,7 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
                     attachments: &draft.attachments,
                     files: &draft.files,
                     gif: draft.gif.as_ref(),
-                    poll: &draft.poll,
+                    poll: draft.poll.as_ref(),
                     buttons: &draft.buttons,
                     created_at: now,
                 },

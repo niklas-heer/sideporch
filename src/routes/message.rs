@@ -32,6 +32,11 @@ pub fn router() -> Router<AppState> {
         .route("/c/{channel_id}/m/{message_id}/pin", post(pin))
         .route("/c/{channel_id}/m/{message_id}/save", post(save))
         .route("/c/{channel_id}/m/{message_id}/vote", post(vote))
+        .route("/c/{channel_id}/m/{message_id}/rank", post(rank))
+        .route(
+            "/c/{channel_id}/m/{message_id}/close-poll",
+            post(close_poll),
+        )
         .route("/c/{channel_id}/m/{message_id}/buttons", post(click))
         .route(
             "/c/{channel_id}/m/{message_id}/preview/remove",
@@ -336,14 +341,15 @@ struct VoteForm {
     option: i64,
 }
 
-async fn vote(
-    user: CurrentUser,
-    State(state): State<AppState>,
-    Path((channel_id, message_id)): Path<(i64, i64)>,
-    headers: HeaderMap,
-    Form(form): Form<VoteForm>,
-) -> AppResult<Response> {
-    let message = readable(&state, &user, channel_id, message_id).await?;
+/// Loads a poll someone may vote in: open, readable, in a channel where
+/// they may react.
+async fn open_poll(
+    state: &AppState,
+    user: &CurrentUser,
+    channel_id: i64,
+    message_id: i64,
+) -> AppResult<(store::Message, store::Poll)> {
+    let message = readable(state, user, channel_id, message_id).await?;
     let user_id = user.id;
     let channel = state
         .db
@@ -355,14 +361,107 @@ async fn vote(
             "Only the channel's managers vote there.",
         ));
     }
-    let options = message.poll.as_ref().map_or(0, |poll| poll.options.len());
-    if usize::try_from(form.option).map_or(true, |option| option >= options) || message.deleted {
+    let poll = message
+        .poll
+        .clone()
+        .filter(|_| !message.deleted)
+        .ok_or_else(|| AppError::bad_request("That message has no poll."))?;
+    if poll.closed {
+        return Err(AppError::bad_request("Voting in this poll has ended."));
+    }
+    Ok((message, poll))
+}
+
+/// Votes for an option, or takes the vote back. In polls where people pick
+/// several, each option toggles on its own.
+async fn vote(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path((channel_id, message_id)): Path<(i64, i64)>,
+    headers: HeaderMap,
+    Form(form): Form<VoteForm>,
+) -> AppResult<Response> {
+    let (message, poll) = open_poll(&state, &user, channel_id, message_id).await?;
+    if usize::try_from(form.option).map_or(true, |option| option >= poll.options.len()) {
         return Err(AppError::bad_request("That poll has no such option."));
+    }
+    let user_id = user.id;
+    let now = now_ms();
+    state
+        .db
+        .call(move |conn| match poll.kind {
+            crate::polls::Kind::Single => store::vote(conn, message_id, user_id, form.option, now),
+            crate::polls::Kind::Multiple => {
+                store::toggle_mark(conn, message_id, user_id, form.option, now)
+            }
+            crate::polls::Kind::Ranked => Err(AppError::bad_request(
+                "Rank the options in this poll instead.",
+            )),
+        })
+        .await?;
+    messages::refresh(&state, message_id).await?;
+    Ok(done(
+        &headers,
+        &message_href(&message),
+        serde_json::Value::Null,
+    ))
+}
+
+/// Saves someone's ranking in a ranked poll. The form has a field `r<N>`
+/// per option with its rank, 1 for the favorite; empty leaves it out.
+async fn rank(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path((channel_id, message_id)): Path<(i64, i64)>,
+    headers: HeaderMap,
+    Form(form): Form<std::collections::HashMap<String, String>>,
+) -> AppResult<Response> {
+    let (message, poll) = open_poll(&state, &user, channel_id, message_id).await?;
+    if poll.kind != crate::polls::Kind::Ranked {
+        return Err(AppError::bad_request("This poll isn't ranked."));
+    }
+    let ranks: Vec<(usize, u32)> = form
+        .iter()
+        .filter_map(|(key, value)| {
+            let option = key.strip_prefix('r')?.parse().ok()?;
+            let rank = value.trim().parse().ok()?;
+            Some((option, rank))
+        })
+        .collect();
+    let ranking = crate::polls::ranking_from_ranks(poll.options.len(), &ranks);
+    let user_id = user.id;
+    let now = now_ms();
+    state
+        .db
+        .call(move |conn| store::set_ranking(conn, message_id, user_id, &ranking, now))
+        .await?;
+    messages::refresh(&state, message_id).await?;
+    Ok(done(
+        &headers,
+        &message_href(&message),
+        serde_json::Value::Null,
+    ))
+}
+
+/// Ends voting: the poll's author or an admin may.
+async fn close_poll(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path((channel_id, message_id)): Path<(i64, i64)>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    let message = readable(&state, &user, channel_id, message_id).await?;
+    let own = matches!(message.author, store::Author::User { id, .. } if id == user.id);
+    if message.poll.is_none() || message.deleted {
+        return Err(AppError::NotFound);
+    }
+    if !own && !user.is_admin {
+        return Err(AppError::Forbidden);
     }
     let now = now_ms();
     state
         .db
-        .call(move |conn| store::vote(conn, message_id, user_id, form.option, now))
+        .call(move |conn| store::close_poll(conn, message_id, now))
         .await?;
     messages::refresh(&state, message_id).await?;
     Ok(done(
@@ -498,7 +597,7 @@ async fn share(
             attachments: Vec::new(),
             files: Vec::new(),
             gif: None,
-            poll: Vec::new(),
+            poll: None,
             buttons: Vec::new(),
         },
     )

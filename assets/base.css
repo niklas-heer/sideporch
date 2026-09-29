@@ -269,3 +269,12 @@ html, body {
 
 /* The account menu's summary shows a person, not a disclosure triangle. */
 [data-account-menu] > summary::-webkit-details-marker { display: none; }
+
+/* The box beside each option in polls where people pick several. */
+.poll-check { display: inline-block; width: 0.9rem; height: 0.9rem; flex-shrink: 0; border: 1.5px solid var(--muted); border-radius: 3px; }
+[aria-pressed="true"] .poll-check { border-color: var(--floor-3); background: var(--floor-3) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% no-repeat; }
+.dark [aria-pressed="true"] .poll-check { border-color: var(--haint); background-color: var(--floor-3); }
+
+/* Forms in popovers, such as creating a poll, open centred over a dimmed page. */
+.dialog-popover:popover-open { position: fixed; inset: 0; margin: auto; height: fit-content; max-height: calc(100dvh - 2rem); overflow-y: auto; }
+.dialog-popover::backdrop { background: rgb(0 0 0 / 0.35); }
