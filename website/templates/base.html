@@ -30,6 +30,15 @@
 
   {% block content %}{% endblock %}
 
+  <dialog class="search" id="search" aria-label="Search the documentation" data-pagefind="{{ get_url(path='pagefind/pagefind.js') }}">
+    <form method="dialog" class="search-bar" role="search">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="m15.5 15.5 5 5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+      <input type="search" id="search-input" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs" aria-controls="search-results">
+      <button type="submit" class="search-close" aria-label="Close search">Esc</button>
+    </form>
+    <ol id="search-results" class="search-results" aria-live="polite"></ol>
+  </dialog>
+
   <footer>
     <img src="{{ get_url(path='logo.svg') }}" alt="" width="28" height="28">
     <p>Sideporch is free software under the MIT license. <a href="{{ config.extra.repo }}">Source on GitHub</a>, <a href="{{ config.extra.repo }}/releases">releases</a>, <a href="{{ config.extra.repo }}/issues">issues</a>.</p>

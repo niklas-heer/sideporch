@@ -79,6 +79,102 @@
     });
   }
 
+  // Search: Pagefind's index loads the first time search opens.
+  const search = document.getElementById("search");
+  if (search) {
+    const input = document.getElementById("search-input");
+    const results = document.getElementById("search-results");
+    let pagefind;
+    let run = 0;
+    const load = async () => (pagefind ??= await import(search.dataset.pagefind));
+    const open = () => {
+      if (!search.open) search.showModal();
+      input.focus();
+      input.select();
+      load();
+    };
+    for (const button of document.querySelectorAll("[data-search-open]")) {
+      button.hidden = false;
+      button.addEventListener("click", open);
+    }
+    document.addEventListener("keydown", (event) => {
+      const target = event.target;
+      const typing = target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+      const slash = event.key === "/" && !typing && !event.metaKey && !event.ctrlKey && !event.altKey;
+      const k = event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey);
+      if (slash || k) {
+        event.preventDefault();
+        open();
+      }
+    });
+    // A click on the dimmed page around the dialog closes it.
+    search.addEventListener("click", (event) => {
+      if (event.target === search) search.close();
+    });
+    const item = (result) => {
+      // Link to the section of the page with the most matches.
+      const best = (result.sub_results ?? []).reduce(
+        (top, sub) => (sub.locations.length > (top?.locations.length ?? 0) ? sub : top),
+        null,
+      );
+      const section = best && best.title !== result.meta.title ? best : null;
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.href = section?.url ?? result.url;
+      const title = document.createElement("strong");
+      title.textContent = section ? `${result.meta.title} › ${section.title}` : result.meta.title;
+      const excerpt = document.createElement("span");
+      // Pagefind escapes the page text and only adds <mark> around matches.
+      excerpt.innerHTML = section?.excerpt ?? result.excerpt;
+      a.append(title, excerpt);
+      li.append(a);
+      return li;
+    };
+    input.addEventListener("input", async () => {
+      const mine = ++run;
+      const query = input.value.trim();
+      if (!query) {
+        results.replaceChildren();
+        return;
+      }
+      await load();
+      // Keys typed while the index loaded resume here out of order; only
+      // the newest may search, or an older one would cancel it.
+      if (mine !== run) return;
+      const found = await pagefind.debouncedSearch(query, {}, 120);
+      if (found === null || mine !== run) return;
+      const data = await Promise.all(found.results.slice(0, 8).map((result) => result.data()));
+      if (mine !== run) return;
+      if (data.length) {
+        results.replaceChildren(...data.map(item));
+      } else {
+        const empty = document.createElement("li");
+        empty.className = "empty";
+        empty.textContent = `Nothing found for “${query}”.`;
+        results.replaceChildren(empty);
+      }
+    });
+    // Enter opens the first result; the arrow keys move through them.
+    search.addEventListener("keydown", (event) => {
+      const links = [...results.querySelectorAll("a")];
+      const at = links.indexOf(document.activeElement);
+      if (event.key === "Escape") {
+        // A search field clears itself on the first Esc; close right away instead.
+        event.preventDefault();
+        search.close();
+      } else if (event.key === "Enter" && event.target === input) {
+        event.preventDefault();
+        links[0]?.click();
+      } else if (event.key === "ArrowDown" && links.length) {
+        event.preventDefault();
+        links[Math.min(at + 1, links.length - 1)].focus();
+      } else if (event.key === "ArrowUp" && at >= 0) {
+        event.preventDefault();
+        (at === 0 ? input : links[at - 1]).focus();
+      }
+    });
+  }
+
   // "On this page" marks the section being read.
   const toc = document.querySelector(".toc");
   if (toc) {
