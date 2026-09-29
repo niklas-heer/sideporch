@@ -26,8 +26,9 @@
               fileset = pkgs.lib.fileset.unions [
                 ./Cargo.toml ./Cargo.lock ./rust-toolchain.toml ./clippy.toml ./build.rs
                 ./encre-css.toml ./src ./assets ./tests ./README.md ./LICENSE
-                # A test keeps this page generated from src/automations/api.rs.
-                ./website/content/docs/integrations/automation-api.md
+                # Tests keep the API page generated from src/automations/api.rs,
+                # and check every Lua example in the docs.
+                ./website/content/docs
               ];
             };
             cargoLock.lockFile = ./Cargo.lock;
