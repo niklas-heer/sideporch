@@ -312,6 +312,36 @@ impl Http {
         response.ok_or_else(|| "too many redirects".to_owned())
     }
 
+    /// Fetches `url` with GET, following up to five redirects, and returns
+    /// the status and at most `limit` bytes of the body.
+    pub async fn fetch(&self, url: &str, limit: usize) -> Result<(u16, Vec<u8>), String> {
+        let response = self.follow(url).await?;
+        let status = response.status().as_u16();
+        let body = tokio::time::timeout(
+            Duration::from_mins(1),
+            Limited::new(response.into_body(), limit).collect(),
+        )
+        .await
+        .map_err(|_| "the server didn't finish answering within a minute".to_owned())?
+        .map_err(|_| format!("the answer is larger than {} KB", limit / 1024))?
+        .to_bytes();
+        Ok((status, body.to_vec()))
+    }
+
+    /// Downloads `url` to `target` like [`Self::download`], for files of
+    /// unknown size up to `max` bytes.
+    pub async fn download_up_to(
+        &self,
+        url: &str,
+        target: &std::path::Path,
+        max: u64,
+        sha256: &str,
+    ) -> Result<(), String> {
+        let progress = std::sync::atomic::AtomicU64::new(0);
+        self.download_checked(url, target, None, max, sha256, &progress)
+            .await
+    }
+
     /// Downloads `url` to `target`, following up to five redirects, and
     /// checks the file's size and SHA-256 before moving it into place.
     /// `progress` counts the bytes received.
@@ -320,6 +350,19 @@ impl Http {
         url: &str,
         target: &std::path::Path,
         size: u64,
+        sha256: &str,
+        progress: &std::sync::atomic::AtomicU64,
+    ) -> Result<(), String> {
+        self.download_checked(url, target, Some(size), size, sha256, progress)
+            .await
+    }
+
+    async fn download_checked(
+        &self,
+        url: &str,
+        target: &std::path::Path,
+        size: Option<u64>,
+        max: u64,
         sha256: &str,
         progress: &std::sync::atomic::AtomicU64,
     ) -> Result<(), String> {
@@ -350,7 +393,7 @@ impl Http {
             let frame = frame.map_err(|error| describe(&error))?;
             if let Ok(data) = frame.into_data() {
                 received = received.saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
-                if received > size {
+                if received > max {
                     drop(tokio::fs::remove_file(&partial).await);
                     return Err("the file is larger than expected".to_owned());
                 }
@@ -373,7 +416,7 @@ impl Http {
             let _ = write!(hex, "{byte:02x}");
             hex
         });
-        if received != size || hex != sha256 {
+        if size.is_some_and(|size| received != size) || hex != sha256 {
             drop(tokio::fs::remove_file(&partial).await);
             return Err("the downloaded file doesn't match; try again".to_owned());
         }

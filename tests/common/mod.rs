@@ -36,6 +36,9 @@ pub async fn start_in(data: TempDir, configure: impl FnOnce(&mut Config)) -> Ser
         allow_insecure_push: true,
         allow_private_link_previews: false,
         model_base_url: None,
+        // Tests never ask GitHub.
+        update_check: false,
+        update_source: None,
     };
     configure(&mut config);
     let app = Sideporch::open(config).await.unwrap();

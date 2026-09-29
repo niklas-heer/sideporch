@@ -31,6 +31,7 @@ pub mod search;
 pub mod security;
 pub mod settings;
 pub mod speech;
+pub mod updates;
 
 /// How to render messages: this Sideporch's custom emoji and usernames, and
 /// who is looking. Live updates are rendered once for everyone, so they
@@ -413,6 +414,9 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                     button type="button" data-install-action class="rounded-lg bg-lamp px-3 py-1 text-sm font-semibold text-floor" {}
                     button type="button" data-install-dismiss class="rounded-lg px-2 py-1 text-sm text-haint hover:text-white" { "Not now" }
                 }
+            }
+            @if let (true, Some(notice)) = (shell.user.is_admin, &shell.sidebar.update) {
+                (updates::notice(notice))
             }
             (account_menu(shell))
         }

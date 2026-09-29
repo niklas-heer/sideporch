@@ -406,6 +406,8 @@ async fn a_required_setup_link_is_kept_private_and_removed_after_use() {
         allow_insecure_push: true,
         allow_private_link_previews: false,
         model_base_url: None,
+        update_check: false,
+        update_source: None,
     })
     .await
     .unwrap();

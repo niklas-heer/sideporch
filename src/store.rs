@@ -127,6 +127,8 @@ pub struct Sidebar {
     pub direct: Vec<SidebarItem>,
     /// Whether there are mentions or replies the person hasn't seen.
     pub activity: bool,
+    /// A reminder to update Sideporch, for admins.
+    pub update: Option<crate::updates::Notice>,
 }
 
 #[derive(Debug, Clone)]
@@ -1032,6 +1034,7 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
         channels,
         direct,
         activity,
+        update: None,
     })
 }
 

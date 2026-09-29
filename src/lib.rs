@@ -38,6 +38,7 @@ mod store;
 mod system;
 mod themes;
 mod totp;
+pub mod updates;
 mod views;
 mod webhook;
 
@@ -54,6 +55,10 @@ pub use crate::{backup::restore, error::AppError as Error};
 
 /// Where Sideporch keeps its data and how people reach it.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches, set from command-line options"
+)]
 pub struct Config {
     /// Directory holding `sideporch.db`. Created if missing.
     pub data_dir: PathBuf,
@@ -77,6 +82,13 @@ pub struct Config {
     /// Where speech models are downloaded from; tests serve them locally.
     #[doc(hidden)]
     pub model_base_url: Option<String>,
+    /// Ask GitHub for new releases every few hours, so admins hear about
+    /// updates. Admins can also turn this off under Admin → Updates.
+    pub update_check: bool,
+    /// Where releases come from and which program to replace; tests use a
+    /// fake. The server doesn't restart itself after updating then.
+    #[doc(hidden)]
+    pub update_source: Option<(updates::Source, PathBuf)>,
 }
 
 #[derive(Clone)]
@@ -103,6 +115,8 @@ pub(crate) struct AppState {
     ceremonies: passkeys::Ceremonies,
     /// Reading aloud and dictation.
     speech: Arc<speech::Speech>,
+    /// New releases, and installing them.
+    updates: Arc<updates::Updates>,
 }
 
 /// Whether and how the first account can still be created.
@@ -214,11 +228,25 @@ impl Sideporch {
             setup_file: setup_link_file(&config.data_dir),
             ceremonies: passkeys::Ceremonies::default(),
             speech: speech::Speech::new(&config.data_dir, config.model_base_url.clone()),
+            updates: Arc::new(match config.update_source {
+                Some((source, executable)) => {
+                    updates::Updates::new(source, config.update_check, Some(executable), false)?
+                }
+                None => updates::Updates::new(
+                    updates::Source::default(),
+                    config.update_check,
+                    std::env::current_exe().ok(),
+                    true,
+                )?,
+            }),
         };
+        let updates = Arc::clone(&state.updates);
+        state.db.call(move |conn| updates.load(conn)).await?;
         state.speech.start_unloading();
         state.automations.serve(state.clone());
         later::start(state.clone());
         backup::start(state.clone());
+        updates::start(state.clone());
         state.automations.reload(&state).await?;
         Ok(Self { state })
     }

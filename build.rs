@@ -17,6 +17,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo::rerun-if-changed=src");
     println!("cargo::rerun-if-changed=assets");
     println!("cargo::rerun-if-changed=encre-css.toml");
+    // Which release archive updates this build (see src/updates.rs).
+    println!("cargo::rustc-env=SIDEPORCH_TARGET={}", env::var("TARGET")?);
 
     let mut sources = Vec::new();
     collect(Path::new("src"), "rs", &mut sources)?;

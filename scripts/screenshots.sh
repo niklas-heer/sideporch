@@ -23,7 +23,7 @@ if curl -s -o /dev/null "http://127.0.0.1:$port/"; then
   echo "screenshots: something already answers on port $port; stop it first" >&2
   exit 1
 fi
-target/release/sideporch --listen "127.0.0.1:$port" --data "$data" >"$data.log" 2>&1 &
+target/release/sideporch --listen "127.0.0.1:$port" --data "$data" --update-check false >"$data.log" 2>&1 &
 server=$!
 cleanup() {
   kill "$server" 2>/dev/null || true

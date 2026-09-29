@@ -104,6 +104,7 @@ async fn actions(
     Path((channel_id, message_id)): Path<(i64, i64)>,
 ) -> AppResult<Markup> {
     let user_id = user.id;
+    let updates = std::sync::Arc::clone(&state.updates);
     let (message, sidebar, ctx, saved) = state
         .db
         .call(move |conn| {
@@ -112,7 +113,7 @@ async fn actions(
             let saved = store::saved_ids(conn, user_id, &[&message])?;
             Ok((
                 message,
-                store::sidebar(conn, user_id)?,
+                super::sidebar_with_update(conn, &updates, user_id)?,
                 store::render_context(conn)?,
                 saved,
             ))
@@ -261,6 +262,7 @@ async fn pins(
     Path(channel_id): Path<i64>,
 ) -> AppResult<Markup> {
     let user_id = user.id;
+    let updates = std::sync::Arc::clone(&state.updates);
     let (channel, messages, sidebar, ctx) = state
         .db
         .call(move |conn| {
@@ -269,7 +271,7 @@ async fn pins(
             Ok((
                 channel,
                 store::pinned_messages(conn, channel_id)?,
-                store::sidebar(conn, user_id)?,
+                super::sidebar_with_update(conn, &updates, user_id)?,
                 store::render_context(conn)?,
             ))
         })
@@ -289,12 +291,13 @@ async fn pins(
 
 async fn saved(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
     let user_id = user.id;
+    let updates = std::sync::Arc::clone(&state.updates);
     let (saved, sidebar, ctx) = state
         .db
         .call(move |conn| {
             Ok((
                 store::saved_messages(conn, user_id)?,
-                store::sidebar(conn, user_id)?,
+                super::sidebar_with_update(conn, &updates, user_id)?,
                 store::render_context(conn)?,
             ))
         })
@@ -314,13 +317,14 @@ async fn saved(user: CurrentUser, State(state): State<AppState>) -> AppResult<Ma
 
 async fn activity(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
     let user_id = user.id;
+    let updates = std::sync::Arc::clone(&state.updates);
     let (items, sidebar, ctx) = state
         .db
         .call(move |conn| {
             let items = store::activity(conn, user_id)?;
             Ok((
                 items,
-                store::sidebar(conn, user_id)?,
+                super::sidebar_with_update(conn, &updates, user_id)?,
                 store::render_context(conn)?,
             ))
         })

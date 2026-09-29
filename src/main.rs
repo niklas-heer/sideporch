@@ -29,6 +29,10 @@ struct Args {
     /// the first account. Without it, the first visitor becomes the admin.
     #[arg(long, env = "SIDEPORCH_REQUIRE_SETUP_LINK")]
     require_setup_link: bool,
+    /// Ask GitHub for new releases every few hours, so admins hear about
+    /// updates. `false` keeps Sideporch from contacting GitHub at all.
+    #[arg(long, env = "SIDEPORCH_UPDATE_CHECK", default_value_t = true, action = clap::ArgAction::Set)]
+    update_check: bool,
 }
 
 #[derive(Subcommand)]
@@ -52,6 +56,22 @@ enum Command {
         /// Replace the database that is already there.
         #[arg(long)]
         force: bool,
+    },
+    /// Install the newest release in place of this program.
+    ///
+    /// Downloads the release for this system, checks that its checksums are
+    /// signed with Sideporch's release key and that the download matches
+    /// them, and replaces this program. The one that ran before is kept
+    /// next to it as `sideporch.previous`. Restart Sideporch afterwards.
+    /// Homebrew, Nix and container installs update the way they were
+    /// installed instead.
+    Update {
+        /// Only say whether a newer release exists.
+        #[arg(long)]
+        check: bool,
+        /// Install this version instead of the newest, such as 0.5.0.
+        #[arg(long)]
+        version: Option<String>,
     },
 }
 
@@ -80,6 +100,9 @@ async fn main() -> ExitCode {
                 }
             };
         }
+        Some(Command::Update { check, version }) => {
+            return update(*check, version.as_deref()).await;
+        }
         None => {}
     }
     match run(args).await {
@@ -100,6 +123,8 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         allow_insecure_push: false,
         allow_private_link_previews: false,
         model_base_url: None,
+        update_check: args.update_check,
+        update_source: None,
     })
     .await?;
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
@@ -126,6 +151,82 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())
+}
+
+/// `sideporch update`: checks for a newer release and installs it.
+async fn update(check_only: bool, wanted: Option<&str>) -> ExitCode {
+    use sideporch::updates::{Source, Updates, Version};
+    let updates = match Updates::new(Source::default(), true, std::env::current_exe().ok(), false) {
+        Ok(updates) => std::sync::Arc::new(updates),
+        Err(error) => {
+            eprintln!("Could not start updating: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let current = Version::current();
+    let releases = match updates.fetch_releases().await {
+        Ok(releases) => releases,
+        Err(error) => {
+            eprintln!("Could not check for updates: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let chosen = match wanted {
+        Some(text) => {
+            let Some(version) = Version::parse(text) else {
+                eprintln!("{text} isn't a version; write it like 0.5.0.");
+                return ExitCode::FAILURE;
+            };
+            let Some(release) = releases.iter().find(|release| release.version == version) else {
+                eprintln!("There is no release {version}.");
+                return ExitCode::FAILURE;
+            };
+            release
+        }
+        None => match releases.first() {
+            Some(release) if release.version > current => release,
+            _ => {
+                println!("Sideporch {current} is up to date.");
+                return ExitCode::SUCCESS;
+            }
+        },
+    };
+    let security = releases.iter().any(|release| {
+        release.security && release.version > current && release.version <= chosen.version
+    });
+    println!(
+        "Sideporch {}{} is available; this is {current}. What changed: {}",
+        chosen.version,
+        if security {
+            ", with security fixes,"
+        } else {
+            ""
+        },
+        chosen.url
+    );
+    if check_only {
+        return ExitCode::SUCCESS;
+    }
+    if let Some(reason) = updates.cannot_install() {
+        eprintln!("{reason} {}", updates.method().advice());
+        return ExitCode::FAILURE;
+    }
+    match updates.install(chosen.version).await {
+        Ok(()) => {
+            let path = updates
+                .executable()
+                .map_or_else(String::new, |path| path.display().to_string());
+            println!(
+                "Installed Sideporch {} as {path} (the version before is {path}.previous). Restart Sideporch to use it, for example with `sudo systemctl restart sideporch`.",
+                chosen.version
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Could not update: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn print_setup_link(data: &std::path::Path) -> ExitCode {

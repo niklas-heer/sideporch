@@ -38,6 +38,7 @@ mod profile;
 mod security;
 mod settings;
 mod speech;
+mod updates;
 
 pub use gifs::Posted as GifPosted;
 pub use message::message_href;
@@ -110,6 +111,7 @@ pub fn router(state: AppState) -> Router {
         .merge(backups::router())
         .merge(community::router())
         .merge(security::router())
+        .merge(updates::router())
         .merge(speech::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
@@ -199,10 +201,29 @@ async fn index(State(state): State<AppState>, headers: HeaderMap) -> AppResult<R
 }
 
 pub async fn shell_data(state: &AppState, user_id: i64) -> AppResult<store::Sidebar> {
+    let updates = std::sync::Arc::clone(&state.updates);
     state
         .db
-        .call(move |conn| store::sidebar(conn, user_id))
+        .call(move |conn| sidebar_with_update(conn, &updates, user_id))
         .await
+}
+
+/// The sidebar, with the reminder to update Sideporch for admins.
+pub fn sidebar_with_update(
+    conn: &rusqlite::Connection,
+    updates: &crate::updates::Updates,
+    user_id: i64,
+) -> AppResult<store::Sidebar> {
+    let mut sidebar = store::sidebar(conn, user_id)?;
+    let is_admin: bool = conn.query_row(
+        "SELECT is_admin FROM users WHERE id = ?1",
+        [user_id],
+        |row| row.get(0),
+    )?;
+    if is_admin {
+        sidebar.update = updates.notice(conn, user_id, crate::now_ms())?;
+    }
+    Ok(sidebar)
 }
 
 async fn home(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
@@ -578,6 +599,7 @@ async fn render_channel(
 ) -> AppResult<Markup> {
     let user_id = user.id;
     let vault = std::sync::Arc::clone(&state.vault);
+    let updates = std::sync::Arc::clone(&state.updates);
     let (channel, messages, older, thread, sidebar, ctx) = state
         .db
         .call(move |conn| {
@@ -605,7 +627,7 @@ async fn render_channel(
             {
                 store::mark_read(conn, user_id, channel_id, latest)?;
             }
-            let sidebar = store::sidebar(conn, user_id)?;
+            let sidebar = sidebar_with_update(conn, &updates, user_id)?;
             let ctx = store::render_context(conn)?;
             let favorites = store::picker_emoji(conn, user_id)?;
             let gifs = crate::gifs::settings(conn, &vault)?;
@@ -1045,6 +1067,7 @@ async fn react_page(
     Path((channel_id, message_id)): Path<(i64, i64)>,
 ) -> AppResult<Markup> {
     let user_id = user.id;
+    let updates = std::sync::Arc::clone(&state.updates);
     let (sidebar, ctx) = state
         .db
         .call(move |conn| {
@@ -1053,7 +1076,7 @@ async fn react_page(
                 .filter(|message| message.channel_id == channel_id)
                 .ok_or(AppError::NotFound)?;
             Ok((
-                store::sidebar(conn, user_id)?,
+                sidebar_with_update(conn, &updates, user_id)?,
                 (
                     store::render_context(conn)?,
                     store::picker_emoji(conn, user_id)?,
@@ -1216,6 +1239,7 @@ async fn channel_settings(
     let channel = managed_channel(&state, &user, channel_id).await?;
     let user_id = user.id;
     let private = channel.kind == ChannelKind::Private;
+    let updates = std::sync::Arc::clone(&state.updates);
     let (hooks, sidebar, people) = state
         .db
         .call(move |conn| {
@@ -1233,7 +1257,7 @@ async fn channel_settings(
                     store::webhooks(conn, channel_id)?,
                     store::outgoing_webhooks(conn, channel_id)?,
                 ),
-                store::sidebar(conn, user_id)?,
+                sidebar_with_update(conn, &updates, user_id)?,
                 people,
             ))
         })
@@ -1419,6 +1443,7 @@ async fn people(
     let user_id = user.id;
     let is_admin = user.may(crate::community::Permission::InvitePeople);
     let now = now_ms();
+    let updates = std::sync::Arc::clone(&state.updates);
     let (users, invites, sidebar) = state
         .db
         .call(move |conn| {
@@ -1427,7 +1452,11 @@ async fn people(
             } else {
                 Vec::new()
             };
-            Ok((store::users(conn)?, invites, store::sidebar(conn, user_id)?))
+            Ok((
+                store::users(conn)?,
+                invites,
+                sidebar_with_update(conn, &updates, user_id)?,
+            ))
         })
         .await?;
     let shell = Shell {
