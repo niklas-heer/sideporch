@@ -1,4 +1,8 @@
-# How many people can Sideporch handle?
++++
+title = "How big a server"
+description = "How many people a small server serves, how that was measured, and how to measure it yourself."
+weight = 9
++++
 
 Short answer: a lot more than a small group needs. On a server with half a CPU and 512 MB of memory, Sideporch kept messages arriving within a fraction of a second for **4,800 people online at once**, each of them posting every two minutes. Most teams are nowhere near that.
 
@@ -21,13 +25,15 @@ These numbers came from a fast machine, and real servers' CPUs are often slower.
 
 People online at once are usually a fraction of everyone with an account. Accounts themselves cost almost nothing: the tests had 12,800.
 
+[Reading aloud and dictation](@/docs/community/speech-models.md) are the exception: while in use, their models take 0.6 to 3.5 GB of memory, and they run one at a time. Small servers are better off with Whisper tiny, or no speech models.
+
 Signing in is deliberately slow work. Passwords are checked with Argon2, about 6 sign-ins a second on half a CPU. Sessions last 30 days, so this only matters if hundreds of people sign in at the same moment.
 
 Disk grows with what people post and upload; text is small, and files take their own size.
 
 ## How it was measured
 
-The load generator in [`tools/loadtest/`](../tools/loadtest/) simulates people the way browsers use Sideporch:
+The load generator in [`tools/loadtest/`](https://github.com/niklas-heer/sideporch/tree/main/tools/loadtest) simulates people the way browsers use Sideporch:
 
 - Each person keeps a live connection open.
 - Each person looks at one of 10 channels, spread evenly.
