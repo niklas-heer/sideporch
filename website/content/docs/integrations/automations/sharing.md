@@ -56,6 +56,8 @@ Imported automations are switched off, because they can post, react and call oth
 
 A library needs no switch; it's used as soon as a running automation requires it.
 
+Agents connected over [MCP](@/docs/integrations/automations/ai-and-mcp.md) can do the same with `export_automations`, `preview_import` and `import_automations`, and imports from them start switched off too.
+
 ## The file format
 
 The file is JSON, readable in any text editor:

@@ -22,7 +22,7 @@ use crate::{
     views::{self, Shell},
 };
 
-mod sharing;
+pub mod sharing;
 
 /// Runs shown in the editor.
 const SHOWN_RUNS: i64 = 30;

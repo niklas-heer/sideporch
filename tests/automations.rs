@@ -796,3 +796,108 @@ async fn automations_travel_between_servers_as_bundles() {
         assert!(refused.text().await.unwrap().contains(reason), "{bundle}");
     }
 }
+
+#[tokio::test]
+async fn agents_export_and_import_automations_over_mcp() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    admin
+        .post(
+            "/automations",
+            &[
+                ("name", "greetings"),
+                ("source", GREETINGS),
+                ("kind", "library"),
+            ],
+        )
+        .await;
+    let weather = save(&admin, "Weather", WEATHER).await;
+    let weather: i64 = weather.trim_start_matches("/automations/").parse().unwrap();
+    let token = mcp_token(&admin).await;
+
+    // The same file Export downloads, with the library the automation needs.
+    let exported = call(
+        &server.base,
+        &token,
+        "export_automations",
+        json!({ "ids": [weather] }),
+    )
+    .await;
+    let bundle = exported["structuredContent"].clone();
+    assert_eq!(bundle["format"], "sideporch-automations", "{exported}");
+    let names: Vec<&str> = bundle["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["greetings", "Weather"]);
+
+    // Another server previews it.
+    let other = start().await;
+    let theirs = common::admin(&other).await;
+    save(&theirs, "Weather", "print(\"the old one\")\n").await;
+    let their_token = mcp_token(&theirs).await;
+    let preview = call(
+        &other.base,
+        &their_token,
+        "preview_import",
+        json!({ "bundle": bundle }),
+    )
+    .await;
+    let items = preview["structuredContent"]["items"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(items[0]["status"], "new", "{preview}");
+    assert_eq!(items[0]["suggested"], "import");
+    assert_eq!(items[1]["status"], "name_taken");
+    assert_eq!(items[1]["suggested"], "copy");
+    assert_eq!(items[1]["missing_secrets"], json!(["WEATHER_KEY"]));
+
+    // A choice that doesn't fit is refused before anything is imported.
+    let refused = call(
+        &other.base,
+        &their_token,
+        "import_automations",
+        json!({ "bundle": bundle, "actions": ["replace", "copy"] }),
+    )
+    .await;
+    assert_eq!(refused["isError"], true, "{refused}");
+
+    // Importing takes the suggestions unless told otherwise, switched off.
+    let imported = call(
+        &other.base,
+        &their_token,
+        "import_automations",
+        json!({ "bundle": serde_json::to_string(&bundle).unwrap(), "actions": [null, "replace"] }),
+    )
+    .await;
+    let imported = imported["structuredContent"]["imported"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(imported.len(), 2, "{imported:?}");
+    assert_eq!(imported[0]["action"], "import");
+    assert_eq!(imported[1]["action"], "replace");
+    let replaced = imported[1]["id"].as_i64().unwrap();
+    let got = call(
+        &other.base,
+        &their_token,
+        "get_automation",
+        json!({ "id": replaced }),
+    )
+    .await;
+    assert_eq!(got["structuredContent"]["enabled"], false);
+    let versions = call(
+        &other.base,
+        &their_token,
+        "list_versions",
+        json!({ "id": replaced }),
+    )
+    .await;
+    assert!(
+        versions.to_string().contains("MCP: Test agent"),
+        "{versions}"
+    );
+}

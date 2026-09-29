@@ -27,7 +27,7 @@ use crate::{
     automations::{self, KIND_AUTOMATION, KIND_LIBRARY, TestTrigger, api, cron::Cron, tooling},
     error::{AppError, AppResult},
     now_ms,
-    routes::{Change, apply_change, base_url, restore_version, run_test},
+    routes::{Change, apply_change, base_url, restore_version, run_test, sharing},
     secrets, store,
 };
 
@@ -239,6 +239,7 @@ fn tools() -> Vec<Value> {
     };
     let mut all = context_tools(&schemas);
     all.extend(automation_tools(&schemas));
+    all.extend(sharing_tools());
     all.extend(dev_tools(&schemas));
     all.extend(ops_tools(&schemas));
     all
@@ -377,6 +378,46 @@ fn automation_tools(schemas: &Schemas) -> Vec<Value> {
             "Make a new webhook URL",
             "Replaces an automation's webhook URL; the old one stops working.",
             &schemas.by_id,
+            Effect::Changes,
+        ),
+    ]
+}
+
+/// Moving automations between servers as files.
+fn sharing_tools() -> Vec<Value> {
+    let bundle = json!({
+        "type": ["object", "string"],
+        "description": "A file from export_automations or Automations → Export: the JSON object, or its text"
+    });
+    vec![
+        tool(
+            "export_automations",
+            "Export automations",
+            "The file Automations → Export downloads: the chosen automations, or everything when ids is empty, with every library they require. It holds scripts and the names of the secrets they read, never secret values, saved data, run logs or webhook URLs. Format: { format: \"sideporch-automations\", version: 1, items: [{ kind, name, source, secrets, requires }] }.",
+            &object(
+                &json!({ "ids": { "type": "array", "items": { "type": "integer" }, "description": "Automations and libraries to export; empty or left out for all" } }),
+                &[],
+            ),
+            Effect::Reads,
+        ),
+        tool(
+            "preview_import",
+            "Preview an import",
+            "Checks a file against this server without changing anything. For each item, in the order import_automations takes actions: its kind and name, status (new, name_taken, or unchanged), the secrets it reads that aren't set here, libraries it requires that are missing, lint errors and warnings, the actions it allows, and the suggested one.",
+            &object(&json!({ "bundle": bundle }), &["bundle"]),
+            Effect::Reads,
+        ),
+        tool(
+            "import_automations",
+            "Import automations",
+            "Imports a file. actions lists what to do with each item in preview_import's order: import (new names), replace (overwrites the one with the same name, keeping its webhook URL and data), copy (automations only, under a new name), or skip; null or a missing entry takes the suggestion. Everything imported starts switched off, so a person can read it and add its secrets first. Refuses an action an item doesn't allow, before importing anything.",
+            &object(
+                &json!({
+                    "bundle": bundle,
+                    "actions": { "type": "array", "items": { "type": ["string", "null"], "enum": ["import", "replace", "copy", "skip", null] } }
+                }),
+                &["bundle"],
+            ),
             Effect::Changes,
         ),
     ]
@@ -568,6 +609,9 @@ async fn call_tool(context: &Context<'_>, params: &Value) -> ToolResult {
         "lint_lua" | "format_lua" | "test_automation" | "run_automation" => {
             dev_tool(context, name, params).await
         }
+        "export_automations" | "preview_import" | "import_automations" => {
+            sharing_tool(context, name, params).await
+        }
         other => Err(ToolError::Unknown(other.to_owned())),
     }
 }
@@ -690,6 +734,115 @@ async fn context_tool(context: &Context<'_>, name: &str, params: &Value) -> Tool
                 "allow_private_network": settings.allow_private_network,
                 "version": env!("CARGO_PKG_VERSION"),
                 "webhook_base_url": context.hooks,
+            })))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ExportArgs {
+    #[serde(default)]
+    ids: Vec<i64>,
+}
+
+#[derive(Deserialize)]
+struct ImportArgs {
+    bundle: Value,
+    #[serde(default)]
+    actions: Vec<Option<String>>,
+}
+
+/// A file passed as an object or as its text, read the way imports read
+/// uploaded files.
+fn read_bundle(bundle: &Value) -> Result<automations::bundle::Bundle, ToolError> {
+    let text = match bundle {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    automations::bundle::parse(&text).map_err(failed)
+}
+
+fn plan_json(index: usize, plan: &automations::bundle::Plan) -> Value {
+    let status = match (plan.existing, plan.unchanged) {
+        (None, _) => "new",
+        (Some(_), true) => "unchanged",
+        (Some(_), false) => "name_taken",
+    };
+    let choices = plan.choices();
+    json!({
+        "index": index,
+        "kind": plan.item.kind,
+        "name": plan.item.name,
+        "status": status,
+        "existing_id": plan.existing,
+        "secrets": plan.item.secrets,
+        "missing_secrets": plan.missing_secrets,
+        "requires": plan.item.requires,
+        "missing_libraries": plan.missing_libraries,
+        "lint_errors": plan.errors,
+        "lint_warnings": plan.warnings,
+        "choices": choices.iter().map(|choice| choice.key()).collect::<Vec<_>>(),
+        "suggested": choices.first().map(|choice| choice.key()),
+    })
+}
+
+async fn sharing_tool(context: &Context<'_>, name: &str, params: &Value) -> ToolResult {
+    let state = context.state;
+    match name {
+        "export_automations" => {
+            let ExportArgs { ids } = arguments(params)?;
+            let all = state.db.call(|conn| store::automations(conn)).await?;
+            if let Some(unknown) = ids.iter().find(|id| !all.iter().any(|a| a.id == **id)) {
+                return Err(failed(format!(
+                    "There is no automation or library with id {unknown}."
+                )));
+            }
+            let bundle = automations::bundle::export(&all, &ids);
+            Ok(text(
+                &serde_json::to_value(&bundle).map_err(|error| failed(error.to_string()))?,
+            ))
+        }
+        "preview_import" => {
+            let ImportArgs { bundle, .. } = arguments(params)?;
+            let (_, plans) = sharing::plans(state, read_bundle(&bundle)?).await?;
+            let items: Vec<Value> = plans
+                .iter()
+                .enumerate()
+                .map(|(index, plan)| plan_json(index, plan))
+                .collect();
+            Ok(text(&json!({ "items": items })))
+        }
+        _ => {
+            let ImportArgs { bundle, actions } = arguments(params)?;
+            let (_, plans) = sharing::plans(state, read_bundle(&bundle)?).await?;
+            let mut chosen = Vec::with_capacity(plans.len());
+            for (index, plan) in plans.iter().enumerate() {
+                let action = match actions.get(index).cloned().flatten() {
+                    Some(key) => automations::bundle::Action::from_key(&key).ok_or_else(|| {
+                        failed(format!(
+                            "Unknown action `{key}`; use import, replace, copy or skip."
+                        ))
+                    })?,
+                    None => plan
+                        .choices()
+                        .first()
+                        .copied()
+                        .unwrap_or(automations::bundle::Action::Skip),
+                };
+                chosen.push(action);
+            }
+            let saved_with = format!("MCP: {}", context.caller.token_name);
+            let imported =
+                sharing::import(state, plans, &chosen, context.caller.user_id, &saved_with)
+                    .await?
+                    .map_err(failed)?;
+            let imported: Vec<Value> = imported
+                .iter()
+                .map(|item| json!({ "id": item.id, "name": item.name, "kind": item.kind, "action": item.action.key() }))
+                .collect();
+            Ok(text(&json!({
+                "imported": imported,
+                "note": "Imported automations are switched off. Add the secrets they need, then switch them on with set_enabled.",
             })))
         }
     }

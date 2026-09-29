@@ -84,7 +84,7 @@ async fn import_form(user: CurrentUser, State(state): State<AppState>) -> AppRes
 }
 
 /// The file's items, checked against the automations and secrets here.
-async fn plans(state: &AppState, bundle: Bundle) -> AppResult<(Bundle, Vec<Plan>)> {
+pub async fn plans(state: &AppState, bundle: Bundle) -> AppResult<(Bundle, Vec<Plan>)> {
     state
         .db
         .call(move |conn| {
@@ -150,20 +150,61 @@ async fn confirm(
     let bundle = bundle::parse(form.get("bundle").map_or("", String::as_str))
         .map_err(AppError::bad_request)?;
     let (_, plans) = plans(&state, bundle).await?;
-    let mut imported = 0_usize;
-    for (index, plan) in plans.into_iter().enumerate() {
-        let action = form
-            .get(&format!("action_{index}"))
-            .and_then(|key| Action::from_key(key))
-            .unwrap_or(Action::Skip);
+    let actions: Vec<Action> = (0..plans.len())
+        .map(|index| {
+            form.get(&format!("action_{index}"))
+                .and_then(|key| Action::from_key(key))
+                .unwrap_or(Action::Skip)
+        })
+        .collect();
+    let imported = import(&state, plans, &actions, user.id, "import")
+        .await?
+        .map_err(AppError::bad_request)?;
+    Ok(Redirect::to(&format!("/automations?imported={}", imported.len())).into_response())
+}
+
+/// One item an import added or replaced.
+pub struct Imported {
+    pub id: i64,
+    pub name: String,
+    pub kind: String,
+    pub action: Action,
+}
+
+/// Takes `actions[i]` for `plans[i]`, switched off, then restarts the
+/// automations once. Refuses an action the item doesn't allow, such as
+/// replacing something that isn't there, when the server changed since the
+/// preview.
+pub async fn import(
+    state: &AppState,
+    plans: Vec<Plan>,
+    actions: &[Action],
+    user_id: i64,
+    saved_with: &str,
+) -> AppResult<Result<Vec<Imported>, String>> {
+    for (plan, action) in plans.iter().zip(actions) {
+        if !plan.allows(*action) {
+            return Ok(Err(format!(
+                "{} can't be {}: automations here changed since the preview, or the choice doesn't fit it. Its choices are {}.",
+                plan.item.name,
+                match action {
+                    Action::Import => "imported as new",
+                    Action::Replace => "replaced",
+                    Action::Copy => "imported as a copy",
+                    Action::Skip => "skipped",
+                },
+                plan.choices()
+                    .iter()
+                    .map(|choice| choice.key())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+    let mut imported = Vec::new();
+    for (plan, action) in plans.into_iter().zip(actions.iter().copied()) {
         if action == Action::Skip {
             continue;
-        }
-        if !plan.allows(action) {
-            return Err(AppError::bad_request(format!(
-                "Automations here changed since the preview. Import the file again to choose what to do with {}.",
-                plan.item.name
-            )));
         }
         let name = if action == Action::Copy {
             let here = state.db.call(|conn| store::automations(conn)).await?;
@@ -177,19 +218,26 @@ async fn confirm(
             } else {
                 None
             },
-            name,
+            name: name.clone(),
             source: plan.item.source,
             enabled: Some(false),
-            kind: plan.item.kind,
-            user_id: user.id,
-            saved_with: "import".to_owned(),
+            kind: plan.item.kind.clone(),
+            user_id,
+            saved_with: saved_with.to_owned(),
         };
-        if let Err(error) = save_change(&state, change).await? {
-            state.automations.reload(&state).await?;
-            return Err(AppError::bad_request(error));
+        match save_change(state, change).await? {
+            Ok(id) => imported.push(Imported {
+                id,
+                name,
+                kind: plan.item.kind,
+                action,
+            }),
+            Err(error) => {
+                state.automations.reload(state).await?;
+                return Ok(Err(error));
+            }
         }
-        imported = imported.saturating_add(1);
     }
-    state.automations.reload(&state).await?;
-    Ok(Redirect::to(&format!("/automations?imported={imported}")).into_response())
+    state.automations.reload(state).await?;
+    Ok(Ok(imported))
 }

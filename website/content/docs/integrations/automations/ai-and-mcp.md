@@ -24,4 +24,6 @@ claude mcp add --transport http sideporch https://chat.example.com/mcp \
 
 Agents get what a developer needs: the API reference, the public channels and their newest messages (to see what an automation will react to), lint, format, test runs and live runs, run logs, versions and restore, saved data, write-only secrets, settings, and schedule previews. Scripts are also available as MCP resources.
 
+Agents can [share automations](@/docs/integrations/automations/sharing.md) too: `export_automations` returns the same file **Export** downloads, `preview_import` checks a file against the server without changing anything, and `import_automations` imports it, switched off.
+
 Like automations themselves, agents see public channels only. Automations an agent creates start switched off, and every change is kept in the history under the token's name, so you can see what it did and undo it.

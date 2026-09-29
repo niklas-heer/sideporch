@@ -45,7 +45,7 @@ mod updates;
 pub use gifs::Posted as GifPosted;
 pub use message::message_href;
 
-pub use automation::{Change, apply_change, restore_version, run_test};
+pub use automation::{Change, apply_change, restore_version, run_test, sharing};
 
 /// Messages shown per page of channel history.
 const PAGE_SIZE: usize = 100;
