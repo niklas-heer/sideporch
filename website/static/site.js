@@ -207,11 +207,14 @@
       opener?.focus({ preventScroll: true });
     };
     // Opening adds one history entry, so Back closes the viewer. Every
-    // other way of closing goes back through it too, leaving history as
-    // it was, however many screenshots were looked at.
+    // other way of closing removes that entry too, leaving history as it
+    // was, however many screenshots were looked at. Closing happens at
+    // once, so a second click can't go back a second time.
     const close = () => {
-      if (history.state?.viewer) history.back();
-      else finish();
+      if (!viewer.open) return;
+      const pushed = history.state?.viewer;
+      finish();
+      if (pushed) history.back();
     };
     addEventListener("popstate", () => {
       if (viewer.open) finish();
@@ -241,6 +244,8 @@
     });
     // Beside the image (the dimmed backdrop, the stage around it) closes.
     viewer.addEventListener("click", (event) => {
+      // Letting go of a drag beside the image isn't a click beside it.
+      if (dragged) return;
       if (event.target === viewer || event.target === stage) close();
     });
 
