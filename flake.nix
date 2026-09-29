@@ -26,6 +26,8 @@
               fileset = pkgs.lib.fileset.unions [
                 ./Cargo.toml ./Cargo.lock ./rust-toolchain.toml ./clippy.toml ./build.rs
                 ./encre-css.toml ./src ./assets ./tests ./README.md ./LICENSE
+                # A test keeps this page generated from src/automations/api.rs.
+                ./website/content/docs/integrations/automation-api.md
               ];
             };
             cargoLock.lockFile = ./Cargo.lock;

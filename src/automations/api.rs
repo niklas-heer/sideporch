@@ -486,4 +486,40 @@ mod tests {
         }
         assert!(reference.contains("sideporch.post(channel, text, options?)"));
     }
+
+    /// The documentation's API page: `reference()` with the site's front
+    /// matter instead of its title, kept out of the site's templating.
+    fn website_page() -> String {
+        let reference = reference();
+        let body = reference
+            .strip_prefix("# Sideporch automation API\n\n")
+            .expect("the reference starts with its title");
+        format!(
+            "+++\n\
+             title = \"Automation API\"\n\
+             description = \"Every sideporch function automations can call, and the tables their handlers receive.\"\n\
+             weight = 4\n\
+             +++\n\n\
+             <!-- Generated from src/automations/api.rs. Change the API there, then run\n     \
+             SIDEPORCH_BLESS=1 cargo test website_page_is_current -->\n\n\
+             {{% raw %}}\n{body}{{% endraw %}}\n"
+        )
+    }
+
+    #[test]
+    fn website_page_is_current() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("website/content/docs/integrations/automation-api.md");
+        let expected = website_page();
+        if std::env::var_os("SIDEPORCH_BLESS").is_some() {
+            std::fs::write(&path, &expected).expect("write the API page");
+            return;
+        }
+        let actual = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            actual == expected,
+            "{} is out of date; run SIDEPORCH_BLESS=1 cargo test website_page_is_current",
+            path.display()
+        );
+    }
 }
