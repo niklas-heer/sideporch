@@ -13,6 +13,8 @@
 set -eu
 
 repo="niklas-heer/sideporch"
+# Signs every release's SHA256SUMS (from 0.5.0 on); also at https://sideporch.app/sideporch.pub.
+public_key="RWRtn2cj2SpGnZDtKTNsgnc8mv68NfwlwFgA+hcmOD+cWH8dSQxGkuoo"
 
 fail() {
   echo "sideporch install: $*" >&2
@@ -60,6 +62,15 @@ trap 'rm -rf "$temporary"' EXIT HUP INT TERM
 echo "Downloading Sideporch $version for $target"
 curl -fsSL "$base/$archive" -o "$temporary/$archive" || fail "download failed: $base/$archive"
 curl -fsSL "$base/SHA256SUMS" -o "$temporary/SHA256SUMS" || fail "download failed: $base/SHA256SUMS"
+# With minisign installed, also check the checksums come from a release.
+if command -v minisign >/dev/null 2>&1; then
+  if curl -fsSL "$base/SHA256SUMS.minisig" -o "$temporary/SHA256SUMS.minisig" 2>/dev/null; then
+    minisign -Vq -P "$public_key" -m "$temporary/SHA256SUMS" || fail "SHA256SUMS isn't signed with Sideporch's release key"
+    echo "Verified the release signature"
+  else
+    echo "This release has no signature; releases before 0.5.0 weren't signed"
+  fi
+fi
 
 expected=$(awk -v name="$archive" '$2 == name || $2 == "./" name { print $1 }' "$temporary/SHA256SUMS")
 [ -n "$expected" ] || fail "SHA256SUMS has no entry for $archive"
