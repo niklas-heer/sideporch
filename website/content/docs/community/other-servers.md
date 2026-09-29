@@ -14,6 +14,8 @@ Each server needs its public address, so start both with [`--public-url`](@/docs
 2. Enter the other server's address under **Connect to another Sideporch**, add a note for their admin, and select **Ask to connect**.
 3. Their admin sees your request, with your note and your server's **key fingerprint**, under **Admin → Connections**, and selects **Accept** or **Decline**.
 
+{{<shot name="connections" alt="Admin, Connections: this server's address, key fingerprint and name, and a form to ask another Sideporch to connect, with its address and a note for its admin." caption="Admin → Connections: your server's name and key, and asking another server to connect." />}}
+
 {% <note kind="tip"> %}
 Before accepting, compare the key fingerprint with the other admin, for example on a call. Both of you see each fingerprint on the Connections page. If they match, you are talking to the server you think you are.
 {% </note> %}

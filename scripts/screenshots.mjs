@@ -235,6 +235,16 @@ async function view(options = {}) {
 }
 async function shot(page, name) {
   await page.waitForTimeout(700);
+  // The demo server runs without TLS; show its address as a real one would be.
+  await page.evaluate(() => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      node.nodeValue = node.nodeValue.replaceAll("http://chat.porch.example", "https://chat.porch.example");
+    }
+    for (const input of document.querySelectorAll("input")) {
+      input.value = input.value.replaceAll("http://chat.porch.example", "https://chat.porch.example");
+    }
+  });
   await page.screenshot({ path: `${out}/${name}.png` });
 }
 
@@ -351,6 +361,16 @@ for (const dark of [false, true]) {
   const page = await view();
   await page.goto(`${base}/admin/backups`);
   await shot(page, "backups");
+  await page.close();
+}
+{
+  // Connections: this server's name and key, and asking another to connect.
+  await form(ada, "/admin/connections/name", { name: "Porch Collective" });
+  const page = await view({ viewport: { width: 1360, height: 1040 } });
+  await page.goto(`${base}/admin/connections`);
+  await page.fill("input[name=url]", "https://chat.gardenclub.example");
+  await page.fill("textarea[name=note]", "Hi, it's Ada from Porch Collective. Shall we share #swap?");
+  await shot(page, "connections");
   await page.close();
 }
 console.log(JSON.stringify({ errors }, null, 1));

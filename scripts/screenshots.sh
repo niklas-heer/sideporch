@@ -23,7 +23,10 @@ if curl -s -o /dev/null "http://127.0.0.1:$port/"; then
   echo "screenshots: something already answers on port $port; stop it first" >&2
   exit 1
 fi
-target/release/sideporch --listen "127.0.0.1:$port" --data "$data" --update-check false >"$data.log" 2>&1 &
+# The public URL shows in invite links and on Connections. It's http, so
+# cookies work without TLS here; screenshots.mjs shows it as https, as on a
+# real server.
+target/release/sideporch --listen "127.0.0.1:$port" --data "$data" --update-check false --public-url http://chat.porch.example >"$data.log" 2>&1 &
 server=$!
 cleanup() {
   kill "$server" 2>/dev/null || true
