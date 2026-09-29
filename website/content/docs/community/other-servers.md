@@ -4,7 +4,7 @@ description = "Connect two Sideporch servers, share channels between them, and l
 weight = 6
 +++
 
-Two Sideporch servers can connect, like two companies in Slack Connect. Once both admins agree, you can share channels between them, and people can find each other and write directly. Everyone stays on their own server, with their own account.
+Two Sideporch servers can connect, like two companies in Slack Connect. Once both admins agree, you can share channels between them, and people can find each other and write directly. Everyone stays on their own server, with their own account. New in 0.5.0.
 
 ## Connect two servers
 
