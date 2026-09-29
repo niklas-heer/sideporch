@@ -21,6 +21,12 @@ pub async fn start() -> Server {
     start_with(|_| {}).await
 }
 
+/// Starts a server behind a proxy that puts the client's address in
+/// `X-Forwarded-For`; see [`Browser::at_address`].
+pub async fn start_behind_proxy() -> Server {
+    start_with(|config| config.client_ip_header = Some("x-forwarded-for".to_owned())).await
+}
+
 /// Starts a server after `configure` adjusts its settings.
 pub async fn start_with(configure: impl FnOnce(&mut Config)) -> Server {
     start_in(tempfile::tempdir().unwrap(), configure).await
@@ -40,14 +46,15 @@ pub async fn start_in(data: TempDir, configure: impl FnOnce(&mut Config)) -> Ser
         update_check: false,
         update_source: None,
         allow_private_federation: false,
+        client_ip_header: None,
     };
     configure(&mut config);
     let app = Sideporch::open(config).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let setup_path = app.setup_path();
-    let router = app.router();
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let service = app.service();
+    tokio::spawn(async move { axum::serve(listener, service).await.unwrap() });
     Server {
         base,
         setup_path,
@@ -72,11 +79,12 @@ pub async fn start_federated() -> Server {
         update_check: false,
         update_source: None,
         allow_private_federation: true,
+        client_ip_header: None,
     };
     let app = Sideporch::open(config).await.unwrap();
     let setup_path = app.setup_path();
-    let router = app.router();
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let service = app.service();
+    tokio::spawn(async move { axum::serve(listener, service).await.unwrap() });
     Server {
         base,
         setup_path,
@@ -106,6 +114,19 @@ impl Browser {
             base: server.base.clone(),
             cookie: String::new(),
         }
+    }
+
+    /// The same browser, its requests coming from `address` as far as a
+    /// server that trusts `X-Forwarded-For` can tell.
+    pub fn at_address(mut self, address: &str) -> Self {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-forwarded-for", address.parse().unwrap());
+        self.client = Client::builder()
+            .redirect(Policy::none())
+            .default_headers(headers)
+            .build()
+            .unwrap();
+        self
     }
 
     pub fn url(&self, path: &str) -> String {
@@ -384,4 +405,22 @@ pub fn between<'a>(haystack: &'a str, start: &str, end: &str) -> &'a str {
         + start.len();
     let rest = &haystack[from..];
     &rest[..rest.find(end).unwrap()]
+}
+
+/// The fields a sign-up form needs besides the account: its proof-of-work
+/// challenge and a solution, as app.js would find it.
+pub async fn sign_up_proof(browser: &Browser) -> (String, String) {
+    use sha2::{Digest, Sha256};
+    let form = browser.page("/signup").await;
+    let challenge = between(&form, r#"data-proof=""#, "\"").to_owned();
+    let bits: u32 = between(&form, r#"data-proof-bits=""#, "\"")
+        .parse()
+        .unwrap();
+    let nonce = (0_u64..u64::MAX)
+        .find(|nonce| {
+            let digest = Sha256::digest(format!("{challenge}:{nonce}").as_bytes());
+            u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]).leading_zeros() >= bits
+        })
+        .unwrap();
+    (challenge, nonce.to_string())
 }

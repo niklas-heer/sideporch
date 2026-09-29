@@ -638,6 +638,30 @@ CREATE INDEX messages_for_statistics ON messages (created_at, channel_id, user_i
 CREATE INDEX reactions_for_statistics ON reactions (created_at, message_id, user_id, emoji);
 ",
     ),
+    Migration::Sql(
+        r"
+-- The addresses each account used lately, kept for 30 days.
+CREATE TABLE addresses (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    ip TEXT NOT NULL,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    PRIMARY KEY (user_id, ip)
+);
+CREATE INDEX addresses_by_ip ON addresses (ip);
+
+-- Addresses, ranges, emails and email domains that may not use the server.
+CREATE TABLE bans (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('address', 'email')),
+    value TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER
+);
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

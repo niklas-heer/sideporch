@@ -17,6 +17,10 @@ Everyone manages how they sign in under **Sign-in and security** in their accoun
 Passkeys need Sideporch opened by a name (like `chat.example.com` over HTTPS, or `localhost`), not by an IP address: browsers only use them there.
 {% </note> %}
 
+## Limits on guessing
+
+After **10 wrong passwords from one address** within 15 minutes, signing in from there waits until the 15 minutes have passed. After **20 wrong passwords for one account** from anywhere, that account waits too. The second limit is higher, so others can't easily lock someone out. Authenticator codes allow five tries per sign-in, and passkeys and email links can't be guessed.
+
 ## What signing in takes
 
 Under **Admin → Sign-in**, pick one:

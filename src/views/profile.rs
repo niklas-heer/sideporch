@@ -42,6 +42,10 @@ pub struct Standing {
     pub all_roles: Vec<crate::community::Role>,
     pub progress: crate::community::Progress,
     pub timed_out_until: Option<i64>,
+    /// For moderators: the addresses they used lately.
+    pub addresses: Vec<crate::access::Address>,
+    /// For moderators: whether they have an email address.
+    pub has_email: bool,
 }
 
 pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context, standing: &Standing) -> Markup {
@@ -106,6 +110,9 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context, standing: &St
             } @else if moderator && !own && !user.is_admin {
                 (timeout_controls(user, standing))
             }
+            @if moderator && !own && !user.is_admin && user.server.is_none() {
+                (ban_controls(user, standing))
+            }
             @if !user.bio.is_empty() {
                 div class="rich mt-8 max-w-prose" { (PreEscaped(markdown::render(&user.bio, ctx))) }
             }
@@ -122,6 +129,75 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context, standing: &St
             p class="mt-8 text-sm text-muted dark:text-haint" { "Joined " (timestamp_date(user.created_at)) }
         },
     )
+}
+
+/// Banning someone, and the addresses they used, for moderators.
+fn ban_controls(user: &User, standing: &Standing) -> Markup {
+    html! {
+        section id="ban" class="mt-6 space-y-4 rounded-xl border border-red-200 p-4 dark:border-red-900" {
+            h2 class="font-bold" { "Ban" }
+            @if standing.addresses.is_empty() {
+                p class="text-sm text-muted dark:text-haint" { "No addresses noted in the last 30 days." }
+            } @else {
+                div {
+                    p class="field-label" { "Addresses in the last 30 days" }
+                    ul class="space-y-1 text-sm" data-addresses {
+                        @for seen in &standing.addresses {
+                            li {
+                                code class="font-mono" { (seen.ip) }
+                                span class="text-muted dark:text-haint" { ", first " (super::timestamp(seen.first_seen)) ", last " (super::timestamp(seen.last_seen)) }
+                                @if !seen.shared_with.is_empty() {
+                                    span class="text-muted dark:text-haint" { ", also used by " }
+                                    @for (index, (id, name)) in seen.shared_with.iter().enumerate() {
+                                        @if index > 0 { ", " }
+                                        a href={ "/people/" (id) } class="underline underline-offset-2" { (name) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            @if user.deactivated {
+                p class="text-sm text-muted dark:text-haint" { "This account is deactivated. Ban addresses and emails from Moderation." }
+            } @else {
+                form method="post" action={ "/people/" (user.id) "/ban" } class="space-y-3" {
+                    div class="flex flex-wrap items-end gap-2" {
+                        label class="min-w-0 flex-1" {
+                            span class="field-label" { "Reason" }
+                            input name="reason" maxlength="200" class="field" placeholder="Spam";
+                        }
+                        label {
+                            span class="field-label" { "For" }
+                            select name="duration" class="field py-1.5" {
+                                @for (duration, label) in crate::routes::BAN_DURATIONS {
+                                    option value=(duration) selected[duration == 0] { (label) }
+                                }
+                            }
+                        }
+                    }
+                    label class="flex items-center gap-2 text-sm" {
+                        input type="checkbox" name="addresses" value="on" checked[!standing.addresses.is_empty()] disabled[standing.addresses.is_empty()] class="h-4 w-4 accent-floor";
+                        "Also ban the addresses above"
+                    }
+                    @if standing.has_email {
+                        label class="flex items-center gap-2 text-sm" {
+                            input type="checkbox" name="email" value="on" checked class="h-4 w-4 accent-floor";
+                            "Also ban their email address"
+                        }
+                    }
+                    label class="flex items-center gap-2 text-sm" {
+                        input type="checkbox" name="remove" value="on" class="h-4 w-4 accent-floor";
+                        "Remove all their messages, reactions and votes"
+                    }
+                    button type="submit" class="btn bg-red-700 hover:bg-red-800" { "Ban " (user.display_name) }
+                    p class="text-sm text-muted dark:text-haint" {
+                        "Banning deactivates the account and signs it out everywhere. Banned addresses can't use this server at all, so check that nobody else shares them."
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Pausing someone's posting, for moderators.

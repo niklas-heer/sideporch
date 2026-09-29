@@ -20,7 +20,13 @@ With the last two, you can also set:
 - **Rules** people agree to when signing up, written in Markdown.
 - How many messages a minute new members at level 0 may send; 6 by default. With **Ask to join**, people a moderator lets in start at level 1, so this matters most when anyone can sign up.
 
-Sign-ups are limited to 30 an hour across the server, so a script can't create accounts by the thousand, and a hidden trap field catches simple bots.
+Bots are kept out without anyone having to solve a puzzle:
+
+- The sign-up form makes the browser do a small **proof of work**: it computes hashes until it finds one that starts with enough zeros, which takes a moment. That's nothing for a person, and a real cost for a script creating accounts by the thousand. No outside CAPTCHA service is involved, but signing up needs JavaScript.
+- At most **3 accounts an hour from one address**, and 30 an hour across the server.
+- A hidden trap field catches simple bots that fill in every field.
+
+Behind a reverse proxy, set [`--client-ip-header`](@/docs/get-started/run-on-a-server.md#options) so the limit per address sees visitors' addresses.
 
 ## Trust levels
 

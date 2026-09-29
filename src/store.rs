@@ -1540,6 +1540,24 @@ pub fn edit_message(conn: &Connection, id: i64, body: &str, now: i64) -> AppResu
     reindex(conn, id)
 }
 
+/// Deletes every message, reaction and vote `user_id` left, the way a
+/// moderator would one by one: replies first, so threads they started
+/// without anyone else's replies go too.
+pub fn remove_everything_by(conn: &Connection, user_id: i64, now: i64) -> AppResult<()> {
+    let mut statement = conn.prepare(
+        "SELECT id FROM messages WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY id DESC",
+    )?;
+    let ids: Vec<i64> = statement
+        .query_map([user_id], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    for id in ids {
+        delete_message(conn, id, now)?;
+    }
+    conn.execute("DELETE FROM reactions WHERE user_id = ?1", [user_id])?;
+    conn.execute("DELETE FROM poll_marks WHERE user_id = ?1", [user_id])?;
+    Ok(())
+}
+
 /// Deletes a message with its files and reactions. A message that starts a
 /// thread with replies stays as a placeholder, so the thread does too.
 pub fn delete_message(conn: &Connection, id: i64, now: i64) -> AppResult<()> {

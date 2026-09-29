@@ -18,6 +18,7 @@ pub fn signup_page(
     error: Option<&str>,
     form: &AccountForm,
     note: &str,
+    challenge: &str,
 ) -> Markup {
     let approval = joining.registration == Registration::Approval;
     auth_page(
@@ -29,7 +30,11 @@ pub fn signup_page(
                 @else { "Pick a name and a password to create your account." }
             }
             (form_error(error))
-            form method="post" action="/signup" {
+            // app.js solves the challenge, a small proof of work that makes
+            // signing up by the thousand costly for bots.
+            form method="post" action="/signup" data-proof=(challenge) data-proof-bits=(crate::access::PROOF_BITS) {
+                input type="hidden" name="challenge" value=(challenge);
+                input type="hidden" name="proof" value="";
                 (account_fields(form))
                 @if approval {
                     div class="mb-4" {
@@ -54,6 +59,10 @@ pub fn signup_page(
                     }
                 }
                 button type="submit" class="btn mt-2 w-full" { @if approval { "Ask to join" } @else { "Create account" } }
+                p class="mt-2 text-center text-xs text-muted dark:text-haint" data-proof-status aria-live="polite" {}
+                noscript {
+                    p class="mt-2 text-sm text-red-700 dark:text-red-300" { "Signing up needs JavaScript: your browser does a small puzzle that keeps bots out." }
+                }
             }
             p class="mt-5 text-sm text-muted dark:text-haint" {
                 "Have an account? " a href="/login" class="underline underline-offset-2" { "Sign in" }
@@ -311,6 +320,7 @@ pub fn moderation_page(
     signups: &[Signup],
     reports: &[crate::community::Report],
     timed_out: &[(i64, String, i64)],
+    bans: &[crate::access::Ban],
     render: &Render<'_>,
 ) -> Markup {
     panel_page(
@@ -387,8 +397,58 @@ pub fn moderation_page(
                     }
                 }
             }))
+            (bans_section(bans))
         },
     )
+}
+
+/// Bans, and a form for banning addresses, ranges, emails and domains.
+fn bans_section(bans: &[crate::access::Ban]) -> Markup {
+    html! {
+        div id="bans" {
+            (section("Bans", "Banned addresses can't use this server at all; banned emails and domains can't sign up or be added to accounts. Ban a person from their profile.", &html! {
+                form method="post" action="/moderation/bans" class="mb-4 flex flex-wrap items-end gap-2" {
+                    label class="min-w-0 flex-1" {
+                        span class="field-label" { "Address, range, email or domain" }
+                        input name="target" required class="field font-mono text-sm" placeholder="203.0.113.0/24 or @spam.example";
+                    }
+                    label class="min-w-0 flex-1" {
+                        span class="field-label" { "Reason" }
+                        input name="reason" maxlength="200" class="field";
+                    }
+                    label {
+                        span class="field-label" { "For" }
+                        select name="duration" class="field py-1.5" {
+                            @for (duration, label) in crate::routes::BAN_DURATIONS {
+                                option value=(duration) selected[duration == 0] { (label) }
+                            }
+                        }
+                    }
+                    button type="submit" class="btn" { "Ban" }
+                }
+                @if bans.is_empty() {
+                    p class="text-muted dark:text-haint" { "Nobody is banned." }
+                } @else {
+                    ul class="divide-y divide-line text-sm dark:divide-night-line" data-bans {
+                        @for ban in bans {
+                            li class="flex flex-wrap items-center gap-x-3 gap-y-1 py-2" {
+                                code class="font-mono font-semibold" { (ban.target) }
+                                @if !ban.reason.is_empty() { span { (ban.reason) } }
+                                span class="text-muted dark:text-haint" {
+                                    @if let Some(by) = &ban.created_by { "by " (by) ", " }
+                                    (timestamp(ban.created_at))
+                                    @if let Some(end) = ban.expires_at { ", until " (timestamp(end)) } @else { ", until lifted" }
+                                }
+                                form method="post" action={ "/moderation/bans/" (ban.id) "/lift" } class="ml-auto" {
+                                    button type="submit" class="btn-quiet px-3 py-1 text-sm" { "Lift" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }))
+        }
+    }
 }
 
 pub fn report_page(shell: &Shell<'_>, message: &crate::store::Message) -> Markup {

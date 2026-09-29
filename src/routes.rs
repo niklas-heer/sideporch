@@ -13,7 +13,9 @@ use maud::Markup;
 use serde::Deserialize;
 
 use crate::{
-    AppState, Setup, assets,
+    AppState, Setup,
+    access::{self, ClientIp, Counted},
+    assets,
     auth::{self, CurrentUser},
     automations,
     error::{AppError, AppResult},
@@ -29,6 +31,7 @@ mod account;
 mod admin;
 mod automation;
 mod backups;
+mod bans;
 mod channels;
 mod community;
 pub mod federation;
@@ -46,6 +49,7 @@ pub use gifs::Posted as GifPosted;
 pub use message::message_href;
 
 pub use automation::{Change, apply_change, restore_version, run_test, sharing};
+pub use bans::DURATIONS as BAN_DURATIONS;
 
 /// Messages shown per page of channel history.
 const PAGE_SIZE: usize = 100;
@@ -117,10 +121,15 @@ pub fn router(state: AppState) -> Router {
         .merge(federation::router())
         .merge(speech::router())
         .merge(statistics::router())
+        .merge(bans::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::same_origin,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::access::refuse_banned,
         ))
         .layer(middleware::from_fn(security_headers))
         .layer(DefaultBodyLimit::max(256 * 1024))
@@ -266,13 +275,36 @@ async fn login_form(
     Ok(views::login_page(None, "", next, registration).into_response())
 }
 
-async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -> AppResult<Response> {
+async fn login(
+    State(state): State<AppState>,
+    ClientIp(address): ClientIp,
+    Form(form): Form<LoginForm>,
+) -> AppResult<Response> {
     let username = form.username.trim().to_owned();
     let next = form
         .next
         .as_deref()
         .and_then(auth::safe_next)
         .map(ToOwned::to_owned);
+    let from_address = address.map(Counted::FailedSignIn);
+    let as_account = Counted::FailedSignInAs(username.to_lowercase());
+    let paused = sign_in_paused(&state, from_address.as_ref(), &as_account);
+    if let Some(wait) = paused {
+        let error = format!(
+            "Too many wrong passwords. Try again in {}.",
+            access::wait_text(wait)
+        );
+        return Ok((
+            StatusCode::TOO_MANY_REQUESTS,
+            views::login_page(
+                Some(&error),
+                &username,
+                next.as_deref(),
+                registration(&state).await?,
+            ),
+        )
+            .into_response());
+    }
     let lookup = username.clone();
     let record = state
         .db
@@ -308,6 +340,10 @@ async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -> Ap
         }
     }
     let Some(user_id) = verified else {
+        if let Some(counted) = from_address {
+            state.access.count(counted);
+        }
+        state.access.count(as_account);
         let waiting_name = username.clone();
         let waiting = state
             .db
@@ -329,7 +365,30 @@ async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -> Ap
         )
             .into_response());
     };
+    state.access.forget(&as_account);
     security::after_first_step(&state, user_id, next.as_deref()).await
+}
+
+/// How long signing in waits after too many wrong passwords from one
+/// address, or for one account.
+fn sign_in_paused(
+    state: &AppState,
+    from_address: Option<&Counted>,
+    as_account: &Counted,
+) -> Option<std::time::Duration> {
+    from_address
+        .and_then(|counted| {
+            state
+                .access
+                .check(counted, access::SIGN_IN_PER_ADDRESS)
+                .err()
+        })
+        .or_else(|| {
+            state
+                .access
+                .check(as_account, access::SIGN_IN_PER_ACCOUNT)
+                .err()
+        })
 }
 
 /// What the login page offers.

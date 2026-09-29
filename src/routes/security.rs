@@ -375,6 +375,19 @@ async fn add_email(
         )
             .into_response());
     }
+    if state.access.email_banned(&email) {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            render_settings(
+                &state,
+                &user,
+                Some("That email address can't be used here."),
+                None,
+            )
+            .await?,
+        )
+            .into_response());
+    }
     let token = auth::random_token()?;
     let hash = auth::hash_token(&token);
     let (user_id, now) = (user.id, now_ms());

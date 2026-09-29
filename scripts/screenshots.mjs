@@ -10,6 +10,7 @@
 // CHROME defaults to Playwright's headless shell; any Chromium works. Node
 // is needed; Bun's fetch breaks Playwright's cookie handling.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { chromium } from "playwright-core";
 
@@ -37,6 +38,15 @@ async function lastId(context, channel) {
   const list = html.slice(html.indexOf('id="messages"'));
   const ids = [...list.matchAll(/data-message-id="(\d+)"/g)].map((match) => Number(match[1]));
   return Math.max(...ids);
+}
+// Signing up takes the form's proof of work, as app.js would solve it.
+async function signUp(context, fields) {
+  const page = await (await context.request.get(`${base}/signup`)).text();
+  const challenge = page.match(/data-proof="([0-9a-f]+)"/)[1];
+  const bits = Number(page.match(/data-proof-bits="(\d+)"/)[1]);
+  let nonce = 0;
+  while (createHash("sha256").update(`${challenge}:${nonce}`).digest().readUInt32BE(0) >>> (32 - bits) !== 0) nonce++;
+  return form(context, "/signup", { ...fields, challenge, proof: String(nonce) });
 }
 const react = (context, channel, id, emoji) => form(context, `/c/${channel}/m/${id}/reactions`, { emoji });
 
@@ -296,13 +306,13 @@ const community = (registration) => ({
 });
 await form(ada, "/admin/community", community("open"));
 const spammer = await person();
-await form(spammer, "/signup", { display_name: "Deal Finder", username: "dealfinder", password: "a long password", rules: "agreed", website: "" });
+await signUp(spammer, { display_name: "Deal Finder", username: "dealfinder", password: "a long password", rules: "agreed", website: "" });
 await say(spammer, random, "DM me for free followers and crypto giveaways 💸💸💸");
 const spam = await lastId(ada, random);
 await form(rosa, `/c/${random}/m/${spam}/report`, { reason: "Spam, and they messaged me too" });
 await form(ada, "/admin/community", community("approval"));
 const priya = await person();
-await form(priya, "/signup", {
+await signUp(priya, {
   display_name: "Priya",
   username: "priya",
   password: "a long password",

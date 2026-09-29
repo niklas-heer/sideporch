@@ -310,6 +310,7 @@ impl FromRequestParts<AppState> for CurrentUser {
             .await
             .map_err(AuthRejection::Error)?
             .ok_or(AuthRejection::Login(next))?;
+        crate::access::seen(state, user.id, state.access.client_ip(parts));
         // Until they meet the sign-in policy, people only reach the pages
         // that let them.
         let path = parts.uri.path();

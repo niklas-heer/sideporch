@@ -118,10 +118,21 @@ async fn profile(
     Path(user_id): Path<i64>,
 ) -> AppResult<Markup> {
     let now = crate::now_ms();
+    let moderator = user.may(crate::community::Permission::Moderate) && user.id != user_id;
     let (person, ctx, standing) = state
         .db
         .call(move |conn| {
+            let (addresses, has_email) = if moderator {
+                (
+                    crate::access::addresses(conn, user_id)?,
+                    crate::security::email(conn, user_id)?.is_some(),
+                )
+            } else {
+                (Vec::new(), false)
+            };
             let standing = views::profile::Standing {
+                addresses,
+                has_email,
                 roles: crate::community::role_names(conn, user_id)?,
                 role_ids: crate::community::user_roles(conn, user_id)?,
                 all_roles: crate::community::roles(conn)?,

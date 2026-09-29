@@ -3,6 +3,7 @@
 //! [`Sideporch::open`] prepares the data directory and database;
 //! [`Sideporch::router`] is the complete web application.
 
+mod access;
 mod ai;
 mod assets;
 mod auth;
@@ -95,6 +96,10 @@ pub struct Config {
     /// on this machine.
     #[doc(hidden)]
     pub allow_private_federation: bool,
+    /// The header a trusted reverse proxy puts the client's address in,
+    /// such as `X-Forwarded-For` or `Fly-Client-IP`. Without it, the
+    /// connection's address counts and such headers are ignored.
+    pub client_ip_header: Option<String>,
 }
 
 #[derive(Clone)]
@@ -127,6 +132,8 @@ pub(crate) struct AppState {
     federation: federation::Shared,
     /// Recent statistics, so big servers don't count them for every visit.
     statistics: Arc<statistics::Cache>,
+    /// Client addresses, sign-in limits and bans.
+    access: Arc<access::Access>,
 }
 
 /// Whether and how the first account can still be created.
@@ -277,15 +284,12 @@ impl Sideporch {
             }),
             federation: Arc::new(federation),
             statistics: Arc::default(),
+            access: Arc::new(access::Access::new(config.client_ip_header.as_deref())?),
         };
         let updates = Arc::clone(&state.updates);
         state.db.call(move |conn| updates.load(conn)).await?;
-        state.speech.start_unloading();
-        state.automations.serve(state.clone());
-        later::start(state.clone());
-        backup::start(state.clone());
-        updates::start(state.clone());
-        federation::outbox::start(state.clone());
+        state.access.reload(&state).await?;
+        start_background_work(&state);
         state.automations.reload(&state).await?;
         Ok(Self { state })
     }
@@ -333,6 +337,29 @@ impl Sideporch {
     pub fn router(&self) -> Router {
         routes::router(self.state.clone())
     }
+
+    /// The router as a service that knows each connection's address, for
+    /// `axum::serve`.
+    #[must_use]
+    pub fn service(
+        &self,
+    ) -> axum::extract::connect_info::IntoMakeServiceWithConnectInfo<Router, std::net::SocketAddr>
+    {
+        self.router()
+            .into_make_service_with_connect_info::<std::net::SocketAddr>()
+    }
+}
+
+/// Starts what runs next to requests: automations, reminders, backups,
+/// update checks, the federation outbox and cleanups.
+fn start_background_work(state: &AppState) {
+    state.speech.start_unloading();
+    state.automations.serve(state.clone());
+    later::start(state.clone());
+    backup::start(state.clone());
+    updates::start(state.clone());
+    federation::outbox::start(state.clone());
+    access::start(state.clone());
 }
 
 /// The file that holds the first-account setup link while one is pending.

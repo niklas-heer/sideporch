@@ -33,6 +33,12 @@ struct Args {
     /// updates. `false` keeps Sideporch from contacting GitHub at all.
     #[arg(long, env = "SIDEPORCH_UPDATE_CHECK", default_value_t = true, action = clap::ArgAction::Set)]
     update_check: bool,
+    /// Behind a reverse proxy, the header it puts the client's address in,
+    /// such as `X-Forwarded-For` or `Fly-Client-IP`. Only set it when every
+    /// request comes through that proxy; otherwise anyone could claim any
+    /// address.
+    #[arg(long, env = "SIDEPORCH_CLIENT_IP_HEADER")]
+    client_ip_header: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -126,6 +132,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         update_check: args.update_check,
         update_source: None,
         allow_private_federation: false,
+        client_ip_header: args.client_ip_header,
     })
     .await?;
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
@@ -148,7 +155,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
-    axum::serve(listener, app.router())
+    axum::serve(listener, app.service())
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())

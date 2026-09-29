@@ -41,6 +41,7 @@ async fn set_registration(admin: &Browser, mode: &str, rules: &str) {
 
 async fn sign_up(server: &common::Server, username: &str) -> (Browser, reqwest::Response) {
     let mut browser = Browser::anonymous(server);
+    let (challenge, proof) = common::sign_up_proof(&browser).await;
     let response = browser
         .submit(
             "/signup",
@@ -50,6 +51,8 @@ async fn sign_up(server: &common::Server, username: &str) -> (Browser, reqwest::
                 ("password", "a long password"),
                 ("rules", "agreed"),
                 ("website", ""),
+                ("challenge", &challenge),
+                ("proof", &proof),
             ],
         )
         .await;

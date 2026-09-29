@@ -15,7 +15,9 @@ use serde::Deserialize;
 
 use super::{AccountInput, redirect_with_cookie, shell_data, validate_account, wants_no_content};
 use crate::{
-    AppState, auth,
+    AppState,
+    access::{self, ClientIp, Counted},
+    auth,
     auth::CurrentUser,
     automations,
     community::{self, Joining, Permission, Registration, Requirement},
@@ -84,6 +86,41 @@ struct SignupInput {
     /// Left empty by people; bots fill in every field.
     #[serde(default)]
     website: String,
+    /// The proof-of-work challenge from the form, and app.js's answer.
+    #[serde(default)]
+    challenge: String,
+    #[serde(default)]
+    proof: String,
+}
+
+/// Refuses sign-ups without the form's proof of work, and too many from
+/// one address; otherwise counts this one.
+fn bot_check(
+    state: &AppState,
+    address: Option<std::net::IpAddr>,
+    input: &SignupInput,
+) -> Result<(), String> {
+    if let Some(wait) = address.and_then(|address| {
+        state
+            .access
+            .check(&Counted::SignUp(address), access::SIGN_UP)
+            .err()
+    }) {
+        return Err(format!(
+            "Several accounts were just made from your network. Try again in {}.",
+            access::wait_text(wait)
+        ));
+    }
+    if !state.access.redeem(&input.challenge, &input.proof) {
+        return Err(
+            "Your browser didn't finish the check that keeps bots out. Wait a moment, then try again."
+                .to_owned(),
+        );
+    }
+    if let Some(address) = address {
+        state.access.count(Counted::SignUp(address));
+    }
+    Ok(())
 }
 
 async fn joining(state: &AppState) -> AppResult<Joining> {
@@ -96,11 +133,21 @@ async fn signup_form(State(state): State<AppState>) -> AppResult<Response> {
         return Err(AppError::NotFound);
     }
     let ctx = state.db.call(|conn| store::render_context(conn)).await?;
-    Ok(pages::signup_page(&joining, &ctx, None, &AccountForm::default(), "").into_response())
+    let challenge = state.access.challenge()?;
+    Ok(pages::signup_page(
+        &joining,
+        &ctx,
+        None,
+        &AccountForm::default(),
+        "",
+        &challenge,
+    )
+    .into_response())
 }
 
 async fn signup(
     State(state): State<AppState>,
+    ClientIp(address): ClientIp,
     Form(input): Form<SignupInput>,
 ) -> AppResult<Response> {
     let joining = joining(&state).await?;
@@ -109,10 +156,11 @@ async fn signup(
     }
     let ctx = state.db.call(|conn| store::render_context(conn)).await?;
     let note: String = input.note.trim().chars().take(500).collect();
+    let challenge = state.access.challenge()?;
     let refuse = |error: &str, form: &AccountForm| {
         (
             StatusCode::BAD_REQUEST,
-            pages::signup_page(&joining, &ctx, Some(error), form, &note),
+            pages::signup_page(&joining, &ctx, Some(error), form, &note, &challenge),
         )
             .into_response()
     };
@@ -122,6 +170,9 @@ async fn signup(
     };
     if !input.website.is_empty() {
         return Ok(refuse("Something went wrong. Try again.", &form));
+    }
+    if let Err(error) = bot_check(&state, address, &input) {
+        return Ok(refuse(&error, &form));
     }
     if !joining.rules.is_empty() && input.rules.is_none() {
         return Ok(refuse("Agree to the rules to join.", &form));
@@ -382,7 +433,7 @@ async fn delete_role(
 async fn moderation(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
     require_moderator(&user)?;
     let now = now_ms();
-    let (signups, reports, timed_out, ctx) = state
+    let (signups, reports, timed_out, bans, ctx) = state
         .db
         .call(move |conn| {
             let mut statement = conn.prepare(
@@ -395,6 +446,7 @@ async fn moderation(user: CurrentUser, State(state): State<AppState>) -> AppResu
                 community::signups(conn)?,
                 community::open_reports(conn)?,
                 timed_out,
+                crate::access::bans(conn)?,
                 store::render_context(conn)?,
             ))
         })
@@ -410,6 +462,7 @@ async fn moderation(user: CurrentUser, State(state): State<AppState>) -> AppResu
         &signups,
         &reports,
         &timed_out,
+        &bans,
         &views::Render::for_user(&ctx, user.id),
     ))
 }

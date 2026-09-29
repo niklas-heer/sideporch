@@ -69,6 +69,7 @@ Every option can also be set with an environment variable.
 | `--data` | `SIDEPORCH_DATA` | `sideporch-data` | Directory for everything Sideporch keeps. Back it up to back up everything. |
 | `--public-url` | `SIDEPORCH_PUBLIC_URL` | taken from each request | The URL people use, such as `https://chat.example.com`, for invite and webhook links. An `https://` URL also makes cookies secure. |
 | `--require-setup-link` | `SIDEPORCH_REQUIRE_SETUP_LINK` | off | Require the one-time link from `sideporch setup-link` to create the first account. |
+| `--client-ip-header` | `SIDEPORCH_CLIENT_IP_HEADER` | none: the connection's address | Behind a reverse proxy, the header it puts visitors' addresses in, such as `X-Forwarded-For` or `Fly-Client-IP`. Sign-in limits and [bans](@/docs/community/people/moderation.md#bans) use it. Only set it when every request comes through that proxy, or anyone could claim any address. New in 0.6.0. |
 | `--update-check` | `SIDEPORCH_UPDATE_CHECK` | `true` | Ask GitHub for new releases every six hours; `false` keeps Sideporch from contacting GitHub. See [Update](@/docs/get-started/update.md). New in 0.5.0. |
 | | `SIDEPORCH_SECRET_KEY` | `secret.key` in the data directory | A passphrase to encrypt [automation secrets](@/docs/integrations/automations/data-and-services.md#secrets) with, instead of the key file. |
 | | `RUST_LOG` | `info` | How much to log: `warn`, `info`, `debug`. |
@@ -114,6 +115,8 @@ server {
 ```
 
 Set `--public-url` to the address people use. Without it, Sideporch builds links from the `Host` (or `X-Forwarded-Host`) and `X-Forwarded-Proto` headers the proxy passes on.
+
+Set `--client-ip-header X-Forwarded-For` too, so Sideporch sees visitors' addresses instead of the proxy's; otherwise [sign-in limits](@/docs/community/people/sign-in-security.md#limits-on-guessing) and [bans](@/docs/community/people/moderation.md#bans) would treat everyone as one visitor. Caddy sets that header by itself; with nginx, add `proxy_set_header X-Forwarded-For $remote_addr;`.
 
 ## Check that it runs
 
