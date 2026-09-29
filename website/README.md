@@ -40,7 +40,8 @@ their own address.
 
 Vercel deploys when this directory or the tool pins changed since its last
 deployment (`ignoreCommand` in `vercel.json`), so pushing several commits at
-once still deploys website changes that aren't in the last one.
+once still deploys website changes that aren't in the last one. When the
+last deployment's commit isn't in Vercel's shallow clone, it builds.
 
 To upgrade Zola or Pagefind, change `mise.toml`, then run
 `GITHUB_TOKEN=$(gh auth token) mise lock --platform linux-x64,linux-arm64,macos-arm64,macos-x64`.
