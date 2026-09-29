@@ -56,10 +56,12 @@ fn sparkline(values: &[f64], max: f64, label: &str) -> Markup {
     html! {
         svg viewBox="0 0 240 48" preserveAspectRatio="none" role="img" aria-label=(label)
             class="h-12 w-full text-floor-3 dark:text-haint" {
-            line x1="0" y1="47" x2="240" y2="47" stroke="currentColor" stroke-opacity="0.2";
+            // Closed explicitly: inside SVG, a `<line>` left open would
+            // swallow the polyline after it.
+            line x1="0" y1="47" x2="240" y2="47" stroke="currentColor" stroke-opacity="0.2" {}
             @if values.len() > 1 {
                 polyline points=(points.trim_end()) fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linejoin="round" vector-effect="non-scaling-stroke";
+                    stroke-linejoin="round" vector-effect="non-scaling-stroke" {}
             }
         }
     }
