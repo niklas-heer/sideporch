@@ -16,7 +16,7 @@ with the things people miss from Slack, on a server you control.</p>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/channel-dark.webp">
-  <img src="docs/screenshots/channel.webp" alt="A Sideporch channel with a thread open on the right: messages with reactions, a checklist and a poll.">
+  <img src="docs/screenshots/channel.webp" alt="A Sideporch channel with a thread open on the right: messages with reactions, a checklist, and a ranked poll showing which restaurant leads after three rounds.">
 </picture>
 
 > **Status:** early. It works end to end, but expect rough edges and breaking changes before 1.0.
@@ -78,6 +78,8 @@ Open <http://localhost:8080> (or <http://127.0.0.1:8080> for the Homebrew versio
 
 ![The quick switcher, opened with Cmd+K over a channel, filtering channels as you type.](docs/screenshots/switcher.webp)
 
+![Search for “relase notes”, corrected to “release notes”, with the matching message highlighted and filter shortcuts like From me, Files and Pinned.](docs/screenshots/search.webp)
+
 ### On your phone
 
 Sideporch works in any mobile browser, and installs as an app: its own icon and window, the number of unread conversations on the icon, and on Android a place in the share sheet, so links and text from other apps go straight into a conversation. When the connection drops, it says so instead of showing an error page.
@@ -120,6 +122,8 @@ Sideporch works for a team behind invite links, and just as well for a community
 - **Trust levels** keep newcomers from doing harm while they're new. People start at level 0 when they sign up on their own (or 1 when invited) and move up as they stay and take part: days since joining, days visited, messages sent. Admins tune the requirements, and can set someone's level and keep it there.
 - **Permissions** for uploading files, posting links, notifying everyone with `@channel`, starting direct messages, creating channels and polls, adding emoji, inviting people and moderating. Each asks for a trust level, or is left to admins and **roles** you create, such as "Moderators" or "Designers". To turn uploads off, leave them to admins.
 - **Moderation**: anyone can report a message; moderators delete it or dismiss the report, let people in who asked to join, and time people out, so they can read but not post. New members can only send a few messages a minute.
+
+![The moderation page: someone asking to join with a note, and a reported spam message with buttons to delete it or dismiss the report.](docs/screenshots/moderation.webp)
 
 ### Sign in safely
 

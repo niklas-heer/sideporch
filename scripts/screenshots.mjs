@@ -1,5 +1,5 @@
 // Seeds a fresh Sideporch server with a small team's chat and takes the
-// README screenshots as PNGs.
+// README and website screenshots as PNGs.
 //
 //   sideporch --listen 127.0.0.1:18790 --data "$(mktemp -d)" &
 //   npm install --no-save playwright-core
@@ -8,6 +8,7 @@
 // Then convert them for the README, for example:
 //   cwebp -q 82 -resize 1600 0 /tmp/shots/channel.png -o docs/screenshots/channel.webp
 //   (phones.png: -q 84 -resize 1100 0)
+// and copy the ones the website shows into website/img/.
 //
 // CHROME defaults to Playwright's headless shell; any Chromium works. Node
 // is needed; Bun's fetch breaks Playwright's cookie handling.
@@ -92,7 +93,7 @@ async function channel(context, name, isPrivate = false, topic = "") {
 await form(ada, `/c/${general}/topic`, { topic: "Everything else. Be kind, write things down." });
 const design = await channel(grace, "design", false, "Mockups, feedback, fonts");
 const deploys = await channel(linus, "deploys", false, "Alerts, releases and approvals");
-await channel(mo, "random");
+const random = await channel(mo, "random");
 const plans = await channel(ada, "offsite-plans", true, "Shh");
 for (const who of [grace, mo]) {
   const id = await (who === grace ? grace : mo).request.get(`${base}/home`).then((r) => r.text()).then((t) => t.match(/data-me="(\d+)"/)[1]);
@@ -113,12 +114,25 @@ for (const [who, emoji] of [[ada, "tada"], [mo, "tada"], [rosa, "tada"], [linus,
 await say(linus, general, "Release checklist:\n\n- [x] Migrations tested on a copy of production\n- [x] Screenshots updated\n- [ ] Blog post\n- [ ] Tag `v2.3.0`");
 const checklist = await lastId(linus, general);
 await react(grace, general, checklist, "white_check_mark");
-await say(grace, general, "/poll When do we ship v2.3? | Thursday | Friday | Next Monday");
+// A ranked poll: Pizza ties Ramen on first choices, but Ramen wins once
+// the beer garden and taco fans' votes move on.
+await form(
+  grace,
+  `/c/${general}/polls`,
+  { question: "Where do we celebrate the release?", options: "Ramen Ichi\nPizza Nonna\nTaco truck\nThe beer garden", kind: "ranked" },
+  { headers: { "x-sideporch-fetch": "1" } },
+);
 const poll = await lastId(grace, general);
-for (const [who, option] of [[ada, "0"], [mo, "0"], [rosa, "1"], [linus, "0"]]) {
-  await form(who, `/c/${general}/m/${poll}/vote`, { option }, { headers: { "x-sideporch-fetch": "1" } });
+for (const [who, ranks] of [
+  [ada, { r0: "1", r1: "2" }],
+  [grace, { r0: "1", r2: "2" }],
+  [mo, { r2: "1", r0: "2" }],
+  [rosa, { r1: "1", r0: "2" }],
+  [linus, { r1: "1", r2: "2" }],
+]) {
+  await form(who, `/c/${general}/m/${poll}/rank`, ranks, { headers: { "x-sideporch-fetch": "1" } });
 }
-await say(rosa, general, "Thursday it is. I'll bring cake 🍰");
+await say(rosa, general, "Ramen it is. I'll book a table for Thursday 🍜");
 
 // #design
 await say(rosa, design, "New onboarding illustrations, v3. Warmer colours, fewer words.");
@@ -171,6 +185,33 @@ const moId = await mo.request.get(`${base}/home`).then((r) => r.text()).then((t)
 const dm = Number((await ada.request.get(`${base}/dm/${moId}`, { maxRedirects: 0 })).headers().location.split("/").pop());
 await say(mo, dm, "Got a minute to pair on the search ranking later?");
 await say(grace, plans, "Cabin is booked for October 🏡 Don't tell the others yet!");
+
+// The porch opens to the neighbourhood: sign-up, a spammer, a report, and
+// someone asking to join.
+const community = (registration) => ({
+  registration,
+  rules: "Be kind. No ads. Keep it about the porch.",
+  days_1: "1", visits_1: "1", messages_1: "3",
+  days_2: "7", visits_2: "3", messages_2: "20",
+  days_3: "30", visits_3: "15", messages_3: "100",
+  new_member_per_minute: "6",
+});
+await form(ada, "/admin/community", community("open"));
+const spammer = await person();
+await form(spammer, "/signup", { display_name: "Deal Finder", username: "dealfinder", password: "a long password", rules: "agreed", website: "" });
+await say(spammer, random, "DM me for free followers and crypto giveaways 💸💸💸");
+const spam = await lastId(ada, random);
+await form(rosa, `/c/${random}/m/${spam}/report`, { reason: "Spam, and they messaged me too" });
+await form(ada, "/admin/community", community("approval"));
+const priya = await person();
+await form(priya, "/signup", {
+  display_name: "Priya",
+  username: "priya",
+  password: "a long password",
+  note: "I live two houses down and run the Saturday garden swap. Would love to join!",
+  rules: "agreed",
+  website: "",
+});
 
 // Screenshots.
 async function view(options = {}) {
@@ -247,6 +288,19 @@ for (const dark of [false, true]) {
   await page.keyboard.press("Control+k");
   await page.keyboard.type("de");
   await shot(page, "switcher");
+  await page.close();
+}
+{
+  // A misspelled search, corrected from the team's own words.
+  const page = await view();
+  await page.goto(`${base}/search?q=${encodeURIComponent("relase notes")}`);
+  await shot(page, "search");
+  await page.close();
+}
+{
+  const page = await view({ viewport: { width: 1360, height: 1040 } });
+  await page.goto(`${base}/moderation`);
+  await shot(page, "moderation");
   await page.close();
 }
 {
