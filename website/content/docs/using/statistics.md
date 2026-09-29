@@ -6,6 +6,8 @@ weight = 5
 
 **Statistics** in the sidebar shows how the community is doing: how many messages were written, when, in which channels, and by whom. Pick a period at the top: the last 7 days, 30 days, 12 months, or all time.
 
+{{<shot name="statistics" alt="The statistics page over 30 days: totals, messages per day, the people with the most messages and reactions, the busiest channels and the most used reactions." caption="The last 30 days of a small team." />}}
+
 ## What it shows
 
 - **Totals**: messages, people who wrote, reactions and files.
@@ -18,7 +20,7 @@ weight = 5
 
 Only public channels count. Private channels and direct messages never do, not in the totals and not in the rankings.
 
-Messages from bots, webhooks and automations count in the totals, and so do people from [other servers](@/docs/community/other-servers.md) in shared channels, but they aren't ranked. Deleted messages don't count.
+Messages from bots, webhooks and automations count in the totals, and so do people from [other servers](@/docs/community/connect/other-servers.md) in shared channels, but they aren't ranked. Deleted messages don't count.
 
 ## Leaving the rankings
 
@@ -26,4 +28,4 @@ Anyone can leave the rankings under **Edit profile → Statistics**: tick **Leav
 
 ## Who can see them
 
-Everyone at trust level 1 or above sees statistics: people who joined with an invite or were let in, and newcomers once they [reach level 1](@/docs/community/sign-up-and-trust.md#trust-levels) by taking part. Admins change this under **Admin → Permissions** with **See statistics**, like any other [permission](@/docs/community/sign-up-and-trust.md#permissions): raise the level, or choose **Roles only** and give the permission to a role, so only its people see them.
+Everyone at trust level 1 or above sees statistics: people who joined with an invite or were let in, and newcomers once they [reach level 1](@/docs/community/people/sign-up-and-trust.md#trust-levels) by taking part. Admins change this under **Admin → Permissions** with **See statistics**, like any other [permission](@/docs/community/people/sign-up-and-trust.md#permissions): raise the level, or choose **Roles only** and give the permission to a role, so only its people see them.

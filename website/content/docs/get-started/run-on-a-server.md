@@ -57,7 +57,7 @@ sudo -u sideporch sideporch setup-link --data /var/lib/sideporch
 docker exec sideporch /sideporch setup-link    # with Docker
 ```
 
-Open the link, create your account, and invite everyone else from **People**. To let people join without an invite, open sign-up under **Admin → Community**; see [Sign-up and trust](@/docs/community/sign-up-and-trust.md).
+Open the link, create your account, and invite everyone else from **People**. To let people join without an invite, open sign-up under **Admin → Community**; see [Sign-up and trust](@/docs/community/people/sign-up-and-trust.md).
 
 ## Options
 
@@ -70,13 +70,13 @@ Every option can also be set with an environment variable.
 | `--public-url` | `SIDEPORCH_PUBLIC_URL` | taken from each request | The URL people use, such as `https://chat.example.com`, for invite and webhook links. An `https://` URL also makes cookies secure. |
 | `--require-setup-link` | `SIDEPORCH_REQUIRE_SETUP_LINK` | off | Require the one-time link from `sideporch setup-link` to create the first account. |
 | `--update-check` | `SIDEPORCH_UPDATE_CHECK` | `true` | Ask GitHub for new releases every six hours; `false` keeps Sideporch from contacting GitHub. See [Update](@/docs/get-started/update.md). New in 0.5.0. |
-| | `SIDEPORCH_SECRET_KEY` | `secret.key` in the data directory | A passphrase to encrypt [automation secrets](@/docs/integrations/automations.md#secrets) with, instead of the key file. |
+| | `SIDEPORCH_SECRET_KEY` | `secret.key` in the data directory | A passphrase to encrypt [automation secrets](@/docs/integrations/automations/data-and-services.md#secrets) with, instead of the key file. |
 | | `RUST_LOG` | `info` | How much to log: `warn`, `info`, `debug`. |
 
 Three commands besides running the server:
 
 - `sideporch setup-link` prints the link for creating the first account.
-- `sideporch restore ARCHIVE` unpacks a [backup](@/docs/community/backups.md). Stop the server first.
+- `sideporch restore ARCHIVE` unpacks a [backup](@/docs/community/server/backups.md). Stop the server first.
 - `sideporch update` installs the newest release in place of the program; see [Update](@/docs/get-started/update.md#sideporch-update). New in 0.5.0.
 
 ## Put it behind HTTPS
@@ -123,4 +123,4 @@ Set `--public-url` to the address people use. Without it, Sideporch builds links
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-Next: [keep it up to date](@/docs/get-started/update.md), and set up [backups](@/docs/community/backups.md).
+Next: [keep it up to date](@/docs/get-started/update.md), and set up [backups](@/docs/community/server/backups.md).

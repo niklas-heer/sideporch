@@ -889,6 +889,77 @@ mod tests {
         }
     }
 
+    /// Markdown files under `dir`, recursively.
+    fn pages(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("read the docs") {
+            let path = entry.expect("a docs entry").path();
+            if path.is_dir() {
+                pages(&path, found);
+            } else if path.extension().is_some_and(|extension| extension == "md") {
+                found.push(path);
+            }
+        }
+    }
+
+    /// The fenced Lua blocks in a page.
+    fn lua_blocks(text: &str) -> Vec<String> {
+        let mut blocks = Vec::new();
+        let mut current: Option<String> = None;
+        for line in text.lines() {
+            match (&mut current, line.trim()) {
+                (None, "```lua") => current = Some(String::new()),
+                (Some(block), "```") => {
+                    blocks.push(std::mem::take(block));
+                    current = None;
+                }
+                (Some(block), _) => {
+                    block.push_str(line);
+                    block.push('\n');
+                }
+                (None, _) => {}
+            }
+        }
+        blocks
+    }
+
+    /// Every Lua example in the documentation passes the linter and loads.
+    /// A block starting with `-- library: name` is a library the page's
+    /// other blocks may `require`.
+    #[test]
+    fn documentation_examples_lint_and_load() {
+        let mut found = Vec::new();
+        pages(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("website/content/docs"),
+            &mut found,
+        );
+        let mut checked = 0;
+        for page in found {
+            let text = std::fs::read_to_string(&page).expect("read a page");
+            let blocks = lua_blocks(&text);
+            let libraries: HashMap<String, String> = blocks
+                .iter()
+                .filter_map(|block| {
+                    let name = block.lines().next()?.strip_prefix("-- library: ")?;
+                    Some((name.trim().to_owned(), block.clone()))
+                })
+                .collect();
+            for block in blocks {
+                let problems = tooling::lint(&block);
+                assert!(
+                    problems.is_empty(),
+                    "{}: {problems:#?}\n{block}",
+                    page.display()
+                );
+                let mut context = context(HashMap::new());
+                context.libraries.clone_from(&libraries);
+                let report = test("Example", &block, context, &TestTrigger::Load);
+                assert!(report.ok, "{}: {report:#?}\n{block}", page.display());
+                checked += 1;
+            }
+        }
+        assert!(checked >= 20, "only {checked} examples found");
+    }
+
     #[test]
     fn dry_runs_describe_actions_without_saving() {
         let source = r##"sideporch.on_message(function(msg)

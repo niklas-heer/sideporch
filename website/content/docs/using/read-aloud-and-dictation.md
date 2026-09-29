@@ -11,4 +11,4 @@ weight = 7
 
 Choose your voice (there are ten) and how fast it reads under **Appearance** in your account menu.
 
-Until an admin downloads the models under **Admin → Speech**, reading aloud uses the voices of your own device, and dictation isn't offered. See [Speech models](@/docs/community/speech-models.md).
+Until an admin downloads the models under **Admin → Speech**, reading aloud uses the voices of your own device, and dictation isn't offered. See [Speech models](@/docs/community/server/speech-models.md).

@@ -2,13 +2,12 @@
 {% block title %}{{ page.title }} · Sideporch docs{% endblock %}
 {% block body_class %}docs{% endblock %}
 {% block content %}
-{% set part = get_section(path=page.ancestors[-1]) %}
 <div class="docs-shell">
   <button class="docs-menu" type="button" aria-controls="docs-nav" aria-expanded="false" hidden>Menu</button>
   {{<docs_sidebar current={page.permalink} />}}
   <main class="docs-main" id="main">
     <article class="prose" data-pagefind-body>
-      <p class="crumb" data-pagefind-ignore><a href="{{ part.permalink }}">{{ part.title }}</a></p>
+      {{<docs_crumbs ancestors={page.ancestors} />}}
       <h1>{{ page.title }}</h1>
       {{ page.content | safe }}
     </article>
@@ -18,7 +17,7 @@
       {%- else %}
       <a class="edit" href="{{ config.extra.edit_base }}{{ page.relative_path }}">Edit this page on GitHub</a>
       {%- endif %}
-      {{<docs_pager current={page.permalink} />}}
+      {{<docs_pager current={page.relative_path} />}}
     </footer>
   </main>
   {{<docs_toc toc={page.toc} />}}

@@ -1,6 +1,8 @@
 {# The documentation's navigation, shared by docs pages and sections. #}
 
 {% component docs_sidebar(current: string) %}
+{# Sections may hold groups of pages, like Integrations → Automations. A
+   group shows its pages while the reader is inside it. #}
 {% set docs = get_section(path="docs/_index.md") %}
 <nav class="docs-nav" id="docs-nav" aria-label="Documentation">
   <a class="docs-home" href="{{ docs.permalink }}"{% if current == docs.permalink %} aria-current="page"{% endif %}>Overview</a>
@@ -11,42 +13,62 @@
       {% for p in part.pages %}
         <li><a href="{{ p.permalink }}"{% if current == p.permalink %} aria-current="page"{% endif %}>{{ p.title }}</a></li>
       {% endfor %}
+      {% for group_path in part.subsections %}
+        {% set group = get_section(path=group_path) %}
+        <li class="docs-group">
+          <details{% if current is starting_with(pat=group.permalink) %} open{% endif %}>
+            <summary><a href="{{ group.permalink }}"{% if current == group.permalink %} aria-current="page"{% endif %}>{{ group.title }}</a></summary>
+            <ul>
+              {% for p in group.pages %}
+                <li><a href="{{ p.permalink }}"{% if current == p.permalink %} aria-current="page"{% endif %}>{{ p.title }}</a></li>
+              {% endfor %}
+            </ul>
+          </details>
+        </li>
+      {% endfor %}
     </ul>
   {% endfor %}
 </nav>
 {% endcomponent docs_sidebar %}
 
-{% component docs_link(rel: string, item) %}
+{% component docs_link(rel: string, path: string) %}
+{% if path is ending_with(pat="_index.md") %}{% set item = get_section(path=path) %}{% else %}{% set item = get_page(path=path) %}{% endif %}
 <a class="{{ rel }}" rel="{{ rel }}" href="{{ item.permalink }}"><span>{{ "Previous" if rel == "prev" else "Next" }}</span>{{ item.title }}</a>
 {% endcomponent docs_link %}
 
 {% component docs_pager(current: string) %}
 {# Previous and next in the sidebar's order: the docs home, then each
-   section followed by its pages. #}
+   section, its pages, and its groups with their pages. `current` is the
+   page's or section's path, like docs/using/polls.md. #}
 {% set docs = get_section(path="docs/_index.md") %}
-{% set parts = [get_section(path=path) for path in docs.subsections] %}
-<nav class="pager" aria-label="Previous and next">
-{% for part in parts %}
-  {% set i = loop.index0 %}
-  {% set last_part = loop.last %}
-  {% if current == part.permalink %}
-    {% if i == 0 %}{{<docs_link rel="prev" item={docs} />}}
-    {% elif parts[i - 1].pages | length > 0 %}{{<docs_link rel="prev" item={parts[i - 1].pages[-1]} />}}
-    {% else %}{{<docs_link rel="prev" item={parts[i - 1]} />}}{% endif %}
-    {% if part.pages | length > 0 %}{{<docs_link rel="next" item={part.pages[0]} />}}
-    {% elif not last_part %}{{<docs_link rel="next" item={parts[i + 1]} />}}{% endif %}
-  {% endif %}
-  {% for p in part.pages %}
-    {% if current == p.permalink %}
-      {% if loop.first %}{{<docs_link rel="prev" item={part} />}}
-      {% else %}{{<docs_link rel="prev" item={part.pages[loop.index0 - 1]} />}}{% endif %}
-      {% if not loop.last %}{{<docs_link rel="next" item={part.pages[loop.index0 + 1]} />}}
-      {% elif not last_part %}{{<docs_link rel="next" item={parts[i + 1]} />}}{% endif %}
-    {% endif %}
+{% set_global order = docs.relative_path %}
+{% for path in docs.subsections %}
+  {% set part = get_section(path=path) %}
+  {% set_global order = order ~ "|" ~ part.relative_path %}
+  {% for p in part.pages %}{% set_global order = order ~ "|" ~ p.relative_path %}{% endfor %}
+  {% for group_path in part.subsections %}
+    {% set group = get_section(path=group_path) %}
+    {% set_global order = order ~ "|" ~ group.relative_path %}
+    {% for p in group.pages %}{% set_global order = order ~ "|" ~ p.relative_path %}{% endfor %}
   {% endfor %}
+{% endfor %}
+{% set items = order | split(pat="|") %}
+<nav class="pager" aria-label="Previous and next">
+{% for item in items %}
+  {% if item == current %}
+    {% if not loop.first %}{{<docs_link rel="prev" path={items[loop.index0 - 1]} />}}{% endif %}
+    {% if not loop.last %}{{<docs_link rel="next" path={items[loop.index0 + 1]} />}}{% endif %}
+  {% endif %}
 {% endfor %}
 </nav>
 {% endcomponent docs_pager %}
+
+{% component docs_crumbs(ancestors) %}
+{# The sections above a page, below the docs home. #}
+<p class="crumb" data-pagefind-ignore>
+{%- for path in ancestors %}{% if path != "_index.md" and path != "docs/_index.md" %}{% set above = get_section(path=path) %}{% if not loop.first and ancestors[loop.index0 - 1] != "docs/_index.md" %} <span aria-hidden="true">/</span> {% endif %}<a href="{{ above.permalink }}">{{ above.title }}</a>{% endif %}{% endfor -%}
+</p>
+{% endcomponent docs_crumbs %}
 
 {% component docs_toc(toc) %}
 {% if toc | length > 0 %}

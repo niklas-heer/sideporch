@@ -103,5 +103,5 @@ sudo systemctl start sideporch
 An older version refuses to start on a database a newer one has already upgraded, and names the version that did, rather than guessing at tables it doesn't know.
 
 {% <note kind="warning"> %}
-The copy holds the database as it was before the upgrade. Messages written since then are only in the current database, so take a [backup](@/docs/community/backups.md) of it first if you need them.
+The copy holds the database as it was before the upgrade. Messages written since then are only in the current database, so take a [backup](@/docs/community/server/backups.md) of it first if you need them.
 {% </note> %}

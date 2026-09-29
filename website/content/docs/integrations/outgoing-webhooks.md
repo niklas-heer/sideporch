@@ -48,4 +48,4 @@ If the service answers with JSON that has `text`, Sideporch posts it in the chan
 
 Requests go through the same guarded client as automations: addresses on private networks are refused unless an admin allows them under **Automations → Settings**.
 
-For anything more involved, write an [automation](@/docs/integrations/automations.md).
+For anything more involved, write an [automation](@/docs/integrations/automations/_index.md).

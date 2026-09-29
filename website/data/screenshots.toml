@@ -1,0 +1,4 @@
+# The version the screenshots in static/img/<version>/ show. The shot
+# component and the landing page read it; mise run screenshots retakes the
+# screenshots into a new directory and updates this.
+version = "0.6.0"

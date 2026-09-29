@@ -496,9 +496,10 @@ mod tests {
             .expect("the reference starts with its title");
         format!(
             "+++\n\
-             title = \"Automation API\"\n\
+             title = \"API reference\"\n\
              description = \"Every sideporch function automations can call, and the tables their handlers receive.\"\n\
-             weight = 4\n\n\
+             weight = 9\n\
+             aliases = [\"/docs/integrations/automation-api/\"]\n\n\
              [extra]\n\
              edit_path = \"src/automations/api.rs\"\n\
              +++\n\n\
@@ -511,7 +512,7 @@ mod tests {
     #[test]
     fn website_page_is_current() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("website/content/docs/integrations/automation-api.md");
+            .join("website/content/docs/integrations/automations/api.md");
         let expected = website_page();
         if std::env::var_os("SIDEPORCH_BLESS").is_some() {
             std::fs::write(&path, &expected).expect("write the API page");

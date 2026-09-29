@@ -7,19 +7,22 @@
 </aside>
 {% endcomponent note %}
 
-{# A screenshot from static/img/ that opens large. With dark=true, the
-   page shows NAME-dark.webp when the reader's system is dark. The output
-   has no blank or indented lines, which Markdown would end the HTML at. #}
+{# A screenshot from static/img/<version>/ that opens large, labelled with
+   the version it shows (data/screenshots.toml). With dark=true,
+   the page shows NAME-dark.webp when the reader's system is dark. The
+   output has no blank or indented lines, which Markdown would end the
+   HTML at. #}
 {% component shot(name: string, alt: string, caption: string = "", dark: bool = false) %}
-{%- set meta = get_image_metadata(path="img/" ~ name ~ ".webp") -%}
-{%- set src = get_url(path="img/" ~ name ~ ".webp") -%}
-{%- set src_dark = get_url(path="img/" ~ name ~ "-dark.webp") -%}
+{%- set screenshots = load_data(path="data/screenshots.toml") -%}
+{%- set version = screenshots.version -%}
+{%- set dir = "img/" ~ version ~ "/" -%}
+{%- set meta = get_image_metadata(path=dir ~ name ~ ".webp") -%}
+{%- set src = get_url(path=dir ~ name ~ ".webp") -%}
+{%- set src_dark = get_url(path=dir ~ name ~ "-dark.webp") -%}
 <figure class="shot">
 <a href="{{ src }}" data-zoom{% if dark %} data-zoom-dark="{{ src_dark }}"{% endif %}><picture>
 {%- if dark %}<source media="(prefers-color-scheme: dark)" srcset="{{ src_dark }}">{% endif -%}
 <img src="{{ src }}" alt="{{ alt }}" width="{{ meta.width }}" height="{{ meta.height }}" loading="lazy" decoding="async"></picture></a>
-{%- if caption %}
-<figcaption>{{ caption | markdown(inline=true) | safe }}</figcaption>
-{%- endif %}
+<figcaption>{% if caption %}{{ caption | markdown(inline=true) | safe }} {% endif %}<span class="shot-version">Sideporch {{ version }}</span></figcaption>
 </figure>
 {% endcomponent shot %}

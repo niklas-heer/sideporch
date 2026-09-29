@@ -53,4 +53,4 @@ Its `mattermost` provider works too, and its `channel` setting posts to another 
 
 ## Other tools
 
-Anything that posts Slack-style `text` and `attachments` works the same way: Grafana's Slack contact point with a webhook URL, CI systems, backup scripts, or your own `curl`. For more than posting, such as answering commands or calling other services, write an [automation](@/docs/integrations/automations.md): each one has its own webhook URL too.
+Anything that posts Slack-style `text` and `attachments` works the same way: Grafana's Slack contact point with a webhook URL, CI systems, backup scripts, or your own `curl`. For more than posting, such as answering commands or calling other services, write an [automation](@/docs/integrations/automations/_index.md): each one has its own webhook URL too.

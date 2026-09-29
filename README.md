@@ -15,8 +15,8 @@ with the things people miss from Slack, on a server you control.</p>
 </p>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="website/static/img/channel-dark.webp">
-  <img src="website/static/img/channel.webp" alt="A Sideporch channel with a thread open on the right: messages with reactions, a checklist, and a ranked poll showing which restaurant leads after three rounds.">
+  <source media="(prefers-color-scheme: dark)" srcset="website/static/img/0.6.0/channel-dark.webp">
+  <img src="website/static/img/0.6.0/channel.webp" alt="A Sideporch channel with a thread open on the right: messages with reactions, a checklist, and a ranked poll showing which restaurant leads after three rounds.">
 </picture>
 
 > **Status:** early. It works end to end, but expect rough edges and breaking changes before 1.0.
@@ -61,23 +61,24 @@ Docker, Homebrew, Nix and NixOS work too. The documentation walks through [insta
 - **Polls** where people pick one, pick several, or rank the options to find what most can live with. [Polls](https://sideporch.app/docs/using/polls/)
 - **Search** with filters like `from:`, `in:` and `has:file`, that corrects typos from your own team's words. [Search](https://sideporch.app/docs/using/search/)
 - **Activity, saved messages, reminders and send later.** [Keeping up](https://sideporch.app/docs/using/keeping-up/)
+- **Statistics**: messages per day, the busiest channels and who writes most, for everyone or only the people admins choose. [Statistics](https://sideporch.app/docs/using/statistics/)
 - **On phones**: installs like an app, with push notifications straight from your server. [Phones](https://sideporch.app/docs/using/phones/)
 - **Read aloud and dictate** in dozens of languages, with models that run on your server. [Speech](https://sideporch.app/docs/using/read-aloud-and-dictation/)
 - **20 themes**, profiles and keyboard shortcuts. [Themes](https://sideporch.app/docs/using/themes-and-profiles/)
-- **For public communities**: open sign-up, trust levels, roles, permissions and moderation. [Sign-up and trust](https://sideporch.app/docs/community/sign-up-and-trust/)
-- **Passkeys, authenticator apps and email sign-in links**, with a policy for what signing in takes. [Sign-in](https://sideporch.app/docs/community/sign-in-security/)
-- **Connect with other Sideporch servers**, like Slack Connect: share channels and write to people there, with signed requests between servers. [Other servers](https://sideporch.app/docs/community/other-servers/)
+- **For public communities**: open sign-up, trust levels, roles, permissions and moderation. [Sign-up and trust](https://sideporch.app/docs/community/people/sign-up-and-trust/)
+- **Passkeys, authenticator apps and email sign-in links**, with a policy for what signing in takes. [Sign-in](https://sideporch.app/docs/community/people/sign-in-security/)
+- **Connect with other Sideporch servers**, like Slack Connect: share channels and write to people there, with signed requests between servers. [Other servers](https://sideporch.app/docs/community/connect/other-servers/)
 - **Updates you hear about**, security fixes first, installed from the browser or by Sideporch itself, and only when signed. [Updating](https://sideporch.app/docs/get-started/update/)
-- **Backups** from the browser or on a schedule, and **import from Slack**. [Backups](https://sideporch.app/docs/community/backups/)
-- **Webhooks and Lua automations**, written and tested in the browser, or by AI through MCP. [Automations](https://sideporch.app/docs/integrations/automations/)
-- **Small**: half a CPU and 512 MB served 4,800 people online at once in load tests. [How big a server](https://sideporch.app/docs/community/server-size/)
+- **Backups** from the browser or on a schedule, and **import from Slack**. [Backups](https://sideporch.app/docs/community/server/backups/)
+- **Webhooks and Lua automations**, written and tested in the browser, or by AI through MCP, and shared between servers as files. [Automations](https://sideporch.app/docs/integrations/automations/), [examples](https://sideporch.app/docs/integrations/automations/examples/)
+- **Small**: half a CPU and 512 MB served 4,800 people online at once in load tests. [How big a server](https://sideporch.app/docs/community/server/server-size/)
 
-![The automation editor: a Lua script that asks for deploy approvals, with what it listens to, a test run panel and Ask AI.](website/static/img/automation.webp)
+![The automation editor: a Lua script that asks for deploy approvals, with what it listens to, a test run panel and Ask AI.](website/static/img/0.6.0/automation.webp)
 
 ## Documentation
 
 <a name="a-tour"></a><a name="run-it"></a><a name="update"></a><a name="back-up-and-move"></a><a name="move-from-slack"></a><a name="connect-gatus-and-other-tools"></a><a name="automations"></a><a name="let-ai-write-automations"></a><a name="how-big-a-server"></a><a name="good-to-know"></a>
-Everything else lives at **[sideporch.app/docs](https://sideporch.app/docs/)**: [running it](https://sideporch.app/docs/get-started/run-on-a-server/), [updates](https://sideporch.app/docs/get-started/update/), [backups and moving](https://sideporch.app/docs/community/backups/), [moving from Slack](https://sideporch.app/docs/community/move-from-slack/), [connecting with other servers](https://sideporch.app/docs/community/other-servers/), [webhooks for Gatus and other tools](https://sideporch.app/docs/integrations/incoming-webhooks/), [automations](https://sideporch.app/docs/integrations/automations/) and [their API](https://sideporch.app/docs/integrations/automation-api/), [AI and MCP](https://sideporch.app/docs/integrations/ai-and-mcp/), [how big a server](https://sideporch.app/docs/community/server-size/) and [what Sideporch deliberately isn't](https://sideporch.app/docs/get-started/what-is-sideporch/#good-to-know).
+Everything else lives at **[sideporch.app/docs](https://sideporch.app/docs/)**: [running it](https://sideporch.app/docs/get-started/run-on-a-server/), [updates](https://sideporch.app/docs/get-started/update/), [backups and moving](https://sideporch.app/docs/community/server/backups/), [moving from Slack](https://sideporch.app/docs/community/connect/move-from-slack/), [connecting with other servers](https://sideporch.app/docs/community/connect/other-servers/), [webhooks for Gatus and other tools](https://sideporch.app/docs/integrations/incoming-webhooks/), [automations](https://sideporch.app/docs/integrations/automations/) and [their API](https://sideporch.app/docs/integrations/automations/api/), [AI and MCP](https://sideporch.app/docs/integrations/automations/ai-and-mcp/), [how big a server](https://sideporch.app/docs/community/server/server-size/) and [what Sideporch deliberately isn't](https://sideporch.app/docs/get-started/what-is-sideporch/#good-to-know).
 
 ## Develop
 

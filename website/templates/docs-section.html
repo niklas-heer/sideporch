@@ -8,7 +8,8 @@
   {{<docs_sidebar current={section.permalink} />}}
   <main class="docs-main" id="main">
     <article class="prose" data-pagefind-body>
-      {% if not home %}<p class="crumb" data-pagefind-ignore><a href="{{ get_url(path='@/docs/_index.md') }}">Documentation</a></p>{% endif %}
+      {% if section.ancestors | length > 2 %}{{<docs_crumbs ancestors={section.ancestors} />}}
+      {% elif not home %}<p class="crumb" data-pagefind-ignore><a href="{{ get_url(path='@/docs/_index.md') }}">Documentation</a></p>{% endif %}
       <h1>{{ section.title }}</h1>
       {% if section.description %}<p class="lede-docs">{{ section.description }}</p>{% endif %}
       {{ section.content | safe }}
@@ -19,22 +20,39 @@
             <section class="card">
               <h2><a href="{{ part.permalink }}">{{ part.title }}</a></h2>
               <p>{{ part.description }}</p>
-              <ul>{% for p in part.pages %}<li><a href="{{ p.permalink }}">{{ p.title }}</a></li>{% endfor %}</ul>
+              <ul>
+                {% for p in part.pages %}<li><a href="{{ p.permalink }}">{{ p.title }}</a></li>{% endfor %}
+                {% for group_path in part.subsections %}{% set group = get_section(path=group_path) %}<li class="card-group"><a href="{{ group.permalink }}">{{ group.title }}</a></li>{% endfor %}
+              </ul>
             </section>
           {% endfor %}
         </div>
       {% else %}
+        {% if section.pages | length > 0 %}
         <ul class="page-list" data-pagefind-ignore>
           {% for p in section.pages %}
             <li><a href="{{ p.permalink }}">{{ p.title }}</a>{% if p.description %}<span>{{ p.description }}</span>{% endif %}</li>
           {% endfor %}
         </ul>
+        {% endif %}
+        {% for group_path in section.subsections %}
+          {% set group = get_section(path=group_path) %}
+          <section class="page-group" data-pagefind-ignore>
+            <h2><a href="{{ group.permalink }}">{{ group.title }}</a></h2>
+            {% if group.description %}<p>{{ group.description }}</p>{% endif %}
+            <ul class="page-list">
+              {% for p in group.pages %}
+                <li><a href="{{ p.permalink }}">{{ p.title }}</a>{% if p.description %}<span>{{ p.description }}</span>{% endif %}</li>
+              {% endfor %}
+            </ul>
+          </section>
+        {% endfor %}
       {% endif %}
     </article>
     {% if not home %}
     <footer class="page-foot">
       <a class="edit" href="{{ config.extra.edit_base }}{{ section.relative_path }}">Edit this page on GitHub</a>
-      {{<docs_pager current={section.permalink} />}}
+      {{<docs_pager current={section.relative_path} />}}
     </footer>
     {% endif %}
   </main>

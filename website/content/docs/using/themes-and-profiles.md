@@ -24,4 +24,4 @@ Under **Edit profile** you also pick the emoji your reaction picker shows first.
 
 ## Sign-in and security
 
-Passwords, passkeys, authenticator apps and your email address are under **Sign-in and security** in the same menu. See [Sign-in and security](@/docs/community/sign-in-security.md) for what each does.
+Passwords, passkeys, authenticator apps and your email address are under **Sign-in and security** in the same menu. See [Sign-in and security](@/docs/community/people/sign-in-security.md) for what each does.

@@ -17,8 +17,11 @@ To look at a build with a plain static server, give it the address:
 ## Layout
 
 - `content/_index.md`: the landing page; its layout is `templates/index.html`.
-- `content/docs/`: the documentation, one directory per section. Order pages
-  with `weight` in their front matter. `content/docs/integrations/automation-api.md`
+- `content/docs/`: the documentation, one directory per section, and one
+  per group of pages inside a section (like `integrations/automations/`);
+  the sidebar, breadcrumbs and previous/next links follow that nesting. Order
+  pages and groups with `weight` in their front matter, and give a moved page
+  `aliases` with its old URL. `content/docs/integrations/automations/api.md`
   is generated from `src/automations/api.rs`; see its first lines.
 - `templates/`: `base.html` (head, navigation, footer), the landing page, the
   docs page and section layouts, and Tera components in `components/`. Pages
@@ -27,7 +30,9 @@ To look at a build with a plain static server, give it the address:
   `{% <note kind="tip"> %}…{% </note> %}` (`kind` is `info`, `tip` or `warning`).
 - `static/`: the stylesheet, `site.js` (the hero conversation, copy buttons,
   search, the docs menu and the screenshot viewer), fonts, the logo and
-  `img/`, where every screenshot lives (`mise run screenshots` retakes them). The README uses them too.
+  `img/<version>/`, where every screenshot lives, named after the version it
+  shows (`data/screenshots.toml`; `mise run screenshots` retakes them and
+  updates it). The README uses them too.
   `og.png` is the 1200×630 picture link previews show; remake it when the
   look or the channel screenshot changes a lot.
 

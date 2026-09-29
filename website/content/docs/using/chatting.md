@@ -39,7 +39,7 @@ Press <kbd>Enter</kbd> to send and <kbd>Shift</kbd> <kbd>Enter</kbd> for a new l
 
 - **React** to a message with any emoji. The picker shows your favourites first; choose them in your [profile](@/docs/using/themes-and-profiles.md).
 - **Custom emoji**: anyone allowed to can add the team's own, and use them in messages and reactions.
-- **GIFs** come from the team's own library, or from GIPHY or KLIPY if an admin [sets them up](@/docs/community/server-settings.md).
+- **GIFs** come from the team's own library, or from GIPHY or KLIPY if an admin [sets them up](@/docs/community/server/server-settings.md).
 
 ## Files, images and links
 
@@ -58,4 +58,4 @@ A channel's managers can make it an announcement channel: only they start posts,
 
 ## Buttons from automations
 
-Messages from [automations](@/docs/integrations/automations.md) can have buttons under them, for approvals and the like. Clicking one tells the automation, which usually updates the message to say who clicked.
+Messages from [automations](@/docs/integrations/automations/_index.md) can have buttons under them, for approvals and the like. Clicking one tells the automation, which usually updates the message to say who clicked.

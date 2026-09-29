@@ -9,10 +9,13 @@
 //
 // CHROME defaults to Playwright's headless shell; any Chromium works. Node
 // is needed; Bun's fetch breaks Playwright's cookie handling.
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { chromium } from "playwright-core";
 
 const [base, out] = process.argv.slice(2);
+// The server's data directory, to give the statistics a few weeks of history.
+const database = process.env.SIDEPORCH_DATA ? `${process.env.SIDEPORCH_DATA}/sideporch.db` : null;
 const exe = process.env.CHROME;
 const fixtures = new URL("../tests/fixtures/gatus", import.meta.url).pathname;
 const browser = await chromium.launch(exe ? { executablePath: exe } : {});
@@ -97,6 +100,51 @@ for (const who of [grace, mo]) {
   await form(ada, `/c/${plans}/members`, { user_id: id });
 }
 
+// A month of everyday chat before today, for the statistics: posted now,
+// then moved into the past, so the conversations below stay the newest.
+if (database) {
+  const lines = {
+    [general]: ["Anyone up for lunch?", "The coffee machine is fixed ☕", "Reminder: all-hands at 3", "Welcome back, Rosa!", "Who's got the projector remote?", "Friday demo slots are open", "Great work on the release, everyone"],
+    [design]: ["New icon set is in Figma", "Can we try a warmer green?", "Feedback on the onboarding flow, anyone?", "Updated the type scale", "Dark mode mockups are up"],
+    [random]: ["Look at this cat 🐈", "Book club picks for next month?", "Best ramen in town, go", "Who else is running the 10k?", "Plant swap on Saturday 🌱"],
+    [deploys]: ["Staging is green", "Rolled back web, looking into it", "api deployed to production", "Migrations ran fine", "CDN cache purged"],
+  };
+  const people = [ada, grace, grace, mo, mo, mo, rosa, linus, linus];
+  const channels = [general, general, general, design, design, random, deploys];
+  // A steady pseudo-random sequence, so every run looks the same.
+  let seed = 7;
+  const next = (n) => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed % n;
+  };
+  for (let i = 0; i < 180; i += 1) {
+    const where = channels[next(channels.length)];
+    await say(people[next(people.length)], where, lines[where][next(lines[where].length)]);
+  }
+  for (const where of [general, design, random]) {
+    const html = await (await ada.request.get(`${base}/c/${where}`)).text();
+    const ids = [...html.slice(html.indexOf('id="messages"')).matchAll(/data-message-id="(\d+)"/g)].map((match) => Number(match[1]));
+    for (const [who, emoji] of [[ada, "heart"], [grace, "tada"], [mo, "+1"], [rosa, "joy"], [linus, "+1"], [mo, "heart"], [rosa, "tada"]]) {
+      for (const id of ids.filter(() => next(5) === 0)) await react(who, where, id, emoji);
+    }
+  }
+  // Spread them over the last four weeks: more on weekdays, and growing.
+  const ids = execFileSync("sqlite3", [database, "SELECT id FROM messages ORDER BY id"], { encoding: "utf8" }).trim().split("\n").map(Number);
+  const day = 86_400_000;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let sql = ".timeout 5000\nBEGIN;\n";
+  for (const id of ids) {
+    let daysAgo;
+    do {
+      daysAgo = 1 + Math.floor((1 - Math.sqrt(next(10_000) / 10_000)) * 28);
+    } while ([0, 6].includes(new Date(today.getTime() - daysAgo * day).getDay()) && next(4) > 0);
+    const at = today.getTime() - daysAgo * day + (8 + next(10)) * 3_600_000 + next(3_600_000);
+    sql += `UPDATE messages SET created_at = ${at} WHERE id = ${id};\nUPDATE reactions SET created_at = ${at + 600_000} WHERE message_id = ${id};\n`;
+  }
+  execFileSync("sqlite3", [database], { input: `${sql}COMMIT;\n` });
+}
+
 // #general: a release conversation with a thread, reactions and a poll.
 await say(ada, general, "Morning, porch! ☕ Standup notes are in the wiki as usual.");
 await say(grace, general, "The **v2.3 release notes** are ready for review 🎉\n\nHighlights: offline mode, faster search, and the new *Scheduled* page. Comments in the thread please 👇");
@@ -177,6 +225,59 @@ await say(grace, deploys, "!deploy api v2.3.0");
 await sleep(1500);
 await say(mo, deploys, "!deploy web v2.3.0");
 await sleep(1500);
+// More automations: a library, automations that use it, and kudos.
+await form(ada, "/automations", {
+  name: "weather",
+  kind: "library",
+  source: `-- Today's weather from Open-Meteo, which needs no key.
+local weather = {}
+
+function weather.today(city)
+  local found = sideporch.http.get("https://geocoding-api.open-meteo.com/v1/search?count=1&name=" .. city)
+  local place = found.json and found.json.results and found.json.results[1]
+  if not place then
+    return nil, "I don't know a place called " .. city .. "."
+  end
+  local forecast = sideporch.http.get(
+    "https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude=" .. place.latitude .. "&longitude=" .. place.longitude
+  )
+  return { place = place.name, temperature = forecast.json.current.temperature_2m }
+end
+
+return weather
+`,
+});
+await form(ada, "/automations", {
+  name: "Weather",
+  enabled: "on",
+  source: `local weather = require("weather")
+
+sideporch.command("weather", { description = "Today's weather", usage = "<city>" }, function(cmd)
+  local today, problem = weather.today(cmd.text ~= "" and cmd.text or "Berlin")
+  sideporch.respond(cmd, today and ("**" .. today.place .. "**: " .. today.temperature .. " °C") or problem)
+end)
+`,
+});
+await form(ada, "/automations", {
+  name: "Kudos",
+  enabled: "on",
+  source: `-- /kudos @name for what: thank someone, and keep count.
+sideporch.command("kudos", { description = "Thank someone" }, function(cmd)
+  local name = cmd.text:match("^@?([%w_%.%-]+)")
+  if not name or name == cmd.username then
+    return sideporch.respond(cmd, "Try \`/kudos @name for what\`")
+  end
+  local counts = sideporch.json.decode(sideporch.get("kudos") or "{}")
+  counts[name] = (counts[name] or 0) + 1
+  sideporch.set("kudos", sideporch.json.encode(counts))
+  print("kudos for", name, "now", counts[name])
+
+  local reason = cmd.text:match("for (.+)$") or "being great"
+  sideporch.post(cmd.channel, ":sparkles: @" .. name .. " for " .. reason)
+  sideporch.respond(cmd, "Sent! @" .. name .. " has " .. counts[name])
+end)
+`,
+});
 // Direct messages and a reminder for the sidebar.
 const moId = await mo.request.get(`${base}/home`).then((r) => r.text()).then((t) => t.match(/data-me="(\d+)"/)[1]);
 const dm = Number((await ada.request.get(`${base}/dm/${moId}`, { maxRedirects: 0 })).headers().location.split("/").pop());
@@ -210,6 +311,17 @@ await form(priya, "/signup", {
   website: "",
 });
 
+// Greets people who join from now on; created after the sign-ups above,
+// so its welcome doesn't end up in the channel screenshots.
+await form(ada, "/automations", {
+  name: "Welcome",
+  enabled: "on",
+  source: `sideporch.on("member_joined", function(event)
+  sideporch.post("general", "Welcome to the porch, **" .. event.user .. "**! :wave:")
+end)
+`,
+});
+
 // Screenshots.
 // A fixed-offset zone where it is about 10:00 now (Etc/GMT-N is UTC+N).
 const offset = ((10 - new Date().getUTCHours() + 36) % 24) - 12;
@@ -222,7 +334,7 @@ async function view(options = {}) {
     // Mid-morning, whenever this runs, so timestamps look like a working day.
     timezoneId: morning,
     locale: "en-GB",
-    storageState: await ada.storageState(),
+    storageState: await (options.as ?? ada).storageState(),
     isMobile: options.mobile ?? false,
     hasTouch: options.mobile ?? false,
   });
@@ -264,7 +376,14 @@ for (const dark of [false, true]) {
   const page = await view({ dark });
   await page.goto(`${base}/c/${general}/t/${notes}`);
   await page.waitForSelector("[data-poll]");
+  // Grace starts writing, so the channel shows who's typing.
+  const typist = await view({ as: grace });
+  await typist.goto(`${base}/c/${general}`);
+  await typist.waitForTimeout(800);
+  await typist.type("form[data-composer] textarea", "Booked for seven", { delay: 40 });
+  await page.waitForSelector("[data-typing] .typing-dots", { timeout: 5000 }).catch(() => errors.push("no typing indicator"));
   await shot(page, dark ? "channel-dark" : "channel");
+  await typist.close();
   await page.close();
 }
 {
@@ -289,6 +408,63 @@ for (const dark of [false, true]) {
   await page.goto(base + editor);
   await page.waitForTimeout(1200);
   await shot(page, "automation");
+  await page.close();
+}
+{
+  // The Automations page, two of them ticked for export.
+  const page = await view();
+  await page.goto(`${base}/automations`);
+  await page.check("input[aria-label='Export Kudos']");
+  await page.check("input[aria-label='Export Weather']");
+  await shot(page, "automation-list");
+  await page.close();
+}
+{
+  // A test run of a slash command.
+  const page = await view({ viewport: { width: 1360, height: 1000 } });
+  await page.goto(`${base}/automations`);
+  const kudos = await page.$eval("a:has-text('Kudos')", (link) => link.getAttribute("href"));
+  await page.goto(base + kudos);
+  await page.waitForSelector("[data-test-panel]:not([hidden])");
+  await page.selectOption("#test-kind", "command");
+  await page.fill("#test-command", "/kudos @linus for the release notes");
+  await page.click("[data-test-form] button[type=submit]");
+  await page.waitForSelector("[data-test-output] .test-summary", { timeout: 10000 }).catch(() => errors.push("no test result"));
+  await page.evaluate(() => document.querySelector("[data-test-panel]").scrollIntoView({ block: "start" }));
+  await page.evaluate(() => window.scrollBy(0, -16));
+  await shot(page, "automation-test");
+  await page.close();
+}
+{
+  // Importing a file: a new library, and an automation whose name is taken.
+  const bundle = {
+    format: "sideporch-automations",
+    version: 1,
+    sideporch: "0.6.0",
+    items: [
+      { kind: "library", name: "github_api", source: `local github = {}\n\nfunction github.get(path)\n  return sideporch.http.get("https://api.github.com" .. path, {\n    headers = { authorization = "Bearer " .. sideporch.secret("GITHUB_TOKEN") },\n  }).json\nend\n\nreturn github\n` },
+      {
+        kind: "automation",
+        name: "Deploy approvals",
+        description: "Asks #deploys before anything reaches production, and tells GitHub.",
+        source: `local github = require("github_api")\n\nsideporch.on("message", { channel = "deploys", pattern = "^!deploy" }, function(msg)\n  local latest = github.get("/repos/porch/app/releases/latest")\n  sideporch.reply(msg, "Deploy **" .. latest.tag_name .. "**?", { buttons = {\n    { label = "Approve", value = latest.tag_name, style = "primary" },\n  } })\nend)\n`,
+      },
+      { kind: "automation", name: "Standup", source: `sideporch.cron("0 9 * * mon-fri", function()\n  sideporch.post("general", "Good morning! What are you working on today?")\nend)\n` },
+    ],
+  };
+  const page = await view({ viewport: { width: 1360, height: 1100 } });
+  await page.goto(`${base}/automations/import`);
+  await page.fill("#import-text", JSON.stringify(bundle, null, 2));
+  await page.click("form button[type=submit]:has-text('Preview')");
+  await page.waitForSelector("[data-import-item]");
+  await shot(page, "automation-import");
+  await page.close();
+}
+{
+  // Statistics over the last 30 days.
+  const page = await view({ viewport: { width: 1360, height: 1180 } });
+  await page.goto(`${base}/statistics?period=30d`);
+  await shot(page, "statistics");
   await page.close();
 }
 {

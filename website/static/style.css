@@ -235,6 +235,20 @@ body.docs > footer { max-width: 84rem; }
 .docs-nav a[aria-current="page"] { background: var(--haint-2); color: var(--floor); font-weight: 700; }
 .docs-nav h2 a[aria-current="page"] { background: none; color: var(--fg); }
 .docs-home { font-weight: 700; }
+/* A group of pages inside a section, such as Integrations → Automations:
+   a disclosure that opens while the reader is inside it. */
+.docs-group summary {
+  display: flex; align-items: center; gap: 0.25rem; list-style: none; cursor: pointer;
+}
+.docs-group summary::-webkit-details-marker { display: none; }
+.docs-group summary::after {
+  content: ""; flex: none; width: 0.45rem; height: 0.45rem; margin-right: 0.6rem;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg); transition: transform 0.15s;
+}
+.docs-group details[open] > summary::after { transform: rotate(45deg); }
+.docs-group summary a { flex: 1; font-weight: 700; }
+.docs-group ul { margin: 0.1rem 0 0.3rem 0.65rem; padding-left: 0.5rem; border-left: 1px solid var(--border); }
 .docs-menu {
   display: none; align-items: center; gap: 0.5rem; justify-self: start;
   padding: 0.45rem 0.9rem; border: 1px solid var(--border); border-radius: 0.5rem;
@@ -317,6 +331,12 @@ body.docs > footer { max-width: 84rem; }
 .page-list li + li { margin-top: 0; }
 .page-list a { font-weight: 700; }
 .page-list span { display: block; color: var(--muted); font-size: 0.95rem; }
+.page-group { margin-top: 2.2rem; }
+.page-group h2 { margin-bottom: 0.2rem; }
+.page-group h2 a { color: var(--fg); text-decoration: none; }
+.page-group h2 a:hover { text-decoration: underline; }
+.page-group > p { margin-top: 0; color: var(--muted); }
+.card .card-group a { font-weight: 700; }
 
 .page-foot { max-width: 46rem; margin-top: 3.5rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
 .edit { font-size: 0.9rem; color: var(--muted); }
@@ -421,6 +441,9 @@ body.docs > footer { max-width: 84rem; }
 .shot { margin: 1.8rem 0 0; }
 .shot img, a[data-zoom] img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 0.7rem; }
 .shot figcaption { margin-top: 0.55rem; font-size: 0.92rem; color: var(--muted); }
+.shot-version { white-space: nowrap; font-size: 0.8rem; opacity: 0.75; }
+.shot-version:not(:first-child)::before { content: "· "; }
+.gallery-version { grid-column: 1 / -1; margin: 0; font-size: 0.85rem; color: var(--muted); text-align: center; }
 a[data-zoom] { position: relative; display: block; border-radius: 0.7rem; cursor: zoom-in; }
 a[data-zoom]::after {
   content: ""; position: absolute; right: 0.7rem; bottom: 0.7rem; width: 2.2rem; height: 2.2rem; border-radius: 50%;
