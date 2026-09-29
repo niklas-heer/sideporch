@@ -1,0 +1,64 @@
+{# The documentation's navigation, shared by docs pages and sections. #}
+
+{% component docs_sidebar(current: string) %}
+{% set docs = get_section(path="docs/_index.md") %}
+<nav class="docs-nav" id="docs-nav" aria-label="Documentation">
+  <a class="docs-home" href="{{ docs.permalink }}"{% if current == docs.permalink %} aria-current="page"{% endif %}>Overview</a>
+  {% for path in docs.subsections %}
+    {% set part = get_section(path=path) %}
+    <h2><a href="{{ part.permalink }}"{% if current == part.permalink %} aria-current="page"{% endif %}>{{ part.title }}</a></h2>
+    <ul>
+      {% for p in part.pages %}
+        <li><a href="{{ p.permalink }}"{% if current == p.permalink %} aria-current="page"{% endif %}>{{ p.title }}</a></li>
+      {% endfor %}
+    </ul>
+  {% endfor %}
+</nav>
+{% endcomponent docs_sidebar %}
+
+{% component docs_link(rel: string, item) %}
+<a class="{{ rel }}" rel="{{ rel }}" href="{{ item.permalink }}"><span>{{ "Previous" if rel == "prev" else "Next" }}</span>{{ item.title }}</a>
+{% endcomponent docs_link %}
+
+{% component docs_pager(current: string) %}
+{# Previous and next in the sidebar's order: the docs home, then each
+   section followed by its pages. #}
+{% set docs = get_section(path="docs/_index.md") %}
+{% set parts = [get_section(path=path) for path in docs.subsections] %}
+<nav class="pager" aria-label="Previous and next">
+{% for part in parts %}
+  {% set i = loop.index0 %}
+  {% set last_part = loop.last %}
+  {% if current == part.permalink %}
+    {% if i == 0 %}{{<docs_link rel="prev" item={docs} />}}
+    {% elif parts[i - 1].pages | length > 0 %}{{<docs_link rel="prev" item={parts[i - 1].pages[-1]} />}}
+    {% else %}{{<docs_link rel="prev" item={parts[i - 1]} />}}{% endif %}
+    {% if part.pages | length > 0 %}{{<docs_link rel="next" item={part.pages[0]} />}}
+    {% elif not last_part %}{{<docs_link rel="next" item={parts[i + 1]} />}}{% endif %}
+  {% endif %}
+  {% for p in part.pages %}
+    {% if current == p.permalink %}
+      {% if loop.first %}{{<docs_link rel="prev" item={part} />}}
+      {% else %}{{<docs_link rel="prev" item={part.pages[loop.index0 - 1]} />}}{% endif %}
+      {% if not loop.last %}{{<docs_link rel="next" item={part.pages[loop.index0 + 1]} />}}
+      {% elif not last_part %}{{<docs_link rel="next" item={parts[i + 1]} />}}{% endif %}
+    {% endif %}
+  {% endfor %}
+{% endfor %}
+</nav>
+{% endcomponent docs_pager %}
+
+{% component docs_toc(toc) %}
+{% if toc | length > 0 %}
+<nav class="toc" aria-label="On this page">
+  <h2>On this page</h2>
+  <ul>
+    {% for h in toc %}
+      <li><a href="{{ h.permalink | safe }}">{{ h.title }}</a>
+        {% if h.children | length > 0 %}<ul>{% for c in h.children %}<li><a href="{{ c.permalink | safe }}">{{ c.title }}</a></li>{% endfor %}</ul>{% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</nav>
+{% endif %}
+{% endcomponent docs_toc %}

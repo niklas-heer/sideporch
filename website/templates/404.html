@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Not found · Sideporch{% endblock %}
+{% block content %}
+<main class="lost">
+  <h1>This page isn't on the porch</h1>
+  <p>It may have moved when the documentation came to this site. Try searching, or start from one of these:</p>
+  <p class="lost-links">
+    <a href="{{ get_url(path='/') }}">Home</a>
+    <a href="{{ get_url(path='@/docs/_index.md') }}">Documentation</a>
+    <button type="button" class="nav-search" data-search-open hidden>Search</button>
+  </p>
+</main>
+{% endblock %}

@@ -1,8 +1,9 @@
 <nav class="bar" aria-label="Site">
-  <a class="brand" href="{{ get_url(path='/') }}"><img src="{{ get_url(path='logo.svg') }}" alt="" width="36" height="36">Sideporch</a>
+  <a class="brand" href="{{ get_url(path='@/_index.md') }}"><img src="{{ get_url(path='logo.svg') }}" alt="" width="36" height="36">Sideporch</a>
   <ul>
-    <li><a href="{{ get_url(path='/') }}#features">Features</a></li>
-    <li><a href="{{ get_url(path='/') }}#install">Install</a></li>
+    <li><a href="{{ get_url(path='@/_index.md') }}#features">Features</a></li>
+    <li><a href="{{ get_url(path='@/docs/_index.md') }}">Docs</a></li>
+    <li><a href="{{ get_url(path='@/_index.md') }}#install">Install</a></li>
     <li><a href="{{ config.extra.repo }}">GitHub</a></li>
   </ul>
 </nav>

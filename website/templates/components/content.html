@@ -1,0 +1,8 @@
+{# Components for use inside content pages. #}
+
+{% component note(kind: string = "info") %}
+<aside class="callout callout-{{ kind }}">
+  <p class="callout-label">{{ "Careful" if kind == "warning" else ("Tip" if kind == "tip" else "Note") }}</p>
+  {{ body | markdown | safe }}
+</aside>
+{% endcomponent note %}

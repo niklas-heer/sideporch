@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ section.title }} · Sideporch docs{% endblock %}
+{% block body_class %}docs{% endblock %}
+{% block content %}
+{% set home = section.path == "/docs/" %}
+<div class="docs-shell">
+  <button class="docs-menu" type="button" aria-controls="docs-nav" aria-expanded="false" hidden>Menu</button>
+  {{<docs_sidebar current={section.permalink} />}}
+  <main class="docs-main" id="main">
+    <article class="prose" data-pagefind-body>
+      {% if not home %}<p class="crumb" data-pagefind-ignore><a href="{{ get_url(path='@/docs/_index.md') }}">Documentation</a></p>{% endif %}
+      <h1>{{ section.title }}</h1>
+      {% if section.description %}<p class="lede-docs">{{ section.description }}</p>{% endif %}
+      {{ section.content | safe }}
+      {% if home %}
+        <div class="cards" data-pagefind-ignore>
+          {% for path in section.subsections %}
+            {% set part = get_section(path=path) %}
+            <section class="card">
+              <h2><a href="{{ part.permalink }}">{{ part.title }}</a></h2>
+              <p>{{ part.description }}</p>
+              <ul>{% for p in part.pages %}<li><a href="{{ p.permalink }}">{{ p.title }}</a></li>{% endfor %}</ul>
+            </section>
+          {% endfor %}
+        </div>
+      {% else %}
+        <ul class="page-list" data-pagefind-ignore>
+          {% for p in section.pages %}
+            <li><a href="{{ p.permalink }}">{{ p.title }}</a>{% if p.description %}<span>{{ p.description }}</span>{% endif %}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </article>
+    {% if not home %}
+    <footer class="page-foot">
+      <a class="edit" href="{{ config.extra.edit_base }}{{ section.relative_path }}">Edit this page on GitHub</a>
+      {{<docs_pager current={section.permalink} />}}
+    </footer>
+    {% endif %}
+  </main>
+</div>
+{% endblock %}
