@@ -8,7 +8,10 @@ use super::{
 use std::collections::HashMap;
 
 use crate::{
-    automations::{KIND_LIBRARY, Triggers, api},
+    automations::{
+        KIND_LIBRARY, Triggers, api,
+        bundle::{Action, Bundle, Plan},
+    },
     icons::{self, icon},
     store::{Automation, AutomationRun, AutomationVersion},
 };
@@ -17,6 +20,7 @@ pub fn list_page(
     shell: &Shell<'_>,
     automations: &[Automation],
     triggers: &HashMap<i64, Triggers>,
+    imported: Option<usize>,
 ) -> Markup {
     let (libraries, scripts): (Vec<&Automation>, Vec<&Automation>) = automations
         .iter()
@@ -31,18 +35,44 @@ pub fn list_page(
                 "Lua scripts that react to messages, reactions, new members and channels, answer slash commands and webhooks, run on schedules, and call APIs. "
                 "Libraries hold code that automations share with " code { "require" } "."
             }
+            @if let Some(count) = imported {
+                p role="status" class="mb-5 rounded-lg border border-line bg-haint-2 px-3 py-2 text-sm text-floor dark:border-night-line dark:bg-floor-2 dark:text-haint-2" {
+                    @if count == 0 {
+                        "Nothing was imported."
+                    } @else {
+                        "Imported " (count) @if count == 1 { " script" } @else { " scripts" } ", switched off. "
+                        "Open each automation, read what it does, add the secrets it needs, and switch it on."
+                    }
+                }
+            }
             div class="mb-6 flex flex-wrap items-center gap-2" {
                 a href="/automations/new" class="btn" { (icon(icons::PLUS, "h-5 w-5")) "New automation" }
                 a href="/automations/new?kind=library" class="btn-quiet" { (icon(icons::PLUS, "h-4 w-4")) "New library" }
+                span class="ml-auto flex flex-wrap gap-2" {
+                    a href="/automations/import" class="btn-quiet" { (icon(icons::UPLOAD_SIMPLE, "h-4 w-4")) "Import" }
+                    @if !automations.is_empty() {
+                        button type="submit" form="export-form" class="btn-quiet" title="Export the ticked automations, or all of them" {
+                            (icon(icons::DOWNLOAD_SIMPLE, "h-4 w-4")) "Export"
+                        }
+                    }
+                }
             }
+            // The ticks below belong to this form, so Export sends them.
+            form id="export-form" method="get" action="/automations/export" {}
             @if scripts.is_empty() {
                 p class="text-muted dark:text-haint" { "No automations yet." }
             } @else {
+                p class="mb-2 text-sm text-muted dark:text-haint" {
+                    "Tick automations to export just those, with the libraries they need; otherwise Export takes everything. "
+                    a href="https://sideporch.app/docs/integrations/automations/sharing/" class="underline" { "About sharing" }
+                }
                 ul class="space-y-2" {
                     @for automation in &scripts {
-                        li {
+                        li class="flex items-center gap-2" {
+                            input type="checkbox" name="id" value=(automation.id) form="export-form"
+                                aria-label={ "Export " (automation.name) } class="h-4 w-4 shrink-0 accent-floor";
                             a href={ "/automations/" (automation.id) }
-                                class="flex items-start gap-3 rounded-xl border border-line px-4 py-3 hover:border-floor-3 dark:border-night-line" {
+                                class="flex min-w-0 flex-1 items-start gap-3 rounded-xl border border-line px-4 py-3 hover:border-floor-3 dark:border-night-line" {
                                 (icon(icons::LIGHTNING, "mt-0.5 h-5 w-5 shrink-0 text-floor-3 dark:text-haint"))
                                 span class="min-w-0 flex-1" {
                                     span class="block truncate font-semibold" { (automation.name) }
@@ -63,9 +93,11 @@ pub fn list_page(
             } @else {
                 ul class="space-y-2" {
                     @for library in &libraries {
-                        li {
+                        li class="flex items-center gap-2" {
+                            input type="checkbox" name="id" value=(library.id) form="export-form"
+                                aria-label={ "Export " (library.name) } class="h-4 w-4 shrink-0 accent-floor";
                             a href={ "/automations/" (library.id) }
-                                class="flex items-center gap-3 rounded-xl border border-line px-4 py-3 hover:border-floor-3 dark:border-night-line" {
+                                class="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-line px-4 py-3 hover:border-floor-3 dark:border-night-line" {
                                 (icon(icons::BOOKS, "h-5 w-5 shrink-0 text-floor-3 dark:text-haint"))
                                 span class="min-w-0 flex-1" {
                                     code class="block truncate font-mono font-semibold" { "require(\"" (library.name) "\")" }
@@ -252,6 +284,12 @@ fn script_form(editor: &Editor<'_>, action: &str) -> Markup {
             div class="flex flex-wrap gap-2" {
                 button type="submit" class="btn" { @if editor.library { "Save library" } @else { "Save automation" } }
                 a href="/automations" class="btn-quiet" { "Back to automations" }
+                @if let Some(id) = editor.id {
+                    a href={ "/automations/export?id=" (id) } class="btn-quiet" download
+                        title={ "Download a file to import on another server" @if !editor.library { ", with the libraries it needs" } } {
+                        (icon(icons::DOWNLOAD_SIMPLE, "h-4 w-4")) "Export"
+                    }
+                }
             }
         }
         @if let Some(id) = editor.id {
@@ -515,4 +553,171 @@ fn duration(micros: i64) -> String {
             .unwrap_or_default();
         format!("{millis}.{tenths} ms")
     }
+}
+
+/// Where an import starts: a file to upload, or its text pasted.
+pub fn import_page(shell: &Shell<'_>, error: Option<&str>) -> Markup {
+    panel_page(
+        "Import automations",
+        shell,
+        &html! { "Import automations" },
+        &html! {
+            (super::settings::tabs("/automations"))
+            (form_error(error))
+            p class="mb-5 text-muted dark:text-haint" {
+                "Bring in automations and libraries exported from another Sideporch server. "
+                "You'll see what the file holds before anything is added, and imported automations start switched off."
+            }
+            form method="post" action="/automations/import" enctype="multipart/form-data" class="max-w-xl space-y-5" {
+                div {
+                    label for="import-file" class="field-label" { "File" }
+                    input id="import-file" name="file" type="file" accept=".json,application/json" class="text-sm";
+                    p class="mt-1 text-sm text-muted dark:text-haint" { "A " code { ".sideporch.json" } " file from Export." }
+                }
+                div {
+                    label for="import-text" class="field-label" { "Or paste it" }
+                    textarea id="import-text" name="bundle" rows="8" spellcheck="false" class="field font-mono text-xs"
+                        placeholder="{ \"format\": \"sideporch-automations\", … }" {}
+                }
+                div class="flex flex-wrap gap-2" {
+                    button type="submit" class="btn" { (icon(icons::UPLOAD_SIMPLE, "h-5 w-5")) "Preview" }
+                    a href="/automations" class="btn-quiet" { "Back to automations" }
+                }
+            }
+        },
+    )
+}
+
+fn plan_badge(plan: &Plan) -> Markup {
+    let (text, tone) = match (plan.existing, plan.unchanged) {
+        (None, _) => (
+            "New",
+            "bg-haint-2 text-floor dark:bg-floor-2 dark:text-haint-2",
+        ),
+        (Some(_), true) => (
+            "Already here, unchanged",
+            "bg-screen text-muted dark:bg-night-2 dark:text-haint",
+        ),
+        (Some(_), false) => (
+            if plan.item.is_library() {
+                "This server already has a library with this name"
+            } else {
+                "This server already has an automation with this name"
+            },
+            "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200",
+        ),
+    };
+    html! { span class={ "rounded px-2 text-xs font-semibold " (tone) } { (text) } }
+}
+
+const fn action_label(action: Action, library: bool) -> &'static str {
+    match action {
+        Action::Import => "Import, switched off",
+        Action::Replace if library => "Replace the library here",
+        Action::Replace => "Replace the one here, switched off",
+        Action::Copy => "Import as a copy, switched off",
+        Action::Skip => "Skip",
+    }
+}
+
+/// What importing a file would do, with a choice per item.
+pub fn import_preview(shell: &Shell<'_>, json: &str, bundle: &Bundle, plans: &[Plan]) -> Markup {
+    let missing: std::collections::BTreeSet<&str> = plans
+        .iter()
+        .flat_map(|plan| plan.missing_secrets.iter().map(String::as_str))
+        .collect();
+    panel_page(
+        "Import automations",
+        shell,
+        &html! { "Import automations" },
+        &html! {
+            (super::settings::tabs("/automations"))
+            p class="mb-2 text-muted dark:text-haint" {
+                "The file holds " (plans.len()) @if plans.len() == 1 { " script" } @else { " scripts" }
+                @if !bundle.sideporch.is_empty() { ", exported from Sideporch " (bundle.sideporch) } ". "
+                "Read each one before you switch it on: automations can post, react, and call other services."
+            }
+            @if let Some(description) = &bundle.description {
+                p class="mb-2 text-sm" { (description) }
+            }
+            @if !missing.is_empty() {
+                p class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200" {
+                    "Add these secrets under " a href="/settings/secrets" class="underline" { "Secrets" } " before switching them on: "
+                    @for (index, name) in missing.iter().enumerate() {
+                        @if index > 0 { ", " }
+                        code { (name) }
+                    }
+                }
+            }
+            form method="post" action="/automations/import/confirm" class="space-y-4" {
+                textarea name="bundle" hidden { (json) }
+                ol class="space-y-3" {
+                    @for (index, plan) in plans.iter().enumerate() {
+                        li class="rounded-xl border border-line p-4 dark:border-night-line" data-import-item {
+                            div class="flex flex-wrap items-center gap-2" {
+                                @if plan.item.is_library() {
+                                    (icon(icons::BOOKS, "h-5 w-5 shrink-0 text-floor-3 dark:text-haint"))
+                                } @else {
+                                    (icon(icons::LIGHTNING, "h-5 w-5 shrink-0 text-floor-3 dark:text-haint"))
+                                }
+                                span class="font-semibold" { (plan.item.name) }
+                                @if plan.item.is_library() { span class="text-xs text-muted dark:text-haint" { "library" } }
+                                (plan_badge(plan))
+                            }
+                            @if let Some(description) = &plan.item.description {
+                                p class="mt-1 text-sm" { (description) }
+                            }
+                            div class="mt-2 space-y-1 text-sm text-muted dark:text-haint" {
+                                @if !plan.item.secrets.is_empty() {
+                                    p {
+                                        "Reads secrets: "
+                                        @for (index, name) in plan.item.secrets.iter().enumerate() {
+                                            @if index > 0 { ", " }
+                                            code { (name) }
+                                            @if plan.missing_secrets.contains(name) { span class="text-amber-700 dark:text-amber-300" { " (not set here)" } }
+                                        }
+                                    }
+                                }
+                                @if !plan.item.requires.is_empty() {
+                                    p {
+                                        "Loads libraries: "
+                                        @for (index, name) in plan.item.requires.iter().enumerate() {
+                                            @if index > 0 { ", " }
+                                            code { (name) }
+                                            @if plan.missing_libraries.contains(name) { span class="text-red-700 dark:text-red-300" { " (missing)" } }
+                                        }
+                                    }
+                                }
+                                @if plan.errors > 0 || plan.warnings > 0 {
+                                    p {
+                                        "The linter found "
+                                        @if plan.errors > 0 { span class="text-red-700 dark:text-red-300" { (plan.errors) @if plan.errors == 1 { " error" } @else { " errors" } } }
+                                        @if plan.errors > 0 && plan.warnings > 0 { " and " }
+                                        @if plan.warnings > 0 { (plan.warnings) @if plan.warnings == 1 { " warning" } @else { " warnings" } }
+                                        "; the editor shows where."
+                                    }
+                                }
+                            }
+                            details class="mt-2" {
+                                summary class="cursor-pointer text-sm font-semibold" { "Read the script" }
+                                pre class="mt-2 max-h-80 overflow-auto rounded-lg bg-screen p-3 font-mono text-xs dark:bg-night-2" { code { (plan.item.source) } }
+                            }
+                            div class="mt-3" {
+                                label for={ "action-" (index) } class="field-label" { "Import" }
+                                select id={ "action-" (index) } name={ "action_" (index) } class="field max-w-sm" {
+                                    @for action in plan.choices() {
+                                        option value=(action.key()) { (action_label(action, plan.item.is_library())) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                div class="flex flex-wrap gap-2" {
+                    button type="submit" class="btn" { "Import" }
+                    a href="/automations/import" class="btn-quiet" { "Choose another file" }
+                }
+            }
+        },
+    )
 }

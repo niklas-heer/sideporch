@@ -13,6 +13,7 @@
 //! secret values replaced.
 
 pub mod api;
+pub mod bundle;
 pub mod cron;
 pub mod events;
 pub mod http;
@@ -53,6 +54,8 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub const KIND_AUTOMATION: &str = "automation";
 pub const KIND_LIBRARY: &str = "library";
+/// Longest script Sideporch accepts, in bytes.
+pub const MAX_SOURCE_BYTES: usize = 100_000;
 
 /// Library names: what `require` takes.
 pub fn valid_library_name(name: &str) -> bool {

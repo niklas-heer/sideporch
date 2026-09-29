@@ -663,3 +663,136 @@ async fn ai_speaks_anthropics_api() {
             .contains("No AI provider is connected yet")
     );
 }
+
+const GREETINGS: &str = "local greetings = {}\n\nfunction greetings.hello(name)\n  return \"Hello, \" .. name\nend\n\nreturn greetings\n";
+const WEATHER: &str = "local greetings = require(\"greetings\")\n\nsideporch.command(\"hi\", function(cmd)\n  local key = sideporch.secret(\"WEATHER_KEY\")\n  sideporch.respond(cmd, greetings.hello(cmd.user.name) .. (key and \"\" or \"!\"))\nend)\n";
+
+/// Starts an import: the preview of `bundle`.
+async fn preview_import(admin: &Browser, bundle: &str) -> reqwest::Response {
+    admin
+        .client
+        .post(admin.url("/automations/import"))
+        .header("cookie", &admin.cookie)
+        .multipart(reqwest::multipart::Form::new().text("bundle", bundle.to_owned()))
+        .send()
+        .await
+        .unwrap()
+}
+
+/// The list entry of the automation called `name`.
+fn listed<'a>(list: &'a str, name: &str) -> &'a str {
+    between(list, &format!(">{name}<"), "</li>")
+}
+
+#[tokio::test]
+async fn automations_travel_between_servers_as_bundles() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let library = admin
+        .post(
+            "/automations",
+            &[
+                ("name", "greetings"),
+                ("source", GREETINGS),
+                ("kind", "library"),
+            ],
+        )
+        .await;
+    assert_eq!(library.status(), StatusCode::SEE_OTHER);
+    let weather = save(&admin, "Weather", WEATHER).await;
+    save(
+        &admin,
+        "Welcome",
+        "sideporch.on(\"member_joined\", function(event)\n  sideporch.post(\"general\", \"Welcome!\")\nend)\n",
+    )
+    .await;
+
+    // One automation brings the library it needs, and names its secrets
+    // but never their values, its webhook or its data.
+    let id = weather.trim_start_matches("/automations/");
+    let response = admin.get(&format!("/automations/export?id={id}")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response.headers()["content-disposition"]
+            .to_str()
+            .unwrap()
+            .starts_with("attachment; filename=\"weather.sideporch.json\"")
+    );
+    let text = response.text().await.unwrap();
+    assert!(!text.contains("/hooks/"));
+    let bundle: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(bundle["format"], "sideporch-automations");
+    assert_eq!(bundle["version"], 1);
+    let items = bundle["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["kind"], "library");
+    assert_eq!(items[0]["name"], "greetings");
+    assert_eq!(items[1]["name"], "Weather");
+    assert_eq!(items[1]["secrets"], json!(["WEATHER_KEY"]));
+    assert_eq!(items[1]["requires"], json!(["greetings"]));
+    let all: Value = admin.get("/automations/export").await.json().await.unwrap();
+    assert_eq!(all["items"].as_array().unwrap().len(), 3);
+
+    // Another server previews the bundle before importing anything.
+    let other = start().await;
+    let theirs = common::admin(&other).await;
+    let old = save(&theirs, "Weather", "print(\"the old one\")\n").await;
+    let preview = preview_import(&theirs, &text).await;
+    assert_eq!(preview.status(), StatusCode::OK);
+    let preview = preview.text().await.unwrap();
+    assert!(preview.contains("WEATHER_KEY"), "{preview}");
+    assert!(between(&preview, ">greetings<", "</li>").contains("New"));
+    assert!(between(&preview, ">Weather<", "</li>").contains("already has"));
+    assert!(!theirs.page("/automations").await.contains("greetings"));
+
+    // Imported as a copy, switched off until someone reviews it.
+    let done = theirs
+        .post(
+            "/automations/import/confirm",
+            &[
+                ("bundle", &text),
+                ("action_0", "import"),
+                ("action_1", "copy"),
+            ],
+        )
+        .await;
+    assert_eq!(done.status(), StatusCode::SEE_OTHER);
+    let list = theirs.page(&location(&done)).await;
+    assert!(list.contains("Imported 2"), "{list}");
+    assert!(listed(&list, "Weather (imported)").contains(">Off<"));
+    assert!(listed(&list, "Weather").contains(">On<"));
+    assert!(unescape(&list).contains("require(\"greetings\")"));
+
+    // Replacing takes over the existing one, and switches it off too.
+    theirs
+        .post(
+            "/automations/import/confirm",
+            &[
+                ("bundle", &text),
+                ("action_0", "skip"),
+                ("action_1", "replace"),
+            ],
+        )
+        .await;
+    let list = theirs.page("/automations").await;
+    assert!(listed(&list, "Weather").contains(">Off<"));
+    let editor = theirs.page(&old).await;
+    assert!(unescape(&editor).contains("WEATHER_KEY"));
+
+    // Anything else is refused with a reason.
+    for (bundle, reason) in [
+        ("not json", "isn't a Sideporch automation file"),
+        (
+            r#"{"format":"something-else","version":1,"items":[]}"#,
+            "isn't a Sideporch automation file",
+        ),
+        (
+            r#"{"format":"sideporch-automations","version":2,"items":[]}"#,
+            "newer Sideporch",
+        ),
+    ] {
+        let refused = preview_import(&theirs, bundle).await;
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        assert!(refused.text().await.unwrap().contains(reason), "{bundle}");
+    }
+}

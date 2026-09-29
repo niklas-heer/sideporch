@@ -35,7 +35,6 @@ use crate::{
 #[allow(clippy::literal_string_with_formatting_args)]
 const AUTOMATION_URI_TEMPLATE: &str = "sideporch://automations/{id}";
 const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
-const MAX_SOURCE_BYTES: usize = 100_000;
 
 /// Who is calling: the token's admin and the token's name.
 struct Caller {
@@ -538,7 +537,7 @@ fn text(value: &Value) -> Value {
 }
 
 fn check_size(source: &str) -> Result<(), ToolError> {
-    if source.len() > MAX_SOURCE_BYTES {
+    if source.len() > automations::MAX_SOURCE_BYTES {
         return Err(failed("The script is larger than 100 kB."));
     }
     Ok(())

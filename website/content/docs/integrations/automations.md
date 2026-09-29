@@ -57,6 +57,12 @@ API tokens live under **Automations → Secrets**, encrypted in the database wit
 
 A library is shared code, for example a client for an API, that automations load with `require("name")`. Write them next to automations; the `weather` example above uses one.
 
+## Sharing automations
+
+**Export** on the Automations page downloads a `.sideporch.json` file with the automations you tick, or all of them, plus the libraries they need. The file holds the scripts and the names of the secrets they read; never secret values, stored data, run logs or webhook URLs. The editor has an **Export** button for a single automation.
+
+**Import** on another server reads such a file and shows what it holds before adding anything: which scripts are new, which have the same name as one already there (skip it, replace it, or import a copy), which secrets are still missing, and what the linter found. Imported automations start switched off, so you read them, add their secrets, and then switch them on.
+
 ## Limits and safety
 
 Each automation runs on its own thread, in a sandbox without file or process access. Each run may execute a limited number of instructions, use limited memory, and post and request only so much; the [API reference](@/docs/integrations/automation-api.md) has the numbers.

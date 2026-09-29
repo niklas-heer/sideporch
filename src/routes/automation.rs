@@ -22,8 +22,8 @@ use crate::{
     views::{self, Shell},
 };
 
-/// Longest script Sideporch accepts, in bytes.
-pub const MAX_SOURCE_BYTES: usize = 100_000;
+mod sharing;
+
 /// Runs shown in the editor.
 const SHOWN_RUNS: i64 = 30;
 
@@ -47,6 +47,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/hooks/automations/{token}", any(hook))
         .route("/hooks/automations/{token}/{*path}", any(hook_path))
+        .merge(sharing::router())
 }
 
 const fn require_admin(user: &CurrentUser) -> AppResult<()> {
@@ -57,7 +58,17 @@ const fn require_admin(user: &CurrentUser) -> AppResult<()> {
     }
 }
 
-async fn list(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
+#[derive(Deserialize)]
+struct ListQuery {
+    /// How many automations an import just added.
+    imported: Option<usize>,
+}
+
+async fn list(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Query(query): Query<ListQuery>,
+) -> AppResult<Markup> {
     require_admin(&user)?;
     let list = state.db.call(|conn| store::automations(conn)).await?;
     let sidebar = shell_data(&state, user.id).await?;
@@ -67,7 +78,12 @@ async fn list(user: CurrentUser, State(state): State<AppState>) -> AppResult<Mar
         current: None,
     };
     let triggers = state.automations.triggers();
-    Ok(views::automations::list_page(&shell, &list, &triggers))
+    Ok(views::automations::list_page(
+        &shell,
+        &list,
+        &triggers,
+        query.imported,
+    ))
 }
 
 async fn render_editor(
@@ -178,15 +194,24 @@ pub struct Change {
 /// Checks and saves a change, then restarts the automations. Returns the
 /// automation's id, or why the change was refused.
 pub async fn apply_change(state: &AppState, change: Change) -> AppResult<Result<i64, String>> {
+    let saved = save_change(state, change).await?;
+    if saved.is_ok() {
+        state.automations.reload(state).await?;
+    }
+    Ok(saved)
+}
+
+/// Checks and saves a change without restarting the automations.
+async fn save_change(state: &AppState, change: Change) -> AppResult<Result<i64, String>> {
     let name: String = change.name.trim().chars().take(80).collect();
     if name.is_empty() {
         return Ok(Err("Give the automation a name.".to_owned()));
     }
-    if change.source.len() > MAX_SOURCE_BYTES {
+    if change.source.len() > automations::MAX_SOURCE_BYTES {
         return Ok(Err("Keep the script under 100 kB.".to_owned()));
     }
     let now = now_ms();
-    let saved = state
+    state
         .db
         .call(move |conn| {
             let (kind, enabled) = match change.id {
@@ -224,11 +249,7 @@ pub async fn apply_change(state: &AppState, change: Change) -> AppResult<Result<
                 now,
             )?))
         })
-        .await?;
-    if saved.is_ok() {
-        state.automations.reload(state).await?;
-    }
-    Ok(saved)
+        .await
 }
 
 async fn save(
@@ -380,7 +401,7 @@ struct SourceInput {
 }
 
 fn check_size(source: &str) -> AppResult<()> {
-    if source.len() > MAX_SOURCE_BYTES {
+    if source.len() > automations::MAX_SOURCE_BYTES {
         return Err(AppError::bad_request("The script is larger than 100 kB."));
     }
     Ok(())
