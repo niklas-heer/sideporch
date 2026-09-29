@@ -1,16 +1,28 @@
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension as _, Transaction, params};
 
 use crate::error::{AppError, AppResult};
 
+/// One step of the schema's history: SQL, or Rust code for changes SQL
+/// can't express, such as rebuilding the search index.
+enum Migration {
+    Sql(&'static str),
+    #[expect(
+        dead_code,
+        reason = "the first code migration comes with the search index rebuild"
+    )]
+    Code(fn(&Transaction<'_>) -> AppResult<()>),
+}
+
 /// Schema migrations, applied in order. `PRAGMA user_version` records how
 /// many have run, so released entries must never change; append new ones.
-const MIGRATIONS: &[&str] = &[
-    r"
+const MIGRATIONS: &[Migration] = &[
+    Migration::Sql(
+        r"
 CREATE TABLE users (
     id INTEGER PRIMARY KEY,
     username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -83,7 +95,9 @@ CREATE TABLE reads (
     PRIMARY KEY (user_id, channel_id)
 );
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 -- Full-text search. Rows are written by the application (message text,
 -- attachment text and file names); the trigger keeps deletions in sync.
 CREATE VIRTUAL TABLE messages_fts USING fts5(content, tokenize = 'unicode61 remove_diacritics 2');
@@ -159,7 +173,9 @@ CREATE TABLE automation_data (
 
 ALTER TABLE messages ADD COLUMN automation_id INTEGER REFERENCES automations(id) ON DELETE SET NULL;
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 ALTER TABLE automations ADD COLUMN hook_token TEXT;
 UPDATE automations SET hook_token = lower(hex(randomblob(20)));
 CREATE UNIQUE INDEX automations_by_hook_token ON automations (hook_token);
@@ -204,7 +220,9 @@ CREATE TABLE api_tokens (
     last_used_at INTEGER
 );
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 ALTER TABLE automations ADD COLUMN kind TEXT NOT NULL DEFAULT 'automation';
 
 CREATE TABLE secrets (
@@ -215,7 +233,9 @@ CREATE TABLE secrets (
     updated_at INTEGER NOT NULL
 );
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 ALTER TABLE files ADD COLUMN sha256 TEXT;
 CREATE INDEX files_by_sha256 ON files (sha256);
 
@@ -228,7 +248,9 @@ ALTER TABLE users ADD COLUMN favorite_emoji TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE messages ADD COLUMN gif TEXT;
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 CREATE TABLE gif_library (
     id INTEGER PRIMARY KEY,
     file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
@@ -242,7 +264,9 @@ CREATE TABLE gif_library (
 );
 CREATE INDEX gif_library_by_file ON gif_library (file_id);
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 ALTER TABLE messages ADD COLUMN edited_at INTEGER;
 ALTER TABLE messages ADD COLUMN deleted_at INTEGER;
 ALTER TABLE messages ADD COLUMN pinned_at INTEGER;
@@ -256,7 +280,9 @@ CREATE TABLE saved_messages (
     PRIMARY KEY (user_id, message_id)
 );
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 ALTER TABLE users ADD COLUMN deactivated_at INTEGER;
 
 CREATE TABLE password_resets (
@@ -267,7 +293,9 @@ CREATE TABLE password_resets (
     expires_at INTEGER NOT NULL
 );
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 ALTER TABLE channels ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
 
 -- Per person: `hidden` for a public channel they left, `muted` for one
@@ -280,7 +308,9 @@ CREATE TABLE channel_prefs (
     PRIMARY KEY (user_id, channel_id)
 );
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 -- Mentions and thread replies for each person's Activity page.
 CREATE TABLE activity (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -291,7 +321,9 @@ CREATE TABLE activity (
 CREATE INDEX activity_by_message ON activity (message_id);
 ALTER TABLE users ADD COLUMN activity_seen_id INTEGER NOT NULL DEFAULT 0;
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 -- The browser reports each person's time zone, for reading `at 3pm`.
 ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC';
 
@@ -316,16 +348,22 @@ CREATE TABLE scheduled_messages (
 );
 CREATE INDEX scheduled_messages_due ON scheduled_messages (send_at);
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 ALTER TABLE messages ADD COLUMN preview TEXT;
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 -- Where an imported message came from, so imports never add it twice.
 ALTER TABLE messages ADD COLUMN import_id TEXT;
 CREATE UNIQUE INDEX messages_by_import_id ON messages (import_id) WHERE import_id IS NOT NULL;
 ALTER TABLE messages ADD COLUMN slack_format INTEGER NOT NULL DEFAULT 0;
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 -- A poll's question and options; votes are one per person.
 ALTER TABLE messages ADD COLUMN poll TEXT;
 CREATE TABLE poll_votes (
@@ -354,7 +392,9 @@ CREATE TABLE outgoing_webhooks (
 );
 CREATE INDEX outgoing_webhooks_by_channel ON outgoing_webhooks (channel_id);
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 -- Who may start threads, reply and react in a channel: `everyone`, or
 -- `managers` for announcement channels. Admins always manage.
 ALTER TABLE channels ADD COLUMN post_policy TEXT NOT NULL DEFAULT 'everyone';
@@ -368,13 +408,21 @@ CREATE TABLE channel_managers (
 INSERT INTO channel_managers (channel_id, user_id)
     SELECT id, created_by FROM channels WHERE kind = 'public' AND created_by IS NOT NULL;
 ",
-    r"
+    ),
+    Migration::Sql(
+        r"
 -- A theme name and `system`, `light` or `dark`; empty means the
 -- instance's default.
 ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN appearance TEXT NOT NULL DEFAULT '';
 ",
+    ),
 ];
+
+/// The schema version this build writes: one per migration.
+pub fn schema_version() -> i64 {
+    i64::try_from(MIGRATIONS.len()).unwrap_or(i64::MAX)
+}
 
 /// The `SQLite` database. rusqlite is synchronous, so every query runs on
 /// Tokio's blocking pool behind one connection.
@@ -384,9 +432,23 @@ pub struct Db {
 }
 
 impl Db {
+    /// Opens the database and brings its schema up to date. Before changing
+    /// a database an older version wrote, it keeps a copy in
+    /// `upgrade-backups/` next to it.
     pub fn open(path: &Path) -> AppResult<Self> {
         let mut conn = connect(path)?;
-        migrate(&mut conn)?;
+        let applied = user_version(&conn)?;
+        check_not_newer(&conn, applied)?;
+        if applied > 0 && applied < schema_version() {
+            let kept = keep_copy(&conn, path, applied)?;
+            tracing::info!(
+                from = applied,
+                to = schema_version(),
+                copy = %kept.display(),
+                "upgrading the database; kept a copy of it first"
+            );
+        }
+        migrate(&mut conn, schema_version())?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -421,16 +483,174 @@ pub fn connect(path: &Path) -> AppResult<Connection> {
     Ok(conn)
 }
 
-fn migrate(conn: &mut Connection) -> AppResult<()> {
-    let applied: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+fn user_version(conn: &Connection) -> AppResult<i64> {
+    Ok(conn.pragma_query_value(None, "user_version", |row| row.get(0))?)
+}
+
+/// Which Sideporch release applied each schema version, so a database
+/// from a newer release can name it. Not part of the numbered schema.
+const HISTORY: &str = "CREATE TABLE IF NOT EXISTS schema_history (
+    version INTEGER PRIMARY KEY,
+    app_version TEXT NOT NULL,
+    applied_at INTEGER NOT NULL
+)";
+
+/// Refuses a database written by a newer Sideporch: this build would not
+/// know its tables, and could damage data it doesn't understand.
+fn check_not_newer(conn: &Connection, applied: i64) -> AppResult<()> {
+    if applied <= schema_version() {
+        return Ok(());
+    }
+    let writer: Option<String> = conn
+        .query_row(
+            "SELECT app_version FROM schema_history WHERE version = ?1",
+            [applied],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let writer = writer.map_or_else(
+        || "a newer Sideporch".to_owned(),
+        |version| format!("Sideporch {version}"),
+    );
+    Err(AppError::internal(format!(
+        "this database was written by {writer} (schema {applied}), but this is Sideporch {} (schema {}). \
+         Run {writer} or later, or restore a backup made with this version; going back would lose data.",
+        env!("CARGO_PKG_VERSION"),
+        schema_version(),
+    )))
+}
+
+/// How many pre-upgrade copies to keep.
+const KEEP_COPIES: usize = 3;
+pub const UPGRADE_DIR: &str = "upgrade-backups";
+
+/// Copies the database into `upgrade-backups/` before migrating it, and
+/// removes all but the newest few copies. Uploaded files are stored by
+/// content and never changed by migrations, so the database is enough.
+fn keep_copy(conn: &Connection, path: &Path, applied: i64) -> AppResult<PathBuf> {
+    let dir = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(UPGRADE_DIR);
+    std::fs::create_dir_all(&dir).map_err(AppError::internal)?;
+    let stamp = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S");
+    let copy = dir.join(format!("sideporch-schema{applied}-{stamp}.db"));
+    let target = copy
+        .to_str()
+        .ok_or_else(|| AppError::internal("the data directory path is not UTF-8"))?;
+    if copy.exists() {
+        std::fs::remove_file(&copy).map_err(AppError::internal)?;
+    }
+    conn.execute("VACUUM INTO ?1", [target])?;
+    let mut copies: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .map_err(AppError::internal)?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|file| {
+            file.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("sideporch-schema"))
+                && file.extension().is_some_and(|extension| extension == "db")
+        })
+        .collect();
+    // Names sort by time within a schema; the modification time orders all.
+    copies.sort_by_key(|file| {
+        std::cmp::Reverse(
+            file.metadata()
+                .and_then(|meta| meta.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+        )
+    });
+    for old in copies.into_iter().skip(KEEP_COPIES) {
+        drop(std::fs::remove_file(old));
+    }
+    Ok(copy)
+}
+
+/// Applies the migrations after the database's version, up to `target`,
+/// each in its own transaction. The version is read inside the
+/// transaction, so two servers starting on one database can't both apply
+/// a step.
+fn migrate(conn: &mut Connection, target: i64) -> AppResult<()> {
+    conn.execute_batch(HISTORY)?;
     for (version, migration) in (1_i64..).zip(MIGRATIONS) {
-        if version <= applied {
-            continue;
+        if version > target {
+            break;
         }
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        tx.execute_batch(migration)?;
+        if user_version(&tx)? >= version {
+            continue;
+        }
+        match migration {
+            Migration::Sql(sql) => tx.execute_batch(sql)?,
+            Migration::Code(step) => step(&tx)?,
+        }
         tx.pragma_update(None, "user_version", version)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO schema_history (version, app_version, applied_at) VALUES (?1, ?2, ?3)",
+            params![version, env!("CARGO_PKG_VERSION"), crate::now_ms()],
+        )?;
         tx.commit()?;
     }
+    let broken: i64 =
+        conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })?;
+    if broken > 0 {
+        tracing::warn!(broken, "rows point at rows that no longer exist");
+    }
     Ok(())
+}
+
+/// Builds a database at an old schema version, for upgrade tests.
+#[doc(hidden)]
+pub fn create_at_version(path: &Path, version: i64) -> AppResult<()> {
+    let mut conn = connect(path)?;
+    migrate(&mut conn, version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_version_upgrades_to_the_latest() {
+        let dir = tempfile::tempdir().unwrap();
+        for version in 0..=schema_version() {
+            let path = dir.path().join(format!("v{version}.db"));
+            create_at_version(&path, version).unwrap();
+            let db = Db::open(&path).unwrap();
+            drop(db);
+            let conn = connect(&path).unwrap();
+            assert_eq!(user_version(&conn).unwrap(), schema_version());
+        }
+        // Each database older than the latest left a copy behind.
+        let copies = std::fs::read_dir(dir.path().join(UPGRADE_DIR))
+            .unwrap()
+            .count();
+        assert_eq!(copies, KEEP_COPIES);
+    }
+
+    #[test]
+    fn refuses_a_database_from_a_newer_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sideporch.db");
+        drop(Db::open(&path).unwrap());
+        let newer = schema_version() + 1;
+        let conn = connect(&path).unwrap();
+        conn.pragma_update(None, "user_version", newer).unwrap();
+        conn.execute(
+            "INSERT INTO schema_history (version, app_version, applied_at) VALUES (?1, '9.9.9', 0)",
+            [newer],
+        )
+        .unwrap();
+        drop(conn);
+        let error = Db::open(&path).err().unwrap().to_string();
+        assert!(error.contains("Sideporch 9.9.9"), "{error}");
+        // It was left alone.
+        let conn = connect(&path).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), newer);
+    }
 }

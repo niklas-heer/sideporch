@@ -272,6 +272,17 @@ fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> 
     file.write_all(b"\n")
 }
 
+/// Creates a database at an old schema version, so tests can check that
+/// Sideporch upgrades it.
+///
+/// # Errors
+///
+/// Fails if the database cannot be written.
+#[doc(hidden)]
+pub fn create_database_at_schema(path: &std::path::Path, version: i64) -> Result<(), Error> {
+    db::create_at_version(path, version)
+}
+
 pub(crate) fn now_ms() -> i64 {
     jiff::Timestamp::now().as_millisecond()
 }

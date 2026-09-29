@@ -320,6 +320,12 @@ pub fn restore(archive: &Path, data_dir: &Path, force: bool) -> Result<usize, St
         ));
     }
     std::fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
+    if archive
+        .extension()
+        .is_some_and(|extension| extension == "db")
+    {
+        return restore_database(archive, data_dir);
+    }
     let file = File::open(archive).map_err(|error| format!("{}: {error}", archive.display()))?;
     let mut unpacked = tar::Archive::new(GzDecoder::new(file));
     let mut restored = 0_usize;
@@ -359,6 +365,23 @@ pub fn restore(archive: &Path, data_dir: &Path, force: bool) -> Result<usize, St
         drop(std::fs::remove_file(data_dir.join(stale)));
     }
     Ok(restored)
+}
+
+/// Puts back a lone database, such as the copy kept in `upgrade-backups/`
+/// before an upgrade. Stored files stay as they are.
+fn restore_database(copy: &Path, data_dir: &Path) -> Result<usize, String> {
+    let mut header = [0_u8; 16];
+    File::open(copy)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .map_err(|error| format!("{}: {error}", copy.display()))?;
+    if &header != b"SQLite format 3\0" {
+        return Err(format!("{} is not a Sideporch database", copy.display()));
+    }
+    std::fs::copy(copy, data_dir.join(DATABASE)).map_err(|error| error.to_string())?;
+    for stale in ["sideporch.db-wal", "sideporch.db-shm"] {
+        drop(std::fs::remove_file(data_dir.join(stale)));
+    }
+    Ok(1)
 }
 
 #[cfg(test)]

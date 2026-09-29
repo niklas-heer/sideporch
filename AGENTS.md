@@ -31,7 +31,7 @@ Releases: bump `version` in `Cargo.toml`, then push a matching `vX.Y.Z` tag. Lin
 
 - Use conventional commit messages (`feat`, `fix`, `docs`, `refactor`, `chore`).
 - Keep compatibility claims for external tools (such as Gatus or Slack webhooks) backed by tests against the payloads those tools actually send. Regenerate fixtures as described in `tests/fixtures/gatus/README.md`.
-- Never edit a released migration in `src/db.rs`; append a new one.
+- Never edit a released migration in `src/db.rs`; append a new one (`Migration::Sql`, or `Migration::Code` for steps that need Rust, such as rebuilding the search index). People skip versions, so every step must work on data any earlier release wrote.
 - Write utility classes as literal strings in `class="…"` so encre-css finds them, and check the generated CSS for utilities you haven't used before. encre-css differs from Tailwind in places (see the frontend decision record).
 - Import new icons through `src/icons.rs` only.
 - A new `sideporch.*` function goes into `src/automations/api.rs` as well as the sandbox, so the linter, completions, reference, AI prompt and MCP know it. Write transactions use `BEGIN IMMEDIATE`, because each automation worker writes on its own connection.

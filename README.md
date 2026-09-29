@@ -164,7 +164,15 @@ Other proxies need to pass WebSocket upgrades for `/ws`.
 
 ### Update
 
-Install the new version (`brew upgrade sideporch`, `docker pull`, or the install script again) and restart Sideporch. It updates its database on start. Take a backup first: once a new version has updated the database, older versions may not work with it.
+Install the new version (`brew upgrade sideporch`, `docker pull`, or the install script again) and restart Sideporch. That's all, even when you skip several versions: on start, Sideporch applies every database change between the version you ran and the new one, in order, each in its own transaction, so an interrupted upgrade picks up where it stopped.
+
+Before it changes the database, Sideporch keeps a copy of it in `upgrade-backups/` in the data directory (the newest three). To go back, stop Sideporch, restore the copy and start the version you ran before:
+
+```sh
+sideporch restore sideporch-data/upgrade-backups/sideporch-schema17-20261001-080000.db --data sideporch-data --force
+```
+
+An older version refuses to start on a database a newer one has already updated, and names the version that did, rather than guessing at tables it doesn't know. Release notes for each version are on the [releases page](https://github.com/niklas-heer/sideporch/releases).
 
 ### Back up and move
 

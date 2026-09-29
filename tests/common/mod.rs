@@ -23,7 +23,11 @@ pub async fn start() -> Server {
 
 /// Starts a server after `configure` adjusts its settings.
 pub async fn start_with(configure: impl FnOnce(&mut Config)) -> Server {
-    let data = tempfile::tempdir().unwrap();
+    start_in(tempfile::tempdir().unwrap(), configure).await
+}
+
+/// Starts a server on a data directory the test prepared.
+pub async fn start_in(data: TempDir, configure: impl FnOnce(&mut Config)) -> Server {
     let mut config = Config {
         data_dir: data.path().to_owned(),
         public_url: None,

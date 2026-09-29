@@ -41,10 +41,13 @@ enum Command {
     SetupLink,
     /// Unpack a backup from Admin → Backups into the data directory.
     ///
+    /// Also takes a `.db` copy from `upgrade-backups/`, which Sideporch keeps
+    /// before each upgrade, for going back to the version you ran before.
+    ///
     /// Stop the server first. The data directory must not hold a database
     /// yet, unless you pass --force to replace it.
     Restore {
-        /// The backup archive, a `sideporch-….tar.gz` file.
+        /// The backup archive, a `sideporch-….tar.gz` file, or a `.db` copy.
         archive: PathBuf,
         /// Replace the database that is already there.
         #[arg(long)]
