@@ -367,6 +367,18 @@ pub fn earned(progress: &Progress, requirements: &[Requirement; 3]) -> u8 {
 /// Promotes someone who earned a higher level. Levels never go down on
 /// their own, and a level an admin locked stays. Returns the new level.
 pub fn refresh(conn: &Connection, user_id: i64, now: i64) -> AppResult<Option<u8>> {
+    // Levels above 3 aren't earned, so most active people skip counting.
+    let settled: bool = conn
+        .query_row(
+            "SELECT trust_level >= 3 OR trust_locked FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(true);
+    if settled {
+        return Ok(None);
+    }
     let Some(progress) = progress(conn, user_id, now)? else {
         return Ok(None);
     };
