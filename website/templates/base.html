@@ -39,6 +39,14 @@
     <ol id="search-results" class="search-results" aria-live="polite"></ol>
   </dialog>
 
+  <dialog class="viewer" id="viewer" aria-label="Screenshot">
+    <div class="viewer-stage"><img alt="" draggable="false"></div>
+    <button type="button" class="viewer-close" data-viewer-close aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg></button>
+    <button type="button" class="viewer-step prev" data-viewer-step="-1" aria-label="Previous screenshot" title="Previous (←)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button type="button" class="viewer-step next" data-viewer-step="1" aria-label="Next screenshot" title="Next (→)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <p class="viewer-caption"><span class="viewer-text"></span> <span class="viewer-count"></span></p>
+  </dialog>
+
   <footer>
     <img src="{{ get_url(path='logo.svg') }}" alt="" width="28" height="28">
     <p>Sideporch is free software under the MIT license. <a href="{{ config.extra.repo }}">Source on GitHub</a>, <a href="{{ config.extra.repo }}/releases">releases</a>, <a href="{{ config.extra.repo }}/issues">issues</a>.</p>

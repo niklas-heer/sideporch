@@ -175,6 +175,125 @@
     });
   }
 
+  // Screenshots open large in a dialog. Leaving: the close button, Esc, a
+  // click beside the image, or Back. Without this script, the link opens
+  // the image itself.
+  const viewer = document.getElementById("viewer");
+  const zoomable = [...document.querySelectorAll("a[data-zoom]")];
+  if (viewer && zoomable.length) {
+    const stage = viewer.querySelector(".viewer-stage");
+    const image = stage.querySelector("img");
+    const text = viewer.querySelector(".viewer-text");
+    const count = viewer.querySelector(".viewer-count");
+    const steps = viewer.querySelectorAll("[data-viewer-step]");
+    const dark = matchMedia("(prefers-color-scheme: dark)");
+    let index = 0;
+    let opener = null;
+    // A reload while the viewer was open leaves its history entry behind.
+    if (history.state?.viewer) history.replaceState(null, "");
+
+    const show = (at) => {
+      index = (at + zoomable.length) % zoomable.length;
+      const link = zoomable[index];
+      viewer.classList.remove("actual");
+      image.src = (dark.matches && link.dataset.zoomDark) || link.href;
+      image.alt = link.querySelector("img")?.alt ?? "";
+      text.textContent = link.closest("figure")?.querySelector("figcaption")?.textContent.trim() ?? "";
+      count.textContent = zoomable.length > 1 ? `${index + 1} of ${zoomable.length}` : "";
+      stage.scrollTo(0, 0);
+    };
+    const finish = () => {
+      if (viewer.open) viewer.close();
+      opener?.focus({ preventScroll: true });
+    };
+    // Opening adds one history entry, so Back closes the viewer. Every
+    // other way of closing goes back through it too, leaving history as
+    // it was, however many screenshots were looked at.
+    const close = () => {
+      if (history.state?.viewer) history.back();
+      else finish();
+    };
+    addEventListener("popstate", () => {
+      if (viewer.open) finish();
+    });
+    zoomable.forEach((link, at) =>
+      link.addEventListener("click", (event) => {
+        // Keep opening in a new tab or window working.
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        opener = link;
+        show(at);
+        steps.forEach((button) => (button.hidden = zoomable.length < 2));
+        viewer.showModal();
+        viewer.querySelector("[data-viewer-close]").focus();
+        history.pushState({ viewer: true }, "");
+      }),
+    );
+    viewer.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      close();
+    });
+    viewer.querySelector("[data-viewer-close]").addEventListener("click", close);
+    steps.forEach((button) => button.addEventListener("click", () => show(index + Number(button.dataset.viewerStep))));
+    viewer.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowRight" && zoomable.length > 1) show(index + 1);
+      if (event.key === "ArrowLeft" && zoomable.length > 1) show(index - 1);
+    });
+    // Beside the image (the dimmed backdrop, the stage around it) closes.
+    viewer.addEventListener("click", (event) => {
+      if (event.target === viewer || event.target === stage) close();
+    });
+
+    // Click the image to see it at full size, centred on where you
+    // clicked; click again to fit it to the screen.
+    let dragged = false;
+    image.addEventListener("click", (event) => {
+      if (dragged) return;
+      const x = event.offsetX / image.clientWidth;
+      const y = event.offsetY / image.clientHeight;
+      viewer.classList.toggle("actual");
+      if (viewer.classList.contains("actual")) {
+        stage.scrollTo(x * image.scrollWidth - stage.clientWidth / 2, y * image.scrollHeight - stage.clientHeight / 2);
+      }
+    });
+    // At full size, drag with the mouse to look around (touch scrolls).
+    let drag = null;
+    stage.addEventListener("pointerdown", (event) => {
+      dragged = false;
+      if (!viewer.classList.contains("actual") || event.pointerType !== "mouse" || event.button !== 0) return;
+      drag = { x: event.clientX, y: event.clientY, left: stage.scrollLeft, top: stage.scrollTop };
+      event.preventDefault();
+    });
+    addEventListener("pointermove", (event) => {
+      if (!drag) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) {
+        dragged = true;
+        viewer.classList.add("dragging");
+      }
+      stage.scrollTo(drag.left - dx, drag.top - dy);
+    });
+    addEventListener("pointerup", () => {
+      drag = null;
+      viewer.classList.remove("dragging");
+    });
+    // Swipe sideways between screenshots while they fit the screen.
+    let touch = null;
+    stage.addEventListener("touchstart", (event) => {
+      touch = event.touches.length === 1 && !viewer.classList.contains("actual")
+        ? { x: event.touches[0].clientX, y: event.touches[0].clientY }
+        : null;
+    }, { passive: true });
+    stage.addEventListener("touchend", (event) => {
+      if (!touch || zoomable.length < 2) return;
+      const dx = event.changedTouches[0].clientX - touch.x;
+      const dy = event.changedTouches[0].clientY - touch.y;
+      touch = null;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) show(index + (dx < 0 ? 1 : -1));
+    });
+  }
+
   // "On this page" marks the section being read.
   const toc = document.querySelector(".toc");
   if (toc) {
