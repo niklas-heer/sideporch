@@ -1,14 +1,11 @@
 // Seeds a fresh Sideporch server with a small team's chat and takes the
-// README and website screenshots as PNGs.
+// screenshots the website, the docs and the README show, as PNGs.
 //
-//   sideporch --listen 127.0.0.1:18790 --data "$(mktemp -d)" &
-//   npm install --no-save playwright-core
-//   CHROME=/path/to/chrome node scripts/screenshots.mjs http://127.0.0.1:18790 /tmp/shots
+// Run `mise run screenshots` (scripts/screenshots.sh): it builds Sideporch,
+// starts it on an empty data directory, runs this script and writes WebP
+// files to website/static/img/. To run it by hand:
 //
-// Then convert them for the README, for example:
-//   cwebp -q 82 -resize 1600 0 /tmp/shots/channel.png -o docs/screenshots/channel.webp
-//   (phones.png: -q 84 -resize 1100 0)
-// and copy the ones the website shows into website/img/.
+//   node scripts/screenshots.mjs http://127.0.0.1:18790 /tmp/shots
 //
 // CHROME defaults to Playwright's headless shell; any Chromium works. Node
 // is needed; Bun's fetch breaks Playwright's cookie handling.
@@ -214,13 +211,16 @@ await form(priya, "/signup", {
 });
 
 // Screenshots.
+// A fixed-offset zone where it is about 10:00 now (Etc/GMT-N is UTC+N).
+const offset = ((10 - new Date().getUTCHours() + 36) % 24) - 12;
+const morning = offset === 0 ? "Etc/UTC" : `Etc/GMT${offset > 0 ? "-" : "+"}${Math.abs(offset)}`;
 async function view(options = {}) {
   const context = await browser.newContext({
     viewport: options.viewport ?? { width: 1360, height: 920 },
     deviceScaleFactor: 2,
     colorScheme: options.dark ? "dark" : "light",
-    // A morning somewhere, so timestamps look like a working day.
-    timezoneId: "Australia/Sydney",
+    // Mid-morning, whenever this runs, so timestamps look like a working day.
+    timezoneId: morning,
     locale: "en-GB",
     storageState: await ada.storageState(),
     isMobile: options.mobile ?? false,
@@ -321,6 +321,36 @@ for (const dark of [false, true]) {
       ${["phone-home", "phone"].map((name) => `<img src="${image(name)}" style="width:390px;border-radius:36px;border:10px solid #1B2F2C;box-shadow:0 24px 48px rgba(27,47,44,.25)">`).join("")}
     </div></body>`);
   await page.locator("#frame").screenshot({ path: `${out}/phones.png` });
+  await page.close();
+}
+{
+  // Appearance: the theme picker.
+  const page = await view();
+  await page.goto(`${base}/settings/appearance`);
+  await shot(page, "themes");
+  await page.close();
+}
+{
+  // People, with invite links.
+  const page = await view();
+  await page.goto(`${base}/people`);
+  await shot(page, "people");
+  await page.close();
+}
+{
+  // What signing in takes, and email.
+  const page = await view({ viewport: { width: 1360, height: 1040 } });
+  await page.goto(`${base}/admin/sign-in`);
+  await shot(page, "sign-in");
+  await page.close();
+}
+{
+  // Backups on a schedule, after one ran.
+  await form(ada, "/admin/backups", { every_hours: "24", keep: "7", dir: "backups", include_key: "on" });
+  await form(ada, "/admin/backups/run", {});
+  const page = await view();
+  await page.goto(`${base}/admin/backups`);
+  await shot(page, "backups");
   await page.close();
 }
 console.log(JSON.stringify({ errors }, null, 1));

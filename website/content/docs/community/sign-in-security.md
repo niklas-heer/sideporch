@@ -20,6 +20,8 @@ Passkeys need Sideporch opened by a name (like `chat.example.com` over HTTPS, or
 
 Under **Admin → Sign-in**, pick one:
 
+{{<shot name="sign-in" alt="Admin, Sign-in: four choices for what signing in takes, the option to sign in with a link by email, and the SMTP server fields." caption="What signing in takes, sign-in links by email, and the SMTP server." />}}
+
 | Setting | Means |
 | --- | --- |
 | **A password is enough** (the default) | Everyone can add a passkey or an authenticator app for a second step. |

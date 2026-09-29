@@ -25,6 +25,8 @@ On the same page, let Sideporch write backups by itself:
 
 The page shows when the last backup ran, and any error.
 
+{{<shot name="backups" alt="Admin, Backups: a Download backup button, and a daily schedule that keeps the newest 7 backups in the backups directory, including the secret key." caption="A download button, and backups written every day." />}}
+
 {% <note kind="warning"> %}
 A backup holds every message, including private channels and direct messages. Keep backups as private as the server.
 {% </note> %}

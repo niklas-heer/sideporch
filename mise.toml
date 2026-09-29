@@ -99,3 +99,7 @@ run = "sh build.sh"
 description = "Build the website and check every internal and external link"
 dir = "website"
 run = ["zola check", "mise run site-build"]
+
+[tasks.screenshots]
+description = "Retake every screenshot from a fresh demo server into website/static/img (needs node, cwebp and Chromium)"
+run = "sh scripts/screenshots.sh"

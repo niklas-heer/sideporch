@@ -12,6 +12,8 @@ Create an **invite link** under **People** and send it however you like. Whoever
 
 People who join with an invite start at [trust level 1](@/docs/community/sign-up-and-trust.md#trust-levels), so they can upload files, post links and start conversations right away.
 
+{{<shot name="people" alt="The People page: everyone on the server with Profile and Message buttons, and below them the invite links with who created them, how often they were used and when they expire." caption="People, and the invite links that are still active. Links expire after 7 days." />}}
+
 To let people join without an invite, change how sign-up works under **Admin → Community**.
 
 ## Admins
