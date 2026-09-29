@@ -35,6 +35,7 @@ mod search;
 mod secrets;
 mod security;
 mod speech;
+mod statistics;
 mod store;
 mod system;
 mod themes;

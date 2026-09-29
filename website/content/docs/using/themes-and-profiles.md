@@ -1,7 +1,7 @@
 +++
 title = "Themes and profiles"
 description = "Pick one of 20 themes, and set your picture, status, bio and favourite reactions."
-weight = 7
+weight = 8
 +++
 
 Everything about your account is under your name at the bottom of the sidebar.

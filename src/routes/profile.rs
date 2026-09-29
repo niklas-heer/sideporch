@@ -160,13 +160,14 @@ async fn render_edit(
     saved: bool,
 ) -> AppResult<Markup> {
     let user_id = user.id;
-    let (person, ctx, most_used) = state
+    let (person, ctx, most_used, hidden) = state
         .db
         .call(move |conn| {
             Ok((
                 store::user(conn, user_id)?.ok_or(AppError::NotFound)?,
                 store::render_context(conn)?,
                 store::most_used_emoji(conn, user_id, 12)?,
+                crate::statistics::hidden(conn, user_id)?,
             ))
         })
         .await?;
@@ -177,7 +178,15 @@ async fn render_edit(
         current: None,
     };
     Ok(views::profile::edit_page(
-        &shell, &person, &ctx, &most_used, error, saved,
+        &shell,
+        &views::profile::Edit {
+            user: &person,
+            ctx: &ctx,
+            most_used: &most_used,
+            hidden_from_rankings: hidden,
+        },
+        error,
+        saved,
     ))
 }
 
@@ -206,6 +215,7 @@ struct ProfileForm {
     favorite_emoji: String,
     avatar: Option<Upload>,
     remove_avatar: bool,
+    hide_from_rankings: bool,
 }
 
 async fn read_form(mut form: Multipart) -> AppResult<ProfileForm> {
@@ -243,6 +253,7 @@ async fn read_form(mut form: Multipart) -> AppResult<ProfileForm> {
             "link_url" => input.link_urls.push(text),
             "favorite_emoji" => input.favorite_emoji = text,
             "remove_avatar" => input.remove_avatar = true,
+            "hide_from_rankings" => input.hide_from_rankings = true,
             _ => {}
         }
     }
@@ -368,10 +379,12 @@ async fn save(
     };
     let user_id = user.id;
     let remove = form.remove_avatar;
+    let hidden = form.hide_from_rankings;
     state
         .db
         .call(move |conn| {
             store::update_profile(conn, user_id, &edit)?;
+            crate::statistics::set_hidden(conn, user_id, hidden)?;
             if let Some(file_id) = avatar.and_then(|ids| ids.first().copied()) {
                 store::set_avatar(conn, user_id, Some(file_id))?;
             } else if remove {

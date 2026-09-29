@@ -39,6 +39,7 @@ mod profile;
 mod security;
 mod settings;
 mod speech;
+mod statistics;
 mod updates;
 
 pub use gifs::Posted as GifPosted;
@@ -115,6 +116,7 @@ pub fn router(state: AppState) -> Router {
         .merge(updates::router())
         .merge(federation::router())
         .merge(speech::router())
+        .merge(statistics::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),

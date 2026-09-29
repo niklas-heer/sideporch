@@ -232,14 +232,22 @@ fn favorites_preview(names: &[String], ctx: &Context) -> Markup {
     }
 }
 
-pub fn edit_page(
-    shell: &Shell<'_>,
-    user: &User,
-    ctx: &Context,
-    most_used: &[String],
-    error: Option<&str>,
-    saved: bool,
-) -> Markup {
+/// What the profile form shows.
+pub struct Edit<'a> {
+    pub user: &'a User,
+    pub ctx: &'a Context,
+    /// Emoji they react with most, suggested as favorites.
+    pub most_used: &'a [String],
+    pub hidden_from_rankings: bool,
+}
+
+pub fn edit_page(shell: &Shell<'_>, edit: &Edit<'_>, error: Option<&str>, saved: bool) -> Markup {
+    let Edit {
+        user,
+        ctx,
+        most_used,
+        hidden_from_rankings,
+    } = *edit;
     let status_emoji = user.status_emoji.trim_matches(':');
     panel_page(
         "Your profile",
@@ -314,6 +322,16 @@ pub fn edit_page(
                         div class="mt-2" { (favorites_preview(most_used, ctx)) }
                     } @else if !user.favorite_emoji.is_empty() {
                         div class="mt-2" { (favorites_preview(&user.favorite_emoji, ctx)) }
+                    }
+                }
+                fieldset id="rankings" {
+                    legend class="field-label" { "Statistics" }
+                    label class="flex items-start gap-2 text-sm" {
+                        input type="checkbox" name="hide_from_rankings" value="on" checked[hidden_from_rankings] class="mt-0.5 h-4 w-4 accent-floor";
+                        span {
+                            "Leave me out of the rankings"
+                            span class="block text-muted dark:text-haint" { "Your messages still count in the totals on the Statistics page, but your name isn't listed." }
+                        }
                     }
                 }
                 button type="submit" class="btn" { "Save profile" }

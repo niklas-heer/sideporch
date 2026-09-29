@@ -1,7 +1,7 @@
 +++
 title = "Keyboard shortcuts"
 description = "Jump anywhere with Cmd+K, move between channels, and edit your last message."
-weight = 8
+weight = 9
 +++
 
 | Keys | What they do |

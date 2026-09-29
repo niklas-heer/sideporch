@@ -1,7 +1,7 @@
 +++
 title = "Read aloud and dictate"
 description = "Have messages read to you and dictate your own, with speech models that run on your server."
-weight = 6
+weight = 7
 +++
 
 **Read aloud** any message from its menu, and **dictate** with the microphone in the message box. Both run on your own server, with open models: nothing is sent to a speech service.

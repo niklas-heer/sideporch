@@ -1,7 +1,7 @@
 +++
 title = "Phones and notifications"
 description = "Install Sideporch like an app on iPhone and Android, and turn on push notifications."
-weight = 5
+weight = 6
 +++
 
 Sideporch works in any mobile browser, and installs like an app: its own icon and window, the number of unread conversations on the icon, and on Android a place in the share sheet, so links and text from other apps go straight into a conversation. When the connection drops, it says so instead of showing an error page.

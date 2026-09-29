@@ -32,6 +32,7 @@ pub mod search;
 pub mod security;
 pub mod settings;
 pub mod speech;
+pub mod statistics;
 pub mod updates;
 
 /// How to render messages: this Sideporch's custom emoji and usernames, and
@@ -383,6 +384,9 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                     (nav_link("/saved", icons::BOOKMARK_SIMPLE, "Saved", false))
                     (nav_link("/scheduled", icons::CLOCK, "Scheduled", false))
                     (nav_link("/people", icons::USERS, "People", false))
+                    @if shell.user.may(crate::community::Permission::ViewStatistics) {
+                        (nav_link("/statistics", icons::CHART_BAR, "Statistics", false))
+                    }
                 }
                 div class="mb-1 mt-2 flex items-center justify-between px-3 text-sm text-haint" {
                     h2 class="font-semibold" { a href="/channels/browse" class="hover:text-white hover:underline" title="Browse all channels" { "Channels" } }

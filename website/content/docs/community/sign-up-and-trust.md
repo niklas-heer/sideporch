@@ -50,6 +50,7 @@ Each permission asks for a trust level, or is left to roles. Admins may always d
 | Create public channels | Level 1 |
 | Create private channels | Level 1 |
 | Add custom emoji | Level 1 |
+| See statistics | Level 1 |
 | Invite people | Roles only |
 | Moderate | Roles only |
 

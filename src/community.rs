@@ -50,10 +50,11 @@ pub enum Permission {
     AddEmoji,
     InvitePeople,
     Moderate,
+    ViewStatistics,
 }
 
 impl Permission {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::UploadFiles,
         Self::PostLinks,
         Self::MentionEveryone,
@@ -64,6 +65,7 @@ impl Permission {
         Self::AddEmoji,
         Self::InvitePeople,
         Self::Moderate,
+        Self::ViewStatistics,
     ];
 
     pub const fn key(self) -> &'static str {
@@ -78,6 +80,7 @@ impl Permission {
             Self::AddEmoji => "add_emoji",
             Self::InvitePeople => "invite_people",
             Self::Moderate => "moderate",
+            Self::ViewStatistics => "view_statistics",
         }
     }
 
@@ -99,6 +102,7 @@ impl Permission {
             Self::AddEmoji => "Add custom emoji",
             Self::InvitePeople => "Invite people",
             Self::Moderate => "Moderate",
+            Self::ViewStatistics => "See statistics",
         }
     }
 
@@ -120,6 +124,9 @@ impl Permission {
             Self::Moderate => {
                 "Handle reports, delete anyone's messages, time people out and approve sign-ups."
             }
+            Self::ViewStatistics => {
+                "How much is said in public channels, where, and who writes most."
+            }
         }
     }
 
@@ -134,7 +141,8 @@ impl Permission {
             | Self::StartDirectMessages
             | Self::CreateChannels
             | Self::CreatePrivateChannels
-            | Self::AddEmoji => Some(1),
+            | Self::AddEmoji
+            | Self::ViewStatistics => Some(1),
             Self::InvitePeople | Self::Moderate => None,
         }
     }
@@ -151,6 +159,7 @@ impl Permission {
             Self::AddEmoji => 1 << 7,
             Self::InvitePeople => 1 << 8,
             Self::Moderate => 1 << 9,
+            Self::ViewStatistics => 1 << 10,
         }
     }
 }
@@ -186,6 +195,7 @@ pub fn refusal(permission: Permission) -> String {
         Permission::AddEmoji => "add custom emoji",
         Permission::InvitePeople => "invite people",
         Permission::Moderate => "moderate",
+        Permission::ViewStatistics => "see statistics",
     };
     format!(
         "You can't {what} here yet. New members earn more as they take part; an admin can also allow it."

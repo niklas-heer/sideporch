@@ -622,6 +622,13 @@ CREATE TABLE federation_nonces (
 );
 ",
     ),
+    Migration::Sql(
+        r"
+-- Statistics: people may leave the rankings, and periods are read by time.
+ALTER TABLE users ADD COLUMN hide_from_rankings INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX messages_by_time ON messages (created_at);
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix
