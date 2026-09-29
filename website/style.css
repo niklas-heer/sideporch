@@ -1,4 +1,5 @@
-/* Colours are Sideporch's default "Porch" theme (src/themes.rs). */
+/* Sideporch's own colours (the "Porch" theme in src/themes.rs) and its
+   typeface. The hero is the porch at dusk; the rest of the page is quiet. */
 @font-face {
   font-family: "Atkinson Hyperlegible Next";
   font-weight: 200 800;
@@ -18,54 +19,180 @@
   color-scheme: light dark;
   --floor: #24403C; --floor-2: #2E524D; --floor-3: #3B6660;
   --haint: #B9E0DA; --haint-2: #DCEFEC; --lamp: #F5C04A;
-  --ink: #1B2826; --muted: #5A6D69; --line: #DCE4E2; --screen: #F5F8F7; --paper: #FFFFFF;
+  --ink: #1B2826; --muted: #52655F; --line: #DCE4E2; --screen: #F5F8F7; --paper: #FFFFFF;
   --night: #101A19; --night-2: #172422; --night-line: #2A3B38;
   --bg: var(--paper); --fg: var(--ink); --soft: var(--screen); --border: var(--line); --link: var(--floor-3);
+  --measure: 38rem;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: var(--night); --fg: var(--haint-2); --soft: var(--night-2); --border: var(--night-line); --link: var(--haint); --muted: #9DB3AE; }
 }
 
 * { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 body {
   margin: 0; background: var(--bg); color: var(--fg);
   font: 1.0625rem/1.6 "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
-a { color: var(--link); text-underline-offset: 0.15em; }
-h1, h2, h3 { line-height: 1.2; }
-code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.92em; }
-pre { overflow-x: auto; padding: 0.9rem 1rem; border: 1px solid var(--border); border-radius: 0.6rem; background: var(--soft); }
+a { color: var(--link); text-underline-offset: 0.18em; text-decoration-thickness: 0.07em; }
+a:focus-visible, button:focus-visible { outline: 3px solid var(--lamp); outline-offset: 3px; border-radius: 4px; }
+h1, h2, h3 { line-height: 1.15; margin: 0; }
+p { margin: 0; }
+code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.88em; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-.hero { max-width: 44rem; margin: 0 auto; padding: 4.5rem 1.25rem 2.5rem; text-align: center; }
-.logo { display: block; margin: 0 auto 1rem; }
-.hero h1 { margin: 0; font-size: 2.75rem; letter-spacing: -0.01em; }
-.tagline { margin: 0.4rem 0 1rem; font-size: 1.35rem; font-weight: 700; }
-.lede { margin: 0 auto; max-width: 36rem; color: var(--muted); }
-.actions { display: flex; flex-wrap: wrap; gap: 0.75rem; justify-content: center; margin: 1.75rem 0 1rem; }
-.button {
-  display: inline-block; padding: 0.6rem 1.2rem; border-radius: 0.6rem; font-weight: 700; text-decoration: none;
-  background: var(--floor); color: #fff; border: 1px solid var(--floor);
-}
-.button:hover { background: var(--floor-2); }
-.button.quiet { background: transparent; color: var(--fg); border-color: var(--border); }
-.button.quiet:hover { background: var(--soft); }
-@media (prefers-color-scheme: dark) {
-  .button { background: var(--haint); border-color: var(--haint); color: var(--night); }
-  .button:hover { background: var(--haint-2); }
-}
-.status { font-size: 0.9rem; color: var(--muted); }
-.status::before { content: ""; display: inline-block; width: 0.55rem; height: 0.55rem; margin-right: 0.45rem; border-radius: 50%; background: var(--lamp); }
+/* The porch at dusk */
 
-main { max-width: 64rem; margin: 0 auto; padding: 0 1.25rem; }
-.shot img, .gallery img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 0.8rem; }
-section { margin: 4rem auto 0; }
-#try-it { max-width: 44rem; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; padding: 0; list-style: none; }
-.cards li { padding: 1.1rem 1.2rem; border: 1px solid var(--border); border-radius: 0.8rem; background: var(--soft); }
-.cards h3 { margin: 0 0 0.4rem; font-size: 1.05rem; }
-.cards p { margin: 0; color: var(--muted); }
-.gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 1.25rem; align-items: start; }
+.dusk {
+  color: var(--haint-2);
+  background:
+    radial-gradient(40rem 26rem at 78% 18%, rgb(245 192 74 / 0.16), transparent 70%),
+    var(--floor);
+}
+.dusk a { color: var(--haint-2); }
+.bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  max-width: 72rem; margin: 0 auto; padding: 1.25rem 1.5rem;
+}
+.brand { display: flex; align-items: center; gap: 0.6rem; font-weight: 800; font-size: 1.2rem; text-decoration: none; }
+.bar ul { display: flex; gap: 1.5rem; margin: 0; padding: 0; list-style: none; font-weight: 600; }
+.bar ul a { text-decoration: none; }
+.bar ul a:hover { text-decoration: underline; }
+
+.hero {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 3.5rem; align-items: center;
+  max-width: 72rem; margin: 0 auto; padding: 2.5rem 1.5rem 5rem;
+}
+.hero h1 {
+  font-size: clamp(2.6rem, 5.4vw, 4.4rem); font-weight: 800; letter-spacing: -0.025em; line-height: 1.02;
+  color: #fff; max-width: 12ch; text-wrap: balance;
+}
+.lede { margin-top: 1.4rem; max-width: 34rem; font-size: 1.2rem; line-height: 1.55; color: var(--haint); }
+.start { margin-top: 2.2rem; max-width: 34rem; }
+.start-label { font-weight: 700; color: #fff; }
+.copyline {
+  display: flex; align-items: stretch; margin-top: 0.5rem;
+  border: 1px solid var(--floor-3); border-radius: 0.7rem; background: rgb(0 0 0 / 0.22); overflow: hidden;
+}
+.copyline code { flex: 1; min-width: 0; padding: 0.8rem 1rem; overflow-x: auto; white-space: nowrap; color: var(--haint-2); }
+.copyline button {
+  flex-shrink: 0; border: 0; border-left: 1px solid var(--floor-3); padding: 0 1.1rem;
+  font: inherit; font-weight: 700; color: var(--floor); background: var(--haint); cursor: pointer;
+}
+.copyline button:hover { background: var(--haint-2); }
+.start-note { margin-top: 0.7rem; font-size: 0.95rem; color: var(--haint); }
+
+/* The conversation under the roof */
+.porch { position: relative; margin: 0; padding: 2.6rem 0 0 1.2rem; }
+.roof { position: absolute; left: 0; top: 0; width: 100%; height: 5.2rem; color: var(--haint); overflow: visible; }
+.lamp {
+  position: absolute; right: 12%; top: 3.6rem; width: 0.9rem; height: 0.9rem; border-radius: 50%;
+  background: var(--lamp); box-shadow: 0 0 1.6rem 0.7rem rgb(245 192 74 / 0.45), 0 0 5rem 2rem rgb(245 192 74 / 0.18);
+}
+.window {
+  position: relative; margin-top: 2.4rem; border-radius: 0.9rem; overflow: hidden;
+  --muted: #52655F; --line: #DCE4E2;
+  background: var(--paper); color: var(--ink); box-shadow: 0 1.5rem 3rem -1.2rem rgb(0 0 0 / 0.55);
+}
+.window-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0.75rem 1.1rem; border-bottom: 1px solid var(--line); font-weight: 800;
+}
+.online { display: flex; align-items: center; gap: 0.4rem; font-weight: 600; font-size: 0.85rem; color: var(--muted); }
+.dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: #3A9A6E; }
+.talk { list-style: none; margin: 0; padding: 0.4rem 0 0.2rem; }
+.msg { display: flex; gap: 0.75rem; padding: 0.45rem 1.1rem; font-size: 0.95rem; line-height: 1.45; }
+.avatar {
+  flex-shrink: 0; display: grid; place-items: center; width: 2.1rem; height: 2.1rem; border-radius: 0.55rem;
+  font-weight: 800; color: #fff; background: hsl(var(--hue) 32% 38%);
+}
+.bot-face { background: var(--floor-3); }
+.who { font-weight: 800; }
+.who time { margin-left: 0.3rem; font-weight: 400; font-size: 0.78rem; color: var(--muted); }
+.badge { padding: 0 0.35rem; border-radius: 0.25rem; font-size: 0.72rem; font-weight: 700; background: var(--haint-2); color: var(--floor); }
+.spoken { margin-left: 0.3rem; padding: 0 0.35rem; border-radius: 0.25rem; font-size: 0.72rem; font-weight: 700; background: var(--haint-2); color: var(--floor); }
+.poll { margin-top: 0.35rem; padding: 0.7rem 0.8rem; border: 1px solid var(--line); border-radius: 0.7rem; }
+.poll-q { font-weight: 800; display: flex; justify-content: space-between; gap: 0.5rem; }
+.poll-q span { font-size: 0.75rem; font-weight: 700; color: var(--muted); }
+.opt { display: flex; align-items: center; gap: 0.55rem; margin-top: 0.35rem; padding: 0.3rem 0.5rem; border: 1px solid var(--line); border-radius: 0.5rem; }
+.rank { display: grid; place-items: center; width: 1.35rem; height: 1.35rem; border-radius: 0.3rem; background: var(--screen); font-size: 0.8rem; font-weight: 800; }
+.opt.win { background: var(--haint-2); border-color: var(--floor-3); }
+.opt .tag { margin-left: auto; padding: 0 0.4rem; border-radius: 0.3rem; background: var(--lamp); font-size: 0.75rem; font-weight: 800; }
+.opt.out { color: var(--muted); }
+.opt .note { margin-left: auto; font-size: 0.78rem; }
+.poll-foot { margin-top: 0.45rem; font-size: 0.8rem; color: var(--muted); }
+.typing { height: 1.6rem; padding: 0 1.1rem 0.6rem 3.95rem; font-size: 0.8rem; color: var(--muted); opacity: 0; }
+
+/* One moment on load: porch.js reveals the messages one by one. Without
+   it, everything shows at once. */
+.talk.playing .msg { opacity: 0; transform: translateY(0.4rem); }
+.talk.playing .msg.here { opacity: 1; transform: none; transition: opacity 0.35s ease, transform 0.35s ease; }
+.typing.on { opacity: 1; transition: opacity 0.2s; }
+.opt.win .tag { transition: opacity 0.3s 0.6s; }
+.talk.playing .msg:not(.here) .tag { opacity: 0; }
+
+/* The quiet part */
+
+main { max-width: 72rem; margin: 0 auto; padding: 0 1.5rem; }
+section { margin-top: 6rem; }
+h2 { font-size: clamp(1.7rem, 3vw, 2.3rem); font-weight: 800; letter-spacing: -0.015em; max-width: 24ch; text-wrap: balance; }
+
+.groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3rem; margin-top: 2.5rem; }
+.groups h3 { font-size: 1.15rem; font-weight: 800; padding-bottom: 0.7rem; border-bottom: 3px solid var(--haint); }
+.groups ul { margin: 0; padding: 0; list-style: none; }
+.groups li { padding: 0.8rem 0; border-bottom: 1px solid var(--border); color: var(--muted); line-height: 1.5; }
+.groups li strong { color: var(--fg); }
+.groups code { color: var(--fg); }
+
+.gallery { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem 2rem; }
 .gallery figure { margin: 0; }
-.gallery figcaption { margin-top: 0.5rem; font-size: 0.92rem; color: var(--muted); }
+.gallery .wide { grid-column: 1 / -1; }
+.gallery img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 0.8rem; }
+.gallery figcaption { margin-top: 0.6rem; max-width: var(--measure); color: var(--muted); font-size: 0.95rem; }
 
-footer { margin-top: 4rem; padding: 2rem 1.25rem 3rem; border-top: 1px solid var(--border); text-align: center; color: var(--muted); font-size: 0.92rem; }
+.size { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 3rem; align-items: center; }
+.size p { margin-top: 1rem; max-width: var(--measure); color: var(--muted); }
+.size table { width: 100%; border-collapse: collapse; font-size: 1.05rem; }
+.size th { text-align: left; font-size: 0.9rem; font-weight: 700; color: var(--muted); padding: 0 0 0.6rem; border-bottom: 2px solid var(--fg); }
+.size th:last-child, .size td:last-child { text-align: right; }
+.size td { padding: 0.85rem 0; border-bottom: 1px solid var(--border); }
+.size td:last-child { font-size: 1.6rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+.install { max-width: 50rem; }
+.steps { margin: 2.5rem 0 0; padding: 0; list-style: none; counter-reset: step; }
+.steps > li { position: relative; padding: 0 0 2.2rem 3.4rem; counter-increment: step; }
+.steps > li::before {
+  content: counter(step); position: absolute; left: 0; top: -0.1rem;
+  display: grid; place-items: center; width: 2.2rem; height: 2.2rem; border-radius: 50%;
+  font-weight: 800; color: var(--floor); background: var(--haint);
+}
+.steps > li:not(:last-child)::after { content: ""; position: absolute; left: 1.05rem; top: 2.5rem; bottom: 0.3rem; width: 2px; background: var(--border); }
+.steps h3 { font-size: 1.2rem; font-weight: 800; }
+.steps p { margin-top: 0.4rem; max-width: var(--measure); color: var(--muted); }
+.ways { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.5rem 1rem; margin: 1rem 0 0; align-items: baseline; }
+.ways dt { font-weight: 700; }
+.ways dd { margin: 0; min-width: 0; }
+.ways code { display: block; padding: 0.45rem 0.7rem; overflow-x: auto; white-space: nowrap; border-radius: 0.45rem; background: var(--soft); border: 1px solid var(--border); }
+.more { max-width: var(--measure); color: var(--muted); }
+
+footer {
+  display: flex; align-items: center; gap: 0.8rem; max-width: 72rem; margin: 6rem auto 0; padding: 2rem 1.5rem 3rem;
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 0.95rem;
+}
+
+@media (max-width: 60rem) {
+  .hero { grid-template-columns: minmax(0, 1fr); gap: 2rem; padding-bottom: 3.5rem; }
+  .groups { grid-template-columns: minmax(0, 1fr); gap: 2rem; }
+  .size { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
+}
+@media (max-width: 40rem) {
+  .bar ul { gap: 1rem; font-size: 0.95rem; }
+  .bar ul li:first-child { display: none; }
+  .gallery { grid-template-columns: minmax(0, 1fr); }
+  .porch { padding-left: 0.5rem; }
+  .steps > li { padding-left: 2.9rem; }
+  .ways { grid-template-columns: 1fr; gap: 0.2rem; }
+  .ways dt { margin-top: 0.6rem; }
+}

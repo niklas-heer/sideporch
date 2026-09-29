@@ -3,67 +3,194 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sideporch: a small, self-hosted team chat in one binary</title>
-  <meta name="description" content="Channels, threads and direct messages for a team, a club or a family, with the things people miss from Slack, on a server you control. One program, one data directory.">
+  <title>Sideporch: your own chat for a team, a club or a community</title>
+  <meta name="description" content="Channels, threads, polls and search for a team, a club, a family or a public community, on a server you control. One program and one data directory; runs on the smallest VPS.">
   <meta name="theme-color" content="#24403C">
   <link rel="icon" href="/logo.svg" type="image/svg+xml">
   <link rel="canonical" href="https://sideporch.app/">
   <meta property="og:title" content="Sideporch">
-  <meta property="og:description" content="A small, self-hosted team chat in one binary.">
+  <meta property="og:description" content="Your own chat for a team, a club or a community. One program, on a server you control.">
   <meta property="og:url" content="https://sideporch.app/">
   <meta property="og:image" content="https://sideporch.app/img/channel.webp">
   <meta property="og:type" content="website">
   <link rel="preload" href="/fonts/normal-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/style.css">
+  <script src="/porch.js" defer></script>
 </head>
 <body>
-  <header class="hero">
-    <img class="logo" src="/logo.svg" alt="" width="72" height="72">
-    <h1>Sideporch</h1>
-    <p class="tagline">A small, self-hosted team chat in one binary.</p>
-    <p class="lede">Channels, threads and direct messages for a team, a club or a family, with the things people miss from Slack, on a server you control.</p>
-    <p class="actions">
-      <a class="button" href="#try-it">Try it</a>
-      <a class="button quiet" href="https://github.com/niklas-heer/sideporch">View on GitHub</a>
-    </p>
-    <p class="status">Early: it works end to end, but expect rough edges and breaking changes before 1.0.</p>
-  </header>
+  <div class="dusk">
+    <nav class="bar" aria-label="Site">
+      <a class="brand" href="/"><img src="/logo.svg" alt="" width="36" height="36">Sideporch</a>
+      <ul>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#install">Install</a></li>
+        <li><a href="https://github.com/niklas-heer/sideporch">GitHub</a></li>
+      </ul>
+    </nav>
+
+    <header class="hero">
+      <div class="pitch">
+        <h1>Your own chat, on your own porch.</h1>
+        <p class="lede">Channels, threads, polls and search for a team, a club, a family or a whole community. It runs as one program on a server you control, and people know how to use it the moment they open it.</p>
+        <div class="start">
+          <p class="start-label" id="one-line">Try it on any machine with Docker:</p>
+          <div class="copyline">
+            <code aria-labelledby="one-line">docker run -p 8080:8080 -v sideporch:/data ghcr.io/niklas-heer/sideporch</code>
+            <button type="button" data-copy="docker run -p 8080:8080 -v sideporch:/data ghcr.io/niklas-heer/sideporch">Copy</button>
+          </div>
+          <p class="start-note">Then open <code>localhost:8080</code>. The first person to arrive becomes the admin. <a href="#install">Other ways to install</a></p>
+        </div>
+      </div>
+
+      <figure class="porch" aria-label="A conversation in Sideporch">
+        <svg class="roof" viewBox="0 0 640 120" preserveAspectRatio="none" aria-hidden="true">
+          <path d="M6 118V8l628 74" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="lamp" aria-hidden="true"></span>
+        <div class="window">
+          <div class="window-head">
+            <span class="channel"># friday-plans</span>
+            <span class="online"><span class="dot" aria-hidden="true"></span>4 here</span>
+          </div>
+          <ol class="talk" data-talk>
+            <li class="msg">
+              <span class="avatar" style="--hue: 163">M</span>
+              <div><p class="who">Mara <time>17:02</time></p><p>Who's in for dinner after the release on Friday?</p></div>
+            </li>
+            <li class="msg" data-delay="900">
+              <span class="avatar" style="--hue: 40">J</span>
+              <div><p class="who">Jonas <time>17:03</time></p><p>In! Let's rank places so nobody ends up somewhere they hate.</p></div>
+            </li>
+            <li class="msg" data-delay="1000">
+              <span class="avatar" style="--hue: 200">A</span>
+              <div>
+                <p class="who">Ayo <time>17:04</time></p>
+                <div class="poll">
+                  <p class="poll-q">Where do we eat? <span>Ranked</span></p>
+                  <p class="opt win"><span class="rank">1</span>Ramen Ichi <span class="tag">Wins, round 2</span></p>
+                  <p class="opt"><span class="rank">2</span>Pizza Nonna</p>
+                  <p class="opt out"><span class="rank">3</span>Taco truck <span class="note">out in round 1</span></p>
+                  <p class="poll-foot">5 people ranked. Taco fans' votes moved to their next choice.</p>
+                </div>
+              </div>
+            </li>
+            <li class="msg bot" data-delay="1300">
+              <span class="avatar bot-face" aria-hidden="true">✓</span>
+              <div><p class="who">Uptime <span class="badge">Bot</span> <time>17:06</time></p><p><strong>api.example.com</strong> is up again after 2 minutes.</p></div>
+            </li>
+            <li class="msg" data-delay="1100">
+              <span class="avatar" style="--hue: 290">L</span>
+              <div><p class="who">Lena <time>17:07</time> <span class="spoken" title="Dictated">dictated</span></p><p>Booked a table for five at seven. See you there!</p></div>
+            </li>
+          </ol>
+          <p class="typing" data-typing aria-hidden="true">Mara is typing…</p>
+        </div>
+        <figcaption class="sr-only">A channel where friends rank dinner places, a monitor posts that a service is back up, and someone dictates a message.</figcaption>
+      </figure>
+    </header>
+  </div>
 
   <main>
-    <picture class="shot">
-      <source media="(prefers-color-scheme: dark)" srcset="/img/channel-dark.webp">
-      <img src="/img/channel.webp" alt="A Sideporch channel with a thread open on the right: messages with reactions, a checklist and a poll." width="1600" height="1083">
-    </picture>
-
-    <section class="why" aria-labelledby="why">
-      <h2 id="why">Why Sideporch</h2>
-      <ul class="cards">
-        <li><h3>Yours, and simple to run</h3><p>One program and one data directory. No database server, no email server, nothing else to install. It runs on a small VPS, a home server or an ARM board.</p></li>
-        <li><h3>Familiar</h3><p>Channels, threads, mentions, reactions, search and notifications work the way people know from Slack, and you can bring your Slack history along.</p></li>
-        <li><h3>Easy to back up and move</h3><p>Everything lives in one directory. Download a complete backup from the browser, or have Sideporch write one every day.</p></li>
-        <li><h3>Works with your tools</h3><p>Monitors, CI and bots post through Slack-compatible webhooks, so tools like Gatus and Grafana work unchanged. Automations in Lua do the rest.</p></li>
-      </ul>
-    </section>
-
-    <section id="try-it" aria-labelledby="try">
-      <h2 id="try">Try it</h2>
-      <p>With Docker:</p>
-      <pre><code>docker run -d -p 8080:8080 -v sideporch:/data ghcr.io/niklas-heer/sideporch</code></pre>
-      <p>Or with Homebrew on macOS and Linux:</p>
-      <pre><code>brew install niklas-heer/tap/sideporch
-sideporch</code></pre>
-      <p>Open <code>http://localhost:8080</code>. The first person to open it creates the admin account, then invites everyone else with a link; nobody needs an email address. The <a href="https://github.com/niklas-heer/sideporch#install">README</a> covers running it for real.</p>
+    <section id="features" class="features" aria-labelledby="features-title">
+      <h2 id="features-title">Everything people expect from team chat, and nothing to rent</h2>
+      <div class="groups">
+        <div>
+          <h3>Talk the way you're used to</h3>
+          <ul>
+            <li><strong>Channels, threads and direct messages</strong>, with mentions, reactions, pins and saved messages.</li>
+            <li><strong>Polls</strong> where people pick one, pick several, or rank the options to find what most can live with.</li>
+            <li><strong>Search</strong> with <code>from:</code>, <code>in:</code>, <code>has:file</code> and dates, that fixes typos from your own words.</li>
+            <li><strong>Read aloud and dictate</strong> in 31 languages, with voices that run on your server.</li>
+            <li><strong>Reminders, scheduled messages</strong>, link previews, GIFs, Markdown and diagrams.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Simple to run yourself</h3>
+          <ul>
+            <li><strong>One program, one folder.</strong> No database server, no mail server, nothing else to install.</li>
+            <li><strong>Upgrades itself</strong> when you install a new version, and keeps a copy of your data first.</li>
+            <li><strong>Backups</strong> from the browser or on a schedule; restoring is one command.</li>
+            <li><strong>Bring your Slack history</strong>: channels, threads and reactions come along.</li>
+            <li><strong>Webhooks and Lua automations</strong> for monitors, CI and bots; Slack-style webhooks work unchanged.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Ready for a public community</h3>
+          <ul>
+            <li><strong>Open sign-up</strong>, or requests a moderator approves, with rules people agree to.</li>
+            <li><strong>Trust levels</strong>: newcomers earn uploads, links and more by taking part.</li>
+            <li><strong>Roles and permissions</strong>, like moderators or who may upload files.</li>
+            <li><strong>Passkeys, authenticator apps</strong> and email sign-in links, and a policy that requires them.</li>
+            <li><strong>Reports and time-outs</strong> so moderators can act quickly.</li>
+          </ul>
+        </div>
+      </div>
     </section>
 
     <section class="gallery" aria-label="Screenshots">
-      <figure><img src="/img/deploys.webp" alt="A #deploys channel with Gatus alerts from a webhook, a Mermaid diagram and an approval automation." loading="lazy" width="1600" height="1224"><figcaption>Webhooks, diagrams and approvals in one channel.</figcaption></figure>
-      <figure><img src="/img/automation.webp" alt="The automation editor with a Lua script." loading="lazy" width="1600" height="1083"><figcaption>Automations in Lua, written in the browser.</figcaption></figure>
-      <figure><img src="/img/phones.webp" alt="Sideporch on two phones." loading="lazy" width="1100" height="1056"><figcaption>Installs like an app on phones.</figcaption></figure>
+      <figure class="wide">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="/img/channel-dark.webp">
+          <img src="/img/channel.webp" alt="A Sideporch channel with a thread open on the right: messages with reactions, a checklist and a poll." width="1600" height="1083" loading="lazy">
+        </picture>
+        <figcaption>A channel with a thread open. Everything works on phones too, and installs like an app.</figcaption>
+      </figure>
+      <figure>
+        <img src="/img/deploys.webp" alt="A deploys channel with alerts from a monitor, a Mermaid diagram and an approval button." width="1600" height="1224" loading="lazy">
+        <figcaption>Alerts from your monitors next to the people who fix them.</figcaption>
+      </figure>
+      <figure>
+        <img src="/img/automation.webp" alt="The automation editor with a Lua script that asks for deploy approvals." width="1600" height="1083" loading="lazy">
+        <figcaption>Automations in Lua, written, checked and tested in the browser.</figcaption>
+      </figure>
+    </section>
+
+    <section class="size" aria-labelledby="size-title">
+      <div>
+        <h2 id="size-title">A small server is plenty</h2>
+        <p>In load tests, everyone was online at once and posted every two minutes; a message only counted if it reached everyone within a second. Plan with a quarter of this on slower real servers: a Raspberry Pi still serves a thousand people.</p>
+        <p><a href="https://github.com/niklas-heer/sideporch/blob/main/docs/capacity.md">How it was measured</a></p>
+      </div>
+      <table>
+        <caption class="sr-only">People online at once, by server size</caption>
+        <thead><tr><th scope="col">Server</th><th scope="col">People online at once</th></tr></thead>
+        <tbody>
+          <tr><td>½ CPU, 512 MB</td><td>4,800</td></tr>
+          <tr><td>1 CPU, 1 GB</td><td>9,600</td></tr>
+          <tr><td>2 CPUs, 2 GB</td><td>12,800 or more</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="install" class="install" aria-labelledby="install-title">
+      <h2 id="install-title">Set it up in three steps</h2>
+      <ol class="steps">
+        <li>
+          <h3>Install it</h3>
+          <p>Pick whichever fits your server. Every release has static binaries for Linux and macOS, on x86-64 and ARM.</p>
+          <dl class="ways">
+            <dt>Docker</dt><dd><code>docker run -d -p 8080:8080 -v sideporch:/data ghcr.io/niklas-heer/sideporch</code></dd>
+            <dt>Homebrew</dt><dd><code>brew install niklas-heer/tap/sideporch</code></dd>
+            <dt>Script</dt><dd><code>curl -fsSL https://raw.githubusercontent.com/niklas-heer/sideporch/main/install.sh | sh</code></dd>
+            <dt>Nix</dt><dd><code>nix run github:niklas-heer/sideporch</code></dd>
+          </dl>
+        </li>
+        <li>
+          <h3>Open it and become the admin</h3>
+          <p>The first person to open it creates the admin account. Put it behind HTTPS with Caddy or your usual proxy so phones get notifications and passkeys work.</p>
+        </li>
+        <li>
+          <h3>Bring people in</h3>
+          <p>Share invite links, or open sign-up for a community. Nobody needs an email address unless you want sign-in links.</p>
+        </li>
+      </ol>
+      <p class="more">The <a href="https://github.com/niklas-heer/sideporch#install">README</a> covers running it for real: HTTPS, backups, updates and moving from Slack. Sideporch is young; expect rough edges before 1.0, and read the <a href="https://github.com/niklas-heer/sideporch/releases">release notes</a> for what changed.</p>
     </section>
   </main>
 
   <footer>
-    <p><a href="https://github.com/niklas-heer/sideporch">GitHub</a> · <a href="https://github.com/niklas-heer/sideporch/releases">Releases</a> · MIT licensed</p>
+    <img src="/logo.svg" alt="" width="28" height="28">
+    <p>Sideporch is free software under the MIT license. <a href="https://github.com/niklas-heer/sideporch">Source on GitHub</a>, <a href="https://github.com/niklas-heer/sideporch/releases">releases</a>, <a href="https://github.com/niklas-heer/sideporch/issues">issues</a>.</p>
   </footer>
 </body>
 </html>
