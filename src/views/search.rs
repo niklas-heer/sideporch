@@ -236,8 +236,17 @@ fn result(hit: &Hit) -> Markup {
     }
 }
 
+/// Drops Markdown's emphasis and code markers, which snippets of message
+/// text would otherwise show as they were typed.
+fn without_markdown(snippet: &str) -> String {
+    ["**", "__", "~~", "`"]
+        .iter()
+        .fold(snippet.to_owned(), |text, marker| text.replace(marker, ""))
+}
+
 /// Renders an FTS5 snippet, whose matches sit between U+0001 and U+0002.
 fn highlighted(snippet: &str) -> Markup {
+    let snippet = without_markdown(snippet);
     let mut parts = snippet.split('\u{1}');
     let first = parts.next().unwrap_or_default();
     html! {
@@ -252,12 +261,22 @@ fn highlighted(snippet: &str) -> Markup {
 
 /// A snippet without its match marks, for plain-text suggestions.
 pub fn plain_snippet(snippet: &str) -> String {
-    snippet.replace(['\u{1}', '\u{2}'], "")
+    without_markdown(snippet).replace(['\u{1}', '\u{2}'], "")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snippets_hide_markdown_markers() {
+        assert_eq!(
+            plain_snippet("The **v2.3 \u{1}release\u{2}** notes, `make` and ~~old~~"),
+            "The v2.3 release notes, make and old"
+        );
+        let html = highlighted("**\u{1}bold\u{2}**").into_string();
+        assert!(html.contains("<mark") && !html.contains("**"), "{html}");
+    }
 
     #[test]
     fn shortcuts_add_and_remove_filters() {
