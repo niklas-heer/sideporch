@@ -22,6 +22,8 @@ Everyone has a profile with a picture, a display name, a status with an emoji, a
 
 Point at a name or picture in chat, or move to a name with the keyboard, and a **card** shows who that is: their picture, username, status, badges such as **Admin** or **Moderators**, trust level, what time it is where they are, and when they joined, with buttons to message them or open their profile.
 
+{{<shot name="person-card" alt="A channel with a card over Grace's name: her picture, a green Moderators badge, her status, trust level, local time and buttons to message her or open her profile." caption="Pointing at a name shows who that is." />}}
+
 Under **Edit profile** you also pick the emoji your reaction picker shows first.
 
 ## Sign-in and security

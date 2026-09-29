@@ -94,6 +94,16 @@ await profile(mo, "Mo", "🐙", "#E3E7F7", [":headphones:", "Deep work"]);
 await profile(rosa, "Rosa", "🍋", "#FBE3DC", ["", ""]);
 await profile(linus, "Linus", "🌿", "#E4F0DA", [":coffee:", ""]);
 
+// Grace helps moderate, with a badge that shows next to her name.
+await form(ada, "/admin/roles", { name: "Moderators", description: "Keep the porch friendly" });
+{
+  const page = await (await ada.request.get(`${base}/admin/permissions`)).text();
+  const role = page.match(/\/admin\/roles\/(\d+)\/badge/)[1];
+  await form(ada, `/admin/roles/${role}/badge`, { badge: "on", color: "green" });
+  const graceId = await grace.request.get(`${base}/home`).then((r) => r.text()).then((t) => t.match(/data-me="(\d+)"/)[1]);
+  await form(ada, `/people/${graceId}/roles`, { [`role_${role}`]: "on" });
+}
+
 async function channel(context, name, isPrivate = false, topic = "") {
   const fields = isPrivate ? { name, private: "on" } : { name };
   const id = Number((await form(context, "/channels", fields)).headers().location.split("/").pop());
@@ -494,9 +504,24 @@ for (const dark of [false, true]) {
   await page.close();
 }
 {
-  const page = await view({ viewport: { width: 1360, height: 1040 } });
+  // Bans for a network that sent spam, and a throwaway email domain.
+  await form(ada, "/moderation/bans", { target: "203.0.113.0/24", reason: "Sign-up spam", duration: "604800000" });
+  await form(ada, "/moderation/bans", { target: "@spam.example", reason: "Throwaway addresses", duration: "0" });
+  const page = await view({ viewport: { width: 1360, height: 1400 } });
   await page.goto(`${base}/moderation`);
   await shot(page, "moderation");
+  await page.close();
+}
+{
+  // Pointing at a name shows who that is.
+  const page = await view();
+  await page.goto(`${base}/c/${general}/t/${notes}`);
+  await page.waitForSelector("[data-poll]");
+  const name = page.locator("#messages a[data-person-card]:has-text('Grace')").last();
+  await name.scrollIntoViewIfNeeded();
+  await name.hover();
+  await page.waitForSelector(".person-card:not([hidden]) [data-card]", { timeout: 5000 }).catch(() => errors.push("no hover card"));
+  await shot(page, "person-card");
   await page.close();
 }
 {
