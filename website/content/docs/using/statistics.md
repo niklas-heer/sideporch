@@ -4,7 +4,7 @@ description = "How much your community talks, in which channels, and who writes 
 weight = 5
 +++
 
-**Statistics** in the sidebar shows how the community is doing: how many messages were written, when, in which channels, and by whom. Pick a period at the top: the last 7 days, 30 days, 12 months, or all time.
+**Statistics** in the sidebar shows how the community is doing: how many messages were written, when, in which channels, and by whom. Pick a period at the top: the last 7 days, 30 days, 12 months, or all time. New in 0.6.0.
 
 {{<shot name="statistics" alt="The statistics page over 30 days: totals, messages per day, the people with the most messages and reactions, the busiest channels and the most used reactions." caption="The last 30 days of a small team." />}}
 

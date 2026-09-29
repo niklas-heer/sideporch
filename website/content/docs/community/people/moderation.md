@@ -23,7 +23,7 @@ A time-out stops someone from posting or reacting for **1 hour**, **1 day** or *
 
 ## Bans
 
-A time-out pauses someone; a ban keeps them out. Moderators ban from the person's profile, which shows the **addresses** they used in the last 30 days, and other accounts that used the same ones. **Ban** there:
+A time-out pauses someone; a ban keeps them out. New in 0.6.0. Moderators ban from the person's profile, which shows the **addresses** they used in the last 30 days, and other accounts that used the same ones. **Ban** there:
 
 - deactivates the account and signs it out everywhere,
 - optionally bans those addresses, so nobody from them can use the server at all, not even to sign up again,

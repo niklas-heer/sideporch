@@ -4,7 +4,7 @@ description = "Export automations with the libraries they need, and import them 
 weight = 6
 +++
 
-Automations travel between servers as files. Export the ones you want to share, send the file or post it somewhere, and import it on another server. Importing always shows what the file holds first, and adds everything switched off.
+Automations travel between servers as files. Export the ones you want to share, send the file or post it somewhere, and import it on another server. Importing always shows what the file holds first, and adds everything switched off. New in 0.6.0.
 
 ## Exporting
 
