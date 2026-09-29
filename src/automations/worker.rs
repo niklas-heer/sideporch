@@ -144,7 +144,7 @@ fn run(
             .iter()
             .filter_map(|timer| timer.next)
             .min()
-            .map_or(Duration::from_secs(3600), |next| {
+            .map_or(Duration::from_hours(1), |next| {
                 Duration::try_from(next.duration_since(Timestamp::now())).unwrap_or_default()
             });
         match jobs.recv_timeout(wait) {

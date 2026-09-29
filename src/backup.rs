@@ -28,7 +28,7 @@ const KEY_FILE: &str = "secret.key";
 const PREFIX: &str = "sideporch-";
 const SUFFIX: &str = ".tar.gz";
 /// How often the schedule is checked.
-const CHECK: Duration = Duration::from_secs(10 * 60);
+const CHECK: Duration = Duration::from_mins(10);
 const HOUR_MS: i64 = 60 * 60 * 1000;
 
 /// How often scheduled backups run: off, or every so many hours.

@@ -122,7 +122,7 @@ impl Push {
             PublicKey::from_sec1_bytes(&p256dh)?,
             Auth::clone_from_slice(&auth),
         )
-        .with_valid_duration(Duration::from_secs(24 * 60 * 60))
+        .with_valid_duration(Duration::from_hours(24))
         .with_vapid(&self.key, &self.subject)
         .build(payload.to_vec())?;
         let (parts, body) = request.into_parts();

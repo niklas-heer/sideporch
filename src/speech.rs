@@ -30,7 +30,7 @@ pub mod tts;
 use models::{Kind, Model};
 
 /// Models are unloaded after this long unused, to give memory back.
-const IDLE: Duration = Duration::from_secs(15 * 60);
+const IDLE: Duration = Duration::from_mins(15);
 /// Spoken messages kept on disk, at most.
 const CACHE_BYTES: u64 = 256 * 1024 * 1024;
 /// Reading aloud is sent at this rate; plenty for speech, half the size.
@@ -298,7 +298,7 @@ impl Speech {
         if let Ok(bytes) = tokio::fs::read(&cache).await {
             return Ok(bytes);
         }
-        let _permit = tokio::time::timeout(Duration::from_secs(120), self.work.acquire())
+        let _permit = tokio::time::timeout(Duration::from_mins(2), self.work.acquire())
             .await
             .map_err(|_| AppError::bad_request("Reading aloud is busy. Try again in a moment."))?
             .map_err(AppError::internal)?;
@@ -366,7 +366,7 @@ impl Speech {
                 "Dictate at most two minutes at a time.",
             ));
         }
-        let _permit = tokio::time::timeout(Duration::from_secs(120), self.work.acquire())
+        let _permit = tokio::time::timeout(Duration::from_mins(2), self.work.acquire())
             .await
             .map_err(|_| AppError::bad_request("Dictation is busy. Try again in a moment."))?
             .map_err(AppError::internal)?;
@@ -384,7 +384,7 @@ impl Speech {
     pub fn start_unloading(self: &Arc<Self>) {
         let speech = Arc::downgrade(self);
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(60));
+            let mut ticker = tokio::time::interval(Duration::from_mins(1));
             loop {
                 ticker.tick().await;
                 let Some(speech) = speech.upgrade() else {

@@ -26,7 +26,7 @@ use crate::{
     store,
 };
 
-const TIMEOUT: Duration = Duration::from_secs(240);
+const TIMEOUT: Duration = Duration::from_mins(4);
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 /// Output budget for one answer; scripts are short, but thinking counts too.
 const MAX_TOKENS: u32 = 16_000;
