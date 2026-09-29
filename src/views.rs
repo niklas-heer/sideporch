@@ -23,6 +23,7 @@ pub mod channels;
 pub mod community;
 pub use channels::{ChannelSettings, channel_settings_page};
 pub mod emoji;
+pub mod federation;
 pub mod gifs;
 pub mod later;
 pub mod messages;
@@ -928,6 +929,9 @@ pub fn message_item(
                 div class="flex items-baseline gap-2 group-data-[compact]:hidden" {
                     @if let Author::User { id, status_emoji, .. } = &message.author {
                         a href={ "/people/" (id) } class="font-bold hover:underline" { (name) }
+                        @if let Some(username) = render.ctx.remote.get(id) {
+                            span class="text-xs text-muted dark:text-haint" title="On another Sideporch server" { "@" (username) }
+                        }
                         @if !status_emoji.is_empty() {
                             span class="text-sm" { (PreEscaped(markup::render(status_emoji, render.ctx))) }
                         }
@@ -1663,6 +1667,7 @@ pub fn people_page(
     users: &[User],
     invites: &[Invite],
     base_url: &str,
+    servers: &[String],
 ) -> Markup {
     panel_page(
         "People",
@@ -1692,6 +1697,15 @@ pub fn people_page(
                     }
                 }
             }))
+            @if !servers.is_empty() {
+                (section("On other servers", "This server is connected with other Sideporch servers. You can write to people there too.", &html! {
+                    div class="flex flex-wrap items-center gap-3" {
+                        (icon(icons::GLOBE, "h-5 w-5 text-floor-3 dark:text-haint"))
+                        span class="min-w-0 flex-1" { (servers.join(", ")) }
+                        a href="/people/elsewhere" class="btn-quiet text-sm" { (icon(icons::MAGNIFYING_GLASS, "h-4 w-4")) "Find someone" }
+                    }
+                }))
+            }
             @if shell.user.is_admin && users.iter().any(|user| user.deactivated) {
                 (section("Deactivated", "They can't sign in. Their messages stay. Reactivate them from their profile.", &html! {
                     ul {

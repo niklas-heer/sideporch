@@ -13,6 +13,7 @@ Sideporch is team chat you run yourself: channels, threads and direct messages f
 - **Yours, and simple to run.** One program and one data directory. No database server, no mail server required, nothing else to install. It runs on a small VPS, a home server or an ARM board.
 - **Familiar.** Channels, threads, mentions, reactions, search and notifications work the way people know from Slack, and you can [bring your Slack history along](@/docs/community/move-from-slack.md).
 - **Easy to back up and move.** Everything lives in one directory. [Download a complete backup](@/docs/community/backups.md) from the browser, or have Sideporch write one every day.
+- **Connects with other servers.** Like Slack Connect, [two Sideporch servers can connect](@/docs/community/other-servers.md) to share channels and let people write to each other.
 - **Works with your tools.** Monitors, CI and bots post through [Slack-compatible webhooks](@/docs/integrations/incoming-webhooks.md), so tools like Gatus and Grafana work unchanged. [Automations in Lua](@/docs/integrations/automations.md) do the rest.
 
 {% <note> %}

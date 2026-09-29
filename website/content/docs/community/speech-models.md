@@ -1,7 +1,7 @@
 +++
 title = "Speech models"
 description = "Download the models that read messages aloud and take dictation, and what they need."
-weight = 7
+weight = 8
 +++
 
 Reading aloud and dictation run on your server's processor with open models, run by [tract](https://github.com/sonos/tract), a Rust library: nothing is sent to a speech service. An admin downloads the models under **Admin → Speech**.

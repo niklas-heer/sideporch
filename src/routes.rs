@@ -31,6 +31,7 @@ mod automation;
 mod backups;
 mod channels;
 mod community;
+pub mod federation;
 mod gifs;
 mod later;
 mod message;
@@ -112,6 +113,7 @@ pub fn router(state: AppState) -> Router {
         .merge(community::router())
         .merge(security::router())
         .merge(updates::router())
+        .merge(federation::router())
         .merge(speech::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
@@ -1133,7 +1135,7 @@ struct ChannelForm {
     private: Option<String>,
 }
 
-fn normalize_channel_name(raw: &str) -> Option<String> {
+pub fn normalize_channel_name(raw: &str) -> Option<String> {
     let name = raw
         .trim()
         .trim_start_matches('#')
@@ -1240,7 +1242,7 @@ async fn channel_settings(
     let user_id = user.id;
     let private = channel.kind == ChannelKind::Private;
     let updates = std::sync::Arc::clone(&state.updates);
-    let (hooks, sidebar, people) = state
+    let (hooks, sidebar, people, servers) = state
         .db
         .call(move |conn| {
             let people = (
@@ -1252,6 +1254,15 @@ async fn channel_settings(
                 store::users(conn)?,
                 store::channel_managers(conn, channel_id)?,
             );
+            let servers = (
+                crate::federation::data::shared_with(conn, channel_id)?,
+                crate::federation::data::instances(conn)?
+                    .into_iter()
+                    .filter(|instance| {
+                        instance.status == crate::federation::data::Status::Connected
+                    })
+                    .collect::<Vec<_>>(),
+            );
             Ok((
                 (
                     store::webhooks(conn, channel_id)?,
@@ -1259,10 +1270,12 @@ async fn channel_settings(
                 ),
                 sidebar_with_update(conn, &updates, user_id)?,
                 people,
+                servers,
             ))
         })
         .await?;
     let (hooks, outgoing) = hooks;
+    let (shares, connected) = servers;
     let shell = Shell {
         user: &user,
         sidebar: &sidebar,
@@ -1278,6 +1291,9 @@ async fn channel_settings(
             everyone: &people.1,
             managers: &people.2,
             outgoing: &outgoing,
+            shares: &shares,
+            connected: &connected,
+            federating: state.federation.handle().is_some(),
         },
     ))
 }
@@ -1444,7 +1460,7 @@ async fn people(
     let is_admin = user.may(crate::community::Permission::InvitePeople);
     let now = now_ms();
     let updates = std::sync::Arc::clone(&state.updates);
-    let (users, invites, sidebar) = state
+    let (users, invites, sidebar, servers) = state
         .db
         .call(move |conn| {
             let invites = if is_admin {
@@ -1452,10 +1468,22 @@ async fn people(
             } else {
                 Vec::new()
             };
+            let servers: Vec<String> = crate::federation::data::instances(conn)?
+                .into_iter()
+                .filter(|instance| instance.status == crate::federation::data::Status::Connected)
+                .map(|instance| {
+                    if instance.name.is_empty() {
+                        instance.handle
+                    } else {
+                        instance.name
+                    }
+                })
+                .collect();
             Ok((
                 store::users(conn)?,
                 invites,
                 sidebar_with_update(conn, &updates, user_id)?,
+                servers,
             ))
         })
         .await?;
@@ -1469,6 +1497,7 @@ async fn people(
         &users,
         &invites,
         &base_url(&state, &headers),
+        &servers,
     ))
 }
 

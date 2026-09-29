@@ -249,6 +249,9 @@ async fn leave(
             }
         })
         .await?;
+    if channel.kind == ChannelKind::Private {
+        crate::federation::outbound::membership(&state, channel_id, user_id, false, None).await;
+    }
     Ok(Redirect::to("/channels/browse"))
 }
 
@@ -308,6 +311,7 @@ async fn add_member(
             store::add_member(conn, channel_id, member)
         })
         .await?;
+    crate::federation::outbound::membership(&state, channel_id, member, true, None).await;
     Ok(Redirect::to(&format!("/c/{channel_id}/settings")))
 }
 
@@ -328,5 +332,6 @@ async fn remove_member(
         .db
         .call(move |conn| store::remove_member(conn, channel_id, member))
         .await?;
+    crate::federation::outbound::membership(&state, channel_id, member, false, None).await;
     Ok(Redirect::to(&format!("/c/{channel_id}/settings")))
 }

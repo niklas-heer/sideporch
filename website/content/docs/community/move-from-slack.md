@@ -1,7 +1,7 @@
 +++
 title = "Move from Slack"
 description = "Import a Slack workspace export: people, channels, threads and reactions."
-weight = 6
+weight = 7
 +++
 
 Bring your team's Slack history along, so nothing gets lost in the move.

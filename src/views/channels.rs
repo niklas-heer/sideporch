@@ -5,6 +5,7 @@ use maud::{Markup, html};
 
 use super::{Context, Shell, avatar, channel_label, copy_row, panel_page, section, user_author};
 use crate::{
+    federation::data::{Instance, Role, Share, ShareStatus},
     icons::{self, icon},
     store::{Channel, ChannelKind, DirectoryEntry, OutgoingWebhook, Policy, User, Webhook},
 };
@@ -20,6 +21,12 @@ pub struct ChannelSettings<'a> {
     /// Who manages the channel, besides admins.
     pub managers: &'a [User],
     pub outgoing: &'a [OutgoingWebhook],
+    /// Other servers the channel is shared with or offered to.
+    pub shares: &'a [(Share, Instance)],
+    /// Connected servers, to share it with.
+    pub connected: &'a [Instance],
+    /// Whether this server can connect to others at all.
+    pub federating: bool,
 }
 
 pub fn channel_settings_page(shell: &Shell<'_>, settings: &ChannelSettings<'_>) -> Markup {
@@ -39,6 +46,7 @@ pub fn channel_settings_page(shell: &Shell<'_>, settings: &ChannelSettings<'_>) 
                 (members_section(shell, settings))
             }
             (permissions_section(settings))
+            (servers_section(shell, settings))
             (webhooks_section(settings))
             (outgoing_section(settings))
             (section("Leave", leave_intro(channel), &html! {
@@ -129,6 +137,101 @@ fn permissions_section(settings: &ChannelSettings<'_>) -> Markup {
             }
             @if !channel.manager {
                 p class="text-sm text-muted dark:text-haint" { "Managers and admins change these." }
+            }
+        },
+    )
+}
+
+fn server_label(instance: &Instance) -> &str {
+    if instance.name.is_empty() {
+        &instance.handle
+    } else {
+        &instance.name
+    }
+}
+
+/// Which other servers take part in the channel. Admins of the host share it
+/// and stop sharing; the guest's admins can only stop taking part.
+fn servers_section(shell: &Shell<'_>, settings: &ChannelSettings<'_>) -> Markup {
+    let channel = settings.channel;
+    let admin = shell.user.is_admin;
+    let host = settings
+        .shares
+        .iter()
+        .find(|(share, _)| share.role == Role::Guest && share.status != ShareStatus::Ended);
+    let current: Vec<&(Share, Instance)> = settings
+        .shares
+        .iter()
+        .filter(|(share, _)| share.role == Role::Host && share.status != ShareStatus::Ended)
+        .collect();
+    let candidates: Vec<&Instance> = settings
+        .connected
+        .iter()
+        .filter(|instance| {
+            !current
+                .iter()
+                .any(|(share, _)| share.instance_id == instance.id)
+        })
+        .collect();
+    let can_share = admin && settings.federating && channel.kind != ChannelKind::Direct;
+    if host.is_none() && current.is_empty() && (!can_share || candidates.is_empty()) {
+        return html! {};
+    }
+    section(
+        "Other servers",
+        "People on connected Sideporch servers can take part here. Each server keeps its own copy; messages, replies, edits and reactions travel between them. Polls stay on the server they were made on.",
+        &html! {
+            @if let Some((share, instance)) = host {
+                div class="mb-4 flex flex-wrap items-center gap-3" data-shared-by=(instance.handle) {
+                    (icon(icons::GLOBE, "h-5 w-5 text-floor-3 dark:text-haint"))
+                    span class="min-w-0 flex-1" {
+                        "Shared by " strong { (server_label(instance)) } " "
+                        span class="text-sm text-muted dark:text-haint" { (instance.handle) }
+                    }
+                    @if admin {
+                        form method="post" action={ "/c/" (channel.id) "/unshare" } {
+                            input type="hidden" name="server" value=(share.instance_id);
+                            button type="submit" class="btn-quiet text-sm" { "Stop taking part" }
+                        }
+                    }
+                }
+            }
+            @if !current.is_empty() {
+                ul class="mb-4" {
+                    @for (share, instance) in &current {
+                        li class="flex items-center gap-3 border-b border-line py-2 last:border-b-0 dark:border-night-line" data-shared-with=(instance.handle) {
+                            (icon(icons::GLOBE, "h-5 w-5 text-floor-3 dark:text-haint"))
+                            span class="min-w-0 flex-1 truncate" {
+                                (server_label(instance)) " "
+                                span class="text-sm text-muted dark:text-haint" {
+                                    @if share.status == ShareStatus::Invited { "Waiting for their admin" } @else { "Taking part" }
+                                }
+                            }
+                            @if admin {
+                                form method="post" action={ "/c/" (channel.id) "/unshare" } {
+                                    input type="hidden" name="server" value=(share.instance_id);
+                                    button type="submit" class="btn-quiet text-sm" { "Stop sharing" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            @if can_share && host.is_none() && !candidates.is_empty() {
+                form method="post" action={ "/c/" (channel.id) "/share" } class="flex items-end gap-2" {
+                    div class="flex-1" {
+                        label for="share-server" class="field-label" { "Share with" }
+                        select id="share-server" name="server" class="field" {
+                            @for instance in candidates {
+                                option value=(instance.id) { (server_label(instance)) " (" (instance.handle) ")" }
+                            }
+                        }
+                    }
+                    button type="submit" class="btn shrink-0" { "Share" }
+                }
+            }
+            @if !admin {
+                p class="text-sm text-muted dark:text-haint" { "Admins share channels with other servers." }
             }
         },
     )

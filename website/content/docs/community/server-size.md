@@ -1,7 +1,7 @@
 +++
 title = "How big a server"
 description = "How many people a small server serves, how that was measured, and how to measure it yourself."
-weight = 9
+weight = 10
 +++
 
 Short answer: a lot more than a small group needs. On a server with half a CPU and 512 MB of memory, Sideporch kept messages arriving within a fraction of a second for **4,800 people online at once**, each of them posting every two minutes. Most teams are nowhere near that.

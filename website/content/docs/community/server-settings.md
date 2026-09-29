@@ -1,7 +1,7 @@
 +++
 title = "GIFs, link previews and the system page"
 description = "Choose where GIFs come from, turn link previews on or off, and watch the server's health."
-weight = 8
+weight = 9
 +++
 
 ## GIFs

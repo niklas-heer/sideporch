@@ -39,11 +39,41 @@ pub async fn start_in(data: TempDir, configure: impl FnOnce(&mut Config)) -> Ser
         // Tests never ask GitHub.
         update_check: false,
         update_source: None,
+        allow_private_federation: false,
     };
     configure(&mut config);
     let app = Sideporch::open(config).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
+    let setup_path = app.setup_path();
+    let router = app.router();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    Server {
+        base,
+        setup_path,
+        data,
+    }
+}
+
+/// Starts a server that knows its own address, as servers that connect to
+/// other Sideporch servers must, and may reach others on this machine.
+pub async fn start_federated() -> Server {
+    let data = tempfile::tempdir().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let config = Config {
+        data_dir: data.path().to_owned(),
+        public_url: Some(base.clone()),
+        require_setup_link: false,
+        gif_api_base: None,
+        allow_insecure_push: true,
+        allow_private_link_previews: false,
+        model_base_url: None,
+        update_check: false,
+        update_source: None,
+        allow_private_federation: true,
+    };
+    let app = Sideporch::open(config).await.unwrap();
     let setup_path = app.setup_path();
     let router = app.router();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });

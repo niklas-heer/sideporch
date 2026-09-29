@@ -125,6 +125,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         model_base_url: None,
         update_check: args.update_check,
         update_source: None,
+        allow_private_federation: false,
     })
     .await?;
     let listener = tokio::net::TcpListener::bind(args.listen).await?;

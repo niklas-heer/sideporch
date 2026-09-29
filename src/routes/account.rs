@@ -35,6 +35,21 @@ pub fn router() -> Router<AppState> {
         .route("/people/{user_id}/admin", post(set_admin))
 }
 
+/// People from other servers sign in on their own server, never here.
+async fn refuse_remote(state: &AppState, user_id: i64) -> AppResult<()> {
+    let remote = state
+        .db
+        .call(move |conn| crate::federation::data::remote_server(conn, user_id))
+        .await?;
+    match remote {
+        Some(server) => Err(AppError::bad_request(format!(
+            "They sign in on their own server, {}.",
+            server.handle
+        ))),
+        None => Ok(()),
+    }
+}
+
 fn password_problem(password: &str) -> Option<&'static str> {
     (!(MIN_PASSWORD..=MAX_PASSWORD).contains(&password.chars().count()))
         .then_some("Choose a password with at least 8 characters.")
@@ -185,6 +200,7 @@ async fn reset_link(
     if person.deactivated {
         return Err(AppError::bad_request("Reactivate the account first."));
     }
+    refuse_remote(&state, user_id).await?;
     let token = auth::random_token()?;
     let token_hash = auth::hash_token(&token);
     let now = now_ms();
@@ -245,6 +261,7 @@ async fn set_admin(
     Form(form): Form<AdminForm>,
 ) -> AppResult<Redirect> {
     managed_person(&state, &user, user_id).await?;
+    refuse_remote(&state, user_id).await?;
     let admin = form.admin == "true";
     state
         .db

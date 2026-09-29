@@ -328,6 +328,64 @@ impl Http {
         Ok((status, body.to_vec()))
     }
 
+    /// Sends one request without following redirects, and returns the
+    /// status and at most `limit` bytes of the answer.
+    pub async fn call(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(&str, String)],
+        body: Vec<u8>,
+        limit: usize,
+    ) -> Result<(u16, Vec<u8>), String> {
+        let uri: axum::http::Uri = url
+            .parse()
+            .map_err(|_| format!("`{url}` is not a valid URL"))?;
+        if !matches!(uri.scheme_str(), Some("http" | "https")) {
+            return Err("only http and https URLs are allowed".to_owned());
+        }
+        if let Some(host) = uri.host()
+            && let Ok(ip) = host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<IpAddr>()
+            && !self.allow_private
+            && !is_public(ip)
+        {
+            return Err(format!("{host} is an internal address"));
+        }
+        let method: axum::http::Method = method
+            .parse()
+            .map_err(|_| format!("`{method}` is not an HTTP method"))?;
+        let mut builder = axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("user-agent", &self.user_agent);
+        for (name, value) in headers {
+            builder = builder.header(*name, value.as_str());
+        }
+        let request = builder
+            .body(Full::new(Bytes::from(body)))
+            .map_err(|error| format!("invalid request: {error}"))?;
+        let exchange = async {
+            let response = self
+                .client
+                .request(request)
+                .await
+                .map_err(|error| describe(&error))?;
+            let status = response.status().as_u16();
+            let bytes = Limited::new(response.into_body(), limit)
+                .collect()
+                .await
+                .map_err(|_| format!("the answer is larger than {} KB", limit / 1024))?
+                .to_bytes();
+            Ok((status, bytes.to_vec()))
+        };
+        tokio::time::timeout(Duration::from_mins(1), exchange)
+            .await
+            .map_err(|_| "the server didn't answer within a minute".to_owned())?
+    }
+
     /// Downloads `url` to `target` like [`Self::download`], for files of
     /// unknown size up to `max` bytes.
     pub async fn download_up_to(

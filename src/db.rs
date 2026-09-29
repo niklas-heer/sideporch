@@ -547,6 +547,81 @@ ALTER TABLE users ADD COLUMN speech_voice TEXT NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN speech_speed REAL NOT NULL DEFAULT 1.0;
 ",
     ),
+    Migration::Sql(
+        r"
+-- Other Sideporch servers: connected ones, requests either way, and
+-- servers only known because a shared channel's host passed on people
+-- from them ('relayed'). `handle` is the host and port people's names
+-- carry there, as in `ada@chat.example.org`.
+CREATE TABLE instances (
+    id INTEGER PRIMARY KEY,
+    url TEXT NOT NULL UNIQUE,
+    handle TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    name TEXT NOT NULL DEFAULT '',
+    public_key BLOB,
+    status TEXT NOT NULL CHECK (status IN ('requested', 'pending', 'connected', 'declined', 'disconnected', 'relayed')),
+    note TEXT NOT NULL DEFAULT '',
+    allow_direct INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- People from other servers are accounts here that can't sign in.
+ALTER TABLE users ADD COLUMN instance_id INTEGER REFERENCES instances(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN remote_id INTEGER;
+CREATE UNIQUE INDEX users_by_remote ON users (instance_id, remote_id) WHERE instance_id IS NOT NULL;
+
+-- Channels shared between servers. The host keeps the channel and passes
+-- everything on; each guest keeps a copy. `remote_channel_id` is the
+-- channel's id on the other server.
+CREATE TABLE shared_channels (
+    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    instance_id INTEGER NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('host', 'guest')),
+    remote_channel_id INTEGER,
+    status TEXT NOT NULL CHECK (status IN ('invited', 'active', 'ended')),
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (channel_id, instance_id)
+);
+CREATE INDEX shared_channels_by_remote ON shared_channels (instance_id, remote_channel_id);
+
+-- Channels other servers offered to share, waiting for an admin here.
+CREATE TABLE channel_offers (
+    id INTEGER PRIMARY KEY,
+    instance_id INTEGER NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    remote_channel_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    topic TEXT NOT NULL DEFAULT '',
+    private INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    UNIQUE (instance_id, remote_channel_id)
+);
+
+-- Messages written on another server, as `handle#id` there.
+ALTER TABLE messages ADD COLUMN remote_uid TEXT;
+CREATE UNIQUE INDEX messages_by_remote_uid ON messages (channel_id, remote_uid) WHERE remote_uid IS NOT NULL;
+
+-- What other servers still have to hear, oldest first.
+CREATE TABLE federation_outbox (
+    id INTEGER PRIMARY KEY,
+    instance_id INTEGER NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    event TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_at INTEGER NOT NULL,
+    last_error TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX federation_outbox_by_instance ON federation_outbox (instance_id, id);
+
+-- Recent request nonces, so a signed request can't be sent twice.
+CREATE TABLE federation_nonces (
+    instance_id INTEGER NOT NULL,
+    nonce TEXT NOT NULL,
+    seen_at INTEGER NOT NULL,
+    PRIMARY KEY (instance_id, nonce)
+);
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

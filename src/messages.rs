@@ -54,24 +54,34 @@ struct Posted {
     automation_event: Option<MessageEvent>,
 }
 
+/// Where a message from another server came from.
+pub struct Origin {
+    /// The server that sent it.
+    pub instance_id: i64,
+    /// What servers call it: `handle#id` on the server it was written on.
+    pub uid: String,
+}
+
 /// Stores `draft` and delivers it. The caller has already checked that the
 /// sender may post in the channel.
 pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
+    post_from(state, draft, None).await
+}
+
+/// Stores `draft`, from this server or, with `origin`, from another one,
+/// delivers it, and passes it on to the servers the channel is shared with.
+pub async fn post_from(
+    state: &AppState,
+    draft: Draft,
+    origin: Option<Origin>,
+) -> AppResult<Message> {
     let now = now_ms();
+    let from = origin.as_ref().map(|origin| origin.instance_id);
     let posted = state
         .db
         .call(move |conn| {
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let parent_id = match draft.parent_id {
-                Some(parent_id) => {
-                    let parent = store::message(&tx, parent_id)?
-                        .filter(|parent| parent.channel_id == draft.channel_id)
-                        .ok_or(AppError::NotFound)?;
-                    // Threads are one level deep; a reply to a reply joins the root.
-                    Some(parent.parent_id.unwrap_or(parent.id))
-                }
-                None => None,
-            };
+            let parent_id = check_draft(&tx, &draft)?;
             let (user_id, webhook_id, automation_id, bot_name, bot_icon) = match &draft.sender {
                 Sender::User(id) => (Some(*id), None, None, None, None),
                 Sender::Webhook { id, name, icon } => {
@@ -84,13 +94,6 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
                     (None, None, None, Some(name.as_str()), icon.as_deref())
                 }
             };
-            if let Some(user_id) = user_id {
-                for file_id in &draft.files {
-                    if !store::owns_unattached_file(&tx, *file_id, user_id)? {
-                        return Err(AppError::bad_request("That file can't be attached."));
-                    }
-                }
-            }
             let id = store::insert_message(
                 &tx,
                 &NewMessage {
@@ -110,7 +113,12 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
                     created_at: now,
                 },
             )?;
-            if let Some(user_id) = user_id {
+            if let Some(origin) = &origin {
+                tx.execute(
+                    "UPDATE messages SET remote_uid = ?1 WHERE id = ?2",
+                    rusqlite::params![origin.uid, id],
+                )?;
+            } else if let Some(user_id) = user_id {
                 store::mark_read(&tx, user_id, draft.channel_id, id)?;
                 // Taking part is how people earn trust.
                 crate::community::refresh(&tx, user_id, now)?;
@@ -143,6 +151,7 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
         .await?;
 
     deliver(state, &posted);
+    crate::federation::outbound::posted(state, &posted.message, from).await;
     let Posted {
         message,
         automation_event,
@@ -161,6 +170,33 @@ pub async fn post(state: &AppState, draft: Draft) -> AppResult<Message> {
         state.automations.event(Event::Message(event));
     }
     Ok(message)
+}
+
+/// Checks that `draft` may be posted, and returns the thread it goes in.
+fn check_draft(conn: &rusqlite::Connection, draft: &Draft) -> AppResult<Option<i64>> {
+    let parent_id = match draft.parent_id {
+        Some(parent_id) => {
+            let parent = store::message(conn, parent_id)?
+                .filter(|parent| parent.channel_id == draft.channel_id)
+                .ok_or(AppError::NotFound)?;
+            // Threads are one level deep; a reply to a reply joins the root.
+            Some(parent.parent_id.unwrap_or(parent.id))
+        }
+        None => None,
+    };
+    if draft.poll.is_some() && crate::federation::data::is_shared(conn, draft.channel_id)? {
+        return Err(AppError::bad_request(
+            "Polls aren't shared with other servers yet, so they can't be started in shared channels.",
+        ));
+    }
+    if let Sender::User(user_id) = draft.sender {
+        for file_id in &draft.files {
+            if !store::owns_unattached_file(conn, *file_id, user_id)? {
+                return Err(AppError::bad_request("That file can't be attached."));
+            }
+        }
+    }
+    Ok(parent_id)
 }
 
 /// Shows a new message live and sends its push notifications.
@@ -290,7 +326,7 @@ pub async fn change(
     let is_admin = user.may(crate::community::Permission::Moderate);
     let now = now_ms();
     let deleting = matches!(change, Change::Delete);
-    let (before, after, audience, ctx, reply_count) = state
+    let (before, after, audience, ctx, reply_count, remote_uid) = state
         .db
         .call(move |conn| {
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -298,6 +334,11 @@ pub async fn change(
                 .filter(|message| !message.deleted)
                 .ok_or(AppError::NotFound)?;
             let own = matches!(message.author, store::Author::User { id, .. } if id == user_id);
+            let remote_uid: Option<String> = tx.query_row(
+                "SELECT remote_uid FROM messages WHERE id = ?1",
+                [message_id],
+                |row| row.get(0),
+            )?;
             match &change {
                 Change::Edit(body) => {
                     if !own {
@@ -340,37 +381,22 @@ pub async fn change(
                 audience,
                 store::render_context(conn)?,
                 reply_count,
+                remote_uid,
             ))
         })
         .await?;
+    crate::federation::outbound::changed(state, channel_id, message_id, remote_uid, None).await;
     let (message, event) = before;
-    if let Some(after) = &after {
-        publish_changed(state, audience, after, &ctx);
-    } else {
-        {
-            state.hub.publish(
-                audience.clone(),
-                &realtime::Event::MessageDeleted {
-                    channel_id,
-                    id: message_id,
-                    parent_id: message.parent_id,
-                    reply_count: message.parent_id.map(|_| reply_count.unwrap_or(0)),
-                },
-            );
-            // A deleted thread start goes once its last reply does.
-            if let (Some(parent), None) = (message.parent_id, reply_count) {
-                state.hub.publish(
-                    audience,
-                    &realtime::Event::MessageDeleted {
-                        channel_id,
-                        id: parent,
-                        parent_id: None,
-                        reply_count: None,
-                    },
-                );
-            }
-        }
-    }
+    publish_change(
+        state,
+        channel_id,
+        message_id,
+        message.parent_id,
+        after.as_ref(),
+        audience,
+        &ctx,
+        reply_count,
+    );
     if let Some(mut event) = event {
         if deleting {
             state.automations.event(Event::MessageDeleted(event));
@@ -380,6 +406,146 @@ pub async fn change(
             state.automations.event(Event::MessageChanged(event));
         }
     }
+    Ok(())
+}
+
+/// Shows an edit, or a deletion when `after` is gone, to everyone who can
+/// see the channel.
+#[expect(clippy::too_many_arguments, reason = "what a change needs to be shown")]
+fn publish_change(
+    state: &AppState,
+    channel_id: i64,
+    message_id: i64,
+    parent_id: Option<i64>,
+    after: Option<&Message>,
+    audience: Option<Vec<i64>>,
+    ctx: &markup::Context,
+    reply_count: Option<i64>,
+) {
+    if let Some(after) = after {
+        publish_changed(state, audience, after, ctx);
+        return;
+    }
+    state.hub.publish(
+        audience.clone(),
+        &realtime::Event::MessageDeleted {
+            channel_id,
+            id: message_id,
+            parent_id,
+            reply_count: parent_id.map(|_| reply_count.unwrap_or(0)),
+        },
+    );
+    // A deleted thread start goes once its last reply does.
+    if let (Some(parent), None) = (parent_id, reply_count) {
+        state.hub.publish(
+            audience,
+            &realtime::Event::MessageDeleted {
+                channel_id,
+                id: parent,
+                parent_id: None,
+                reply_count: None,
+            },
+        );
+    }
+}
+
+/// Applies an edit or deletion another server made, shows it live, and
+/// passes it on to the other servers the channel is shared with. Who may
+/// make it was checked by the caller.
+pub async fn apply_remote_change(
+    state: &AppState,
+    channel_id: i64,
+    message_id: i64,
+    change: Change,
+    from: i64,
+) -> AppResult<()> {
+    let now = now_ms();
+    let (parent_id, after, audience, ctx, reply_count, remote_uid) = state
+        .db
+        .call(move |conn| {
+            let message = store::message(conn, message_id)?
+                .filter(|message| message.channel_id == channel_id && !message.deleted)
+                .ok_or(AppError::NotFound)?;
+            let remote_uid: Option<String> = conn.query_row(
+                "SELECT remote_uid FROM messages WHERE id = ?1",
+                [message_id],
+                |row| row.get(0),
+            )?;
+            match &change {
+                Change::Edit(body) => store::edit_message(conn, message_id, body, now)?,
+                Change::Delete => store::delete_message(conn, message_id, now)?,
+            }
+            let reply_count = match message.parent_id {
+                Some(parent) => store::message(conn, parent)?.map(|parent| parent.reply_count),
+                None => None,
+            };
+            Ok((
+                message.parent_id,
+                store::message(conn, message_id)?,
+                store::audience(conn, channel_id)?,
+                store::render_context(conn)?,
+                reply_count,
+                remote_uid,
+            ))
+        })
+        .await?;
+    publish_change(
+        state,
+        channel_id,
+        message_id,
+        parent_id,
+        after.as_ref(),
+        audience,
+        &ctx,
+        reply_count,
+    );
+    crate::federation::outbound::changed(state, channel_id, message_id, remote_uid, Some(from))
+        .await;
+    Ok(())
+}
+
+/// Sets or removes a reaction someone on another server made, shows it
+/// live, and passes it on.
+pub async fn apply_remote_reaction(
+    state: &AppState,
+    channel_id: i64,
+    message_id: i64,
+    user_id: i64,
+    emoji: String,
+    added: bool,
+    from: i64,
+) -> AppResult<()> {
+    let now = now_ms();
+    let reaction = emoji.clone();
+    let (message, audience, ctx) = state
+        .db
+        .call(move |conn| {
+            if added {
+                conn.execute(
+                    "INSERT OR IGNORE INTO reactions (message_id, user_id, emoji, created_at) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![message_id, user_id, reaction, now],
+                )?;
+            } else {
+                conn.execute(
+                    "DELETE FROM reactions WHERE message_id = ?1 AND user_id = ?2 AND emoji = ?3",
+                    rusqlite::params![message_id, user_id, reaction],
+                )?;
+            }
+            let message = store::message(conn, message_id)?.ok_or(AppError::NotFound)?;
+            Ok((message, store::audience(conn, channel_id)?, store::render_context(conn)?))
+        })
+        .await?;
+    publish_reactions(state, audience, &message, &ctx);
+    crate::federation::outbound::reacted(
+        state,
+        channel_id,
+        message_id,
+        user_id,
+        emoji,
+        added,
+        Some(from),
+    )
+    .await;
     Ok(())
 }
 
@@ -393,7 +559,7 @@ pub async fn toggle_reaction(
     emoji: String,
 ) -> AppResult<()> {
     let now = now_ms();
-    let (message, audience, ctx, event) = state
+    let (message, audience, ctx, event, reacted) = state
         .db
         .call(move |conn| {
             let channel =
@@ -412,6 +578,7 @@ pub async fn toggle_reaction(
                 return Err(AppError::bad_request("That emoji doesn't exist here."));
             }
             let added = store::toggle_reaction(conn, message.id, user_id, &emoji, now)?;
+            let reacted = (emoji.clone(), added);
             let message = store::message(conn, message_id)?.ok_or(AppError::NotFound)?;
             let audience = store::audience(conn, channel_id)?;
             // Automations see public channels only.
@@ -431,10 +598,15 @@ pub async fn toggle_reaction(
             } else {
                 None
             };
-            Ok((message, audience, ctx, event))
+            Ok((message, audience, ctx, event, reacted))
         })
         .await?;
     publish_reactions(state, audience, &message, &ctx);
+    let (emoji, added) = reacted;
+    crate::federation::outbound::reacted(
+        state, channel_id, message_id, user_id, emoji, added, None,
+    )
+    .await;
     if let Some(event) = event {
         state.automations.event(Event::Reaction(event));
     }

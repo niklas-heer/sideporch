@@ -62,6 +62,12 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context, standing: &St
                         }
                     }
                     p class="text-muted dark:text-haint" { "@" (user.username) }
+                    @if let Some(server) = &user.server {
+                        p class="mt-2 flex items-center gap-2 text-sm" data-server=(server) {
+                            (icon(icons::GLOBE, "h-4 w-4 text-muted dark:text-haint"))
+                            "On " strong { (server) } ", a connected server. Their own server's admins look after their account."
+                        }
+                    }
                     @if !standing.roles.is_empty() {
                         p class="mt-2 flex flex-wrap gap-1.5" {
                             @for role in &standing.roles {
@@ -94,7 +100,8 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context, standing: &St
                     }
                 }
             }
-            @if shell.user.is_admin && !own {
+            @if user.server.is_some() {
+            } @else if shell.user.is_admin && !own {
                 (admin_controls(user, standing))
             } @else if moderator && !own && !user.is_admin {
                 (timeout_controls(user, standing))

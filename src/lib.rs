@@ -13,6 +13,7 @@ mod community;
 mod db;
 mod emoji;
 mod error;
+mod federation;
 mod files;
 mod gifs;
 mod icons;
@@ -89,6 +90,10 @@ pub struct Config {
     /// fake. The server doesn't restart itself after updating then.
     #[doc(hidden)]
     pub update_source: Option<(updates::Source, PathBuf)>,
+    /// Let other Sideporch servers be on private addresses; tests run them
+    /// on this machine.
+    #[doc(hidden)]
+    pub allow_private_federation: bool,
 }
 
 #[derive(Clone)]
@@ -117,6 +122,8 @@ pub(crate) struct AppState {
     speech: Arc<speech::Speech>,
     /// New releases, and installing them.
     updates: Arc<updates::Updates>,
+    /// Other Sideporch servers.
+    federation: federation::Shared,
 }
 
 /// Whether and how the first account can still be created.
@@ -154,6 +161,24 @@ impl AppState {
 /// An opened Sideporch instance.
 pub struct Sideporch {
     state: AppState,
+}
+
+/// Opens this server's federation key, making and storing one the first
+/// time.
+async fn open_federation(
+    db: &Db,
+    vault: &Vault,
+    public_url: Option<String>,
+    allow_private: bool,
+) -> Result<federation::Federation, Error> {
+    let sealed = db.call(|conn| federation::data::sealed_key(conn)).await?;
+    let (federation, new_key) =
+        federation::Federation::open(sealed.as_deref(), vault, public_url, allow_private)?;
+    if let Some(sealed) = new_key {
+        db.call(move |conn| federation::data::set_sealed_key(conn, &sealed))
+            .await?;
+    }
+    Ok(federation)
 }
 
 impl Sideporch {
@@ -199,6 +224,14 @@ impl Sideporch {
                 ))
             })
             .await?;
+        let vault = Arc::new(Vault::open(&config.data_dir)?);
+        let federation = open_federation(
+            &db,
+            &vault,
+            public_url.clone(),
+            config.allow_private_federation,
+        )
+        .await?;
         let setup = if users > 0 {
             Setup::Done
         } else if config.require_setup_link {
@@ -211,7 +244,7 @@ impl Sideporch {
             hub: Hub::default(),
             push: Arc::new(push),
             ai: Arc::new(Ai::new()?),
-            vault: Arc::new(Vault::open(&config.data_dir)?),
+            vault,
             blobs,
             gifs: Arc::new(gifs::Gifs::new(config.gif_api_base.clone())?),
             monitor: system::Monitor::start(),
@@ -239,6 +272,7 @@ impl Sideporch {
                     true,
                 )?,
             }),
+            federation: Arc::new(federation),
         };
         let updates = Arc::clone(&state.updates);
         state.db.call(move |conn| updates.load(conn)).await?;
@@ -247,6 +281,7 @@ impl Sideporch {
         later::start(state.clone());
         backup::start(state.clone());
         updates::start(state.clone());
+        federation::outbox::start(state.clone());
         state.automations.reload(&state).await?;
         Ok(Self { state })
     }

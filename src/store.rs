@@ -147,6 +147,8 @@ pub struct User {
     pub created_at: i64,
     /// Deactivated people can't sign in and get no notifications.
     pub deactivated: bool,
+    /// For someone on a connected server: its handle, like `chat.example.org`.
+    pub server: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -156,7 +158,8 @@ pub struct ProfileLink {
 }
 
 const USER_COLUMNS: &str = "id, username, display_name, is_admin, avatar_file_id, status_emoji, \
-     status_text, bio, links, favorite_emoji, created_at, deactivated_at IS NOT NULL";
+     status_text, bio, links, favorite_emoji, created_at, deactivated_at IS NOT NULL, \
+     (SELECT handle FROM instances WHERE instances.id = users.instance_id)";
 
 fn user_from_row(row: &Row<'_>) -> rusqlite::Result<User> {
     let links: String = row.get(8)?;
@@ -177,6 +180,7 @@ fn user_from_row(row: &Row<'_>) -> rusqlite::Result<User> {
             .collect(),
         created_at: row.get(10)?,
         deactivated: row.get(11)?,
+        server: row.get(12)?,
     })
 }
 
@@ -532,9 +536,10 @@ pub fn login_record(conn: &Connection, username: &str) -> AppResult<Option<(i64,
         .optional()?)
 }
 
+/// Everyone with an account here; people from other servers aren't listed.
 pub fn users(conn: &Connection) -> AppResult<Vec<User>> {
     let mut statement = conn.prepare(&format!(
-        "SELECT {USER_COLUMNS} FROM users ORDER BY display_name COLLATE NOCASE"
+        "SELECT {USER_COLUMNS} FROM users WHERE instance_id IS NULL ORDER BY display_name COLLATE NOCASE"
     ))?;
     let rows = statement.query_map([], user_from_row)?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -2483,6 +2488,14 @@ pub fn render_context(conn: &Connection) -> AppResult<std::sync::Arc<crate::mark
     for username in statement.query_map([], |row| row.get::<_, String>(0))? {
         ctx.usernames.insert(username?);
     }
+    let mut statement =
+        conn.prepare("SELECT id, username FROM users WHERE instance_id IS NOT NULL")?;
+    for remote in statement.query_map([], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })? {
+        let (id, username) = remote?;
+        ctx.remote.insert(id, username);
+    }
     let ctx = Arc::new(ctx);
     // An in-memory database has no path, so it can't share a cache entry.
     if !key.is_empty()
@@ -2683,19 +2696,10 @@ pub fn recipients(
     let mut mentioned = Vec::new();
     // Only look at everyone for @channel and @here; otherwise only at the
     // names written in the message.
-    let names: Vec<&str> = if everyone {
+    let names: Vec<String> = if everyone {
         Vec::new()
     } else {
-        text.split('@')
-            .skip(1)
-            .filter_map(|rest| {
-                let end = rest
-                    .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')))
-                    .unwrap_or(rest.len());
-                rest.get(..end).map(|name| name.trim_end_matches('.'))
-            })
-            .filter(|name| !name.is_empty())
-            .collect()
+        mentioned_names(&text)
     };
     let names = serde_json::to_string(&names).map_err(crate::error::AppError::internal)?;
     // Muted and left channels only reach people mentioned by name.
@@ -2818,17 +2822,52 @@ pub fn mentions_everyone(text: &str) -> bool {
     mentions(text, "channel") || mentions(text, "here")
 }
 
-/// Whether lowercase `text` contains `@name` as a whole word.
+/// Whether lowercase `text` contains `@name` as a whole word. `@name@server`
+/// names someone on another server, not the `name` here.
 fn mentions(text: &str, name: &str) -> bool {
     let needle = format!("@{name}");
     text.match_indices(&needle).any(|(index, _)| {
         let before = text.get(..index).and_then(|t| t.chars().last());
-        let after = text
-            .get(index.saturating_add(needle.len())..)
-            .and_then(|t| t.chars().next());
+        let rest = text.get(index.saturating_add(needle.len())..).unwrap_or("");
+        let after = rest.chars().next();
         let word = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.');
-        !before.is_some_and(word) && !after.is_some_and(|c| word(c) && c != '.')
+        let elsewhere = after == Some('@') && rest.chars().nth(1).is_some_and(word);
+        !before.is_some_and(word) && !after.is_some_and(|c| word(c) && c != '.') && !elsewhere
     })
+}
+
+/// The names `@mentioned` in `text`, including `name@server` for people on
+/// other servers, in the order they appear.
+pub fn mentioned_names(text: &str) -> Vec<String> {
+    let name_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.');
+    let server_char = |c: char| name_char(c) || c == ':';
+    let mut names = Vec::new();
+    let mut previous = None;
+    for (index, c) in text.char_indices() {
+        let at_word_start = !previous.is_some_and(name_char);
+        previous = Some(c);
+        if c != '@' || !at_word_start {
+            continue;
+        }
+        let rest = text.get(index.saturating_add(1)..).unwrap_or("");
+        let end = rest.find(|c: char| !name_char(c)).unwrap_or(rest.len());
+        let name = rest.get(..end).unwrap_or("").trim_end_matches('.');
+        if name.is_empty() {
+            continue;
+        }
+        let after = rest.get(name.len()..).unwrap_or("");
+        let server = after
+            .strip_prefix('@')
+            .map(|server| {
+                let end = server
+                    .find(|c: char| !server_char(c))
+                    .unwrap_or(server.len());
+                server.get(..end).unwrap_or("").trim_end_matches(['.', ':'])
+            })
+            .filter(|server| !server.is_empty());
+        names.push(server.map_or_else(|| name.to_owned(), |server| format!("{name}@{server}")));
+    }
+    names
 }
 
 // Automations
@@ -3174,4 +3213,27 @@ pub fn use_api_token(
         params![now, token_id],
     )?;
     Ok(Some((user_id, name)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mentioned_names, mentions};
+
+    #[test]
+    fn names_people_from_other_servers_with_their_server() {
+        let text = "hi @ada, @bea@chat.b.org and @cy@127.0.0.1:8080. mail@x.y @here.";
+        assert_eq!(
+            mentioned_names(text),
+            ["ada", "bea@chat.b.org", "cy@127.0.0.1:8080", "here"]
+        );
+    }
+
+    #[test]
+    fn a_mention_of_someone_elsewhere_is_not_a_mention_of_the_local_namesake() {
+        let text = "thanks @bea@chat.b.org!";
+        assert!(!mentions(text, "bea"));
+        assert!(mentions(text, "bea@chat.b.org"));
+        assert!(mentions("thanks @bea.", "bea"));
+        assert!(!mentions("thanks @beatrice", "bea"));
+    }
 }

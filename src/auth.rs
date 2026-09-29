@@ -79,6 +79,15 @@ pub async fn start_session(state: &AppState, user_id: i64) -> AppResult<String> 
     state
         .db
         .call(move |conn| {
+            // People from other servers sign in there, never here.
+            let remote: bool = conn.query_row(
+                "SELECT instance_id IS NOT NULL FROM users WHERE id = ?1",
+                [user_id],
+                |row| row.get(0),
+            )?;
+            if remote {
+                return Err(AppError::Forbidden);
+            }
             conn.execute(
                 "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?1, ?2, ?3, ?4)",
                 params![token_hash, user_id, now, expires],

@@ -16,7 +16,7 @@ use crate::{
 pub fn tabs(current: &str) -> Markup {
     html! {
         nav class="mb-6 flex flex-wrap gap-2" aria-label="Admin" {
-            @for (href, label) in [("/admin/system", "System"), ("/admin/community", "Community"), ("/admin/permissions", "Permissions"), ("/admin/sign-in", "Sign-in"), ("/moderation", "Moderation"), ("/admin/speech", "Speech"), ("/admin/backups", "Backups"), ("/admin/updates", "Updates"), ("/admin/gifs", "GIFs"), ("/admin/messages", "Messages"), ("/admin/appearance", "Appearance"), ("/admin/import", "Import"), ("/people", "People"), ("/automations", "Automations")] {
+            @for (href, label) in [("/admin/system", "System"), ("/admin/community", "Community"), ("/admin/permissions", "Permissions"), ("/admin/sign-in", "Sign-in"), ("/moderation", "Moderation"), ("/admin/speech", "Speech"), ("/admin/backups", "Backups"), ("/admin/updates", "Updates"), ("/admin/connections", "Connections"), ("/admin/gifs", "GIFs"), ("/admin/messages", "Messages"), ("/admin/appearance", "Appearance"), ("/admin/import", "Import"), ("/people", "People"), ("/automations", "Automations")] {
                 a href=(href) aria-current=[(href == current).then_some("page")]
                     class="rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-screen aria-[current=page]:bg-haint-2 aria-[current=page]:text-floor dark:hover:bg-night-2 dark:aria-[current=page]:bg-floor-2 dark:aria-[current=page]:text-haint-2" {
                     (label)

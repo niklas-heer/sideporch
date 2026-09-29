@@ -14,6 +14,9 @@ pub struct Context {
     pub custom_emoji: HashMap<String, String>,
     /// Lowercase usernames, for highlighting `@mentions`.
     pub usernames: HashSet<String>,
+    /// People from other servers: their account here, and their username
+    /// with its server, like `bea@chat.example.org`.
+    pub remote: HashMap<i64, String>,
 }
 
 impl Context {
@@ -252,14 +255,31 @@ fn emoji<'a>(out: &mut String, rest: &'a str, ctx: &Context) -> Option<&'a str> 
     Some(after)
 }
 
-/// `@username`, highlighted only when that user exists.
+/// `@username`, or `@username@server` for someone on another server,
+/// highlighted only when that user exists.
 fn user_mention<'a>(out: &mut String, rest: &'a str, ctx: &Context) -> Option<&'a str> {
     let tail = rest.strip_prefix('@')?;
     let end = tail
         .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')))
         .unwrap_or(tail.len());
     let (candidate, _) = tail.split_at_checked(end)?;
-    let name = candidate.trim_end_matches(['.', '-', '_']);
+    let mut name = candidate.trim_end_matches(['.', '-', '_']);
+    // Someone on another server: the whole `name@server`, or nothing.
+    if let Some(server) = tail
+        .get(name.len()..)
+        .and_then(|after| after.strip_prefix('@'))
+    {
+        let end = server
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':')))
+            .unwrap_or(server.len());
+        let server = server.get(..end)?.trim_end_matches(['.', ':']);
+        if !server.is_empty() {
+            name = tail.get(..name.len().saturating_add(1).saturating_add(server.len()))?;
+            if !ctx.usernames.contains(&name.to_ascii_lowercase()) {
+                return None;
+            }
+        }
+    }
     let (_, after) = tail.split_at_checked(name.len())?;
     let lower = name.to_ascii_lowercase();
     if !(ctx.usernames.contains(&lower) || matches!(lower.as_str(), "here" | "channel")) {
@@ -462,6 +482,17 @@ mod tests {
         assert_eq!(
             render(":x: - :unknown: 10:30"),
             r#"<span role="img" aria-label="x">❌</span> - :unknown: 10:30"#
+        );
+    }
+
+    #[test]
+    fn renders_mentions_of_people_on_other_servers() {
+        let mut ctx = Context::default();
+        ctx.usernames.insert("bea".into());
+        ctx.usernames.insert("cy@chat.b.org".into());
+        assert_eq!(
+            super::render("@cy@chat.b.org, @bea@chat.b.org", &ctx),
+            r#"<span class="font-semibold">@cy@chat.b.org</span>, @bea@chat.b.org"#
         );
     }
 
