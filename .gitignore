@@ -8,3 +8,10 @@ result
 
 # macOS setups often ignore `Icon?` globally, which also matches this folder.
 !/assets/icons/
+
+# Load test builds and runs
+/tools/loadtest/target/
+/tools/loadtest/bin/
+/tools/loadtest/target-linux/
+/tools/loadtest/accounts*.json
+/tools/loadtest/results/.samples

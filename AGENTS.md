@@ -16,6 +16,7 @@ Sideporch is a self-hosted team chat shipped as a single Rust binary. See [READM
 - `src/ai.rs`: AI providers that write scripts. `src/mcp.rs`: the MCP server. `src/routes/automation.rs` and `src/routes/settings.rs`: their pages and endpoints.
 - `assets/`: the page script, the automation editor (`editor.js`), vendored Mermaid (`vendor/`, see its README), service worker, base CSS, logo, and fonts. `build.rs` compiles utility classes with encre-css using `encre-css.toml`.
 - `docs/screenshots/`: the README's screenshots. `scripts/screenshots.mjs` seeds a fresh server with a demo team and retakes them (see its header); update them when the interface changes visibly.
+- `tools/loadtest/`: a separate crate that simulates people online (live connections, posts, page loads) against a size-limited container; `run.sh` steps through sizes and numbers of people, `report.sh` turns `results/` into the tables in `docs/capacity.md`. Rerun it after changes to the message pipeline, realtime fan-out or rendering, and update the document.
 - `tests/`: end-to-end tests against a real server on a random port. `tests/fixtures/gatus/` holds captured Gatus payloads.
 
 ## Commands
