@@ -74,9 +74,12 @@ commit_parsers = [
   { message = "^feat", group = "<!-- 0 -->New" },
   { message = "^perf", group = "<!-- 1 -->Faster" },
   { message = "^fix\\(ci\\)", skip = true },
+  { message = "^fix\\(website\\)", skip = true },
   { message = "^fix", group = "<!-- 2 -->Fixed" },
   { message = "^docs\\(website\\)", skip = true },
   { message = "^docs\\(decisions\\)", skip = true },
+  # Designs and implementation plans are for whoever builds Sideporch.
+  { message = "^docs: (design|implementation plan) for", skip = true },
   { message = "^docs", group = "<!-- 3 -->Documentation" },
   { message = "^refactor", skip = true },
   { message = "^style", skip = true },
