@@ -192,6 +192,8 @@ body > footer {
   .bar ul li:first-child { display: none; }
 }
 @media (max-width: 24rem) {
+  /* GitHub is in the footer too. */
+  .bar ul li:has(> a[href*="github.com"]) { display: none; }
   .bar { gap: 0.5rem; padding-left: 1rem; padding-right: 1rem; }
   .bar ul { gap: 0.8rem; font-size: 0.9rem; }
   .brand { font-size: 1.05rem; }
@@ -259,7 +261,7 @@ body.docs > footer { max-width: 84rem; }
 .prose li + li, .prose li > ul, .prose li > ol { margin-top: 0.35rem; }
 .prose li::marker { color: var(--muted); }
 .prose strong { font-weight: 800; }
-.prose :not(pre) > code { padding: 0.1em 0.35em; border-radius: 0.3em; background: var(--soft); border: 1px solid var(--border); overflow-wrap: anywhere; }
+.prose :not(pre) > code { padding: 0.1em 0.35em; border-radius: 0.3em; background: var(--soft); border: 1px solid var(--border); overflow-wrap: break-word; }
 .prose pre {
   position: relative; margin-left: 0; margin-right: 0; padding: 0.95rem 1.1rem; overflow-x: auto;
   border: 1px solid var(--border); border-radius: 0.6rem; font-size: 0.92rem; line-height: 1.55;
