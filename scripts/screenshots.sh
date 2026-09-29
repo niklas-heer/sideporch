@@ -18,6 +18,11 @@ mkdir -p "$data"
 shots=$(mktemp -d)
 modules=$(mktemp -d)
 port=18790
+# Something else on the port would end up in the screenshots.
+if curl -s -o /dev/null "http://127.0.0.1:$port/"; then
+  echo "screenshots: something already answers on port $port; stop it first" >&2
+  exit 1
+fi
 target/release/sideporch --listen "127.0.0.1:$port" --data "$data" >"$data.log" 2>&1 &
 server=$!
 cleanup() {
@@ -25,7 +30,16 @@ cleanup() {
   rm -rf "$data" "$data.log" "$shots" "$modules" scripts/node_modules
 }
 trap cleanup EXIT HUP INT TERM
-until curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; do sleep 0.2; done
+waited=0
+until curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; do
+  if ! kill -0 "$server" 2>/dev/null || [ "$waited" -ge 150 ]; then
+    echo "screenshots: Sideporch didn't start:" >&2
+    cat "$data.log" >&2
+    exit 1
+  fi
+  waited=$((waited + 1))
+  sleep 0.2
+done
 
 # playwright-core, for this run only. Node resolves the import from the
 # script's directory, so link it there.
