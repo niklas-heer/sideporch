@@ -830,7 +830,7 @@ pub fn has_link(text: &str) -> bool {
 pub fn check_not_timed_out(user: &crate::auth::CurrentUser) -> AppResult<()> {
     user.timed_out_until.map_or(Ok(()), |until| {
         Err(crate::error::AppError::bad_request(format!(
-            "A moderator paused your posting until {}.",
+            "Your posting is paused until {}. Moderators time people out, and so do reports about newcomers from several people.",
             jiff::Timestamp::from_millisecond(until)
                 .unwrap_or_default()
                 .strftime("%Y-%m-%d %H:%M UTC")
@@ -868,8 +868,39 @@ pub fn check_message(
             "New members can send a few messages a minute. Wait a moment and try again.",
         ));
     }
+    if !user.is_admin && repeats(conn, user.id, body, now)? >= REPEATS_ALLOWED {
+        return Err(crate::error::AppError::bad_request(
+            "You sent this same message twice in the last ten minutes. Say something new, or wait a little.",
+        ));
+    }
     Ok(())
 }
+
+/// How often one message may be sent again within [`REPEAT_WINDOW_MS`];
+/// the third time is refused, which stops copy-and-paste spam.
+const REPEATS_ALLOWED: i64 = 2;
+const REPEAT_WINDOW_MS: i64 = 10 * 60 * 1000;
+/// Shorter messages, like "ok" or "+1", may repeat freely.
+const REPEAT_MIN_CHARS: usize = 12;
+
+/// How many times `user_id` sent `body` recently.
+fn repeats(conn: &Connection, user_id: i64, body: &str, now: i64) -> AppResult<i64> {
+    let body = body.trim();
+    if body.chars().count() < REPEAT_MIN_CHARS {
+        return Ok(0);
+    }
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE user_id = ?1 AND created_at > ?2
+           AND deleted_at IS NULL AND trim(body) = ?3",
+        params![user_id, now.saturating_sub(REPEAT_WINDOW_MS), body],
+        |row| row.get(0),
+    )?)
+}
+
+/// Distinct people whose reports time out a newcomer until a moderator
+/// looks, and for how long.
+const REPORTS_FOR_TIMEOUT: i64 = 2;
+const REPORT_TIMEOUT_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// Whether a level-0 member already sent as many messages this minute as
 /// they may.
@@ -922,6 +953,24 @@ pub fn report(
          ON CONFLICT (message_id, reporter_id) DO UPDATE SET reason = excluded.reason, resolved_at = NULL",
         params![message_id, reporter, reason, now],
     )?;
+    // Newcomers whom several people report pause until a moderator looks.
+    let newcomer: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT u.id, (SELECT COUNT(DISTINCT r.reporter_id) FROM reports r
+                           JOIN messages rm ON rm.id = r.message_id
+                           WHERE rm.user_id = u.id AND r.resolved_at IS NULL)
+             FROM messages m JOIN users u ON u.id = m.user_id
+             WHERE m.id = ?1 AND u.trust_level = 0 AND u.is_admin = 0
+               AND (u.muted_until IS NULL OR u.muted_until < ?2)",
+            params![message_id, now],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if let Some((author, reporters)) = newcomer
+        && reporters >= REPORTS_FOR_TIMEOUT
+    {
+        set_timeout(conn, author, Some(now.saturating_add(REPORT_TIMEOUT_MS)))?;
+    }
     Ok(())
 }
 

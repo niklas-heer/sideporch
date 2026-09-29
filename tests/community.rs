@@ -426,7 +426,7 @@ async fn reports_and_time_outs() {
     );
     let refused = troll.type_message(general, "more").await;
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
-    assert!(body_of(refused).await.contains("paused your posting"));
+    assert!(body_of(refused).await.contains("posting is paused"));
     assert!(mo.page("/moderation").await.contains("Tro Ll"));
     mo.post(&format!("/people/{troll_id}/timeout"), &[("duration", "0")])
         .await;

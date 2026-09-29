@@ -234,3 +234,57 @@ async fn moderators_ban_people_their_addresses_and_emails() {
         StatusCode::FORBIDDEN
     );
 }
+
+#[tokio::test]
+async fn repeated_messages_are_refused_and_reported_newcomers_pause() {
+    let server = start_behind_proxy().await;
+    let admin = admin(&server).await;
+    let general = common::home_channel(&admin).await;
+    open_sign_up(&admin).await;
+    let (newcomer, _) = sign_up(&server, "203.0.113.20", "newcomer").await;
+    let bea = common::invite(&server, &admin, "Bea", "bea").await;
+
+    // The same message a third time within ten minutes is refused; short
+    // ones may repeat.
+    let spam = "Visit my shop for cheap followers";
+    assert_eq!(
+        newcomer.send(general, spam, None).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        newcomer.send(general, spam, None).await,
+        StatusCode::NO_CONTENT
+    );
+    let third = newcomer.type_message(general, spam).await;
+    assert_eq!(third.status(), StatusCode::BAD_REQUEST);
+    assert!(third.text().await.unwrap().contains("same message"));
+    for _ in 0..3 {
+        assert_eq!(
+            newcomer.send(general, "ok", None).await,
+            StatusCode::NO_CONTENT
+        );
+    }
+
+    // Two people report the newcomer, who then can't post until a
+    // moderator looks.
+    let page = admin.page(&format!("/c/{general}")).await;
+    let message = page
+        .split("<li id=\"m")
+        .skip(1)
+        .find(|item| item.contains("Visit my shop"))
+        .and_then(|item| item.split('"').next())
+        .unwrap()
+        .to_owned();
+    for reporter in [&admin, &bea] {
+        let response = reporter
+            .post(
+                &format!("/c/{general}/m/{message}/report"),
+                &[("reason", "Spam")],
+            )
+            .await;
+        assert!(response.status().is_redirection() || response.status().is_success());
+    }
+    let paused = newcomer.type_message(general, "Something new").await;
+    assert_eq!(paused.status(), StatusCode::BAD_REQUEST);
+    assert!(paused.text().await.unwrap().contains("posting is paused"));
+}

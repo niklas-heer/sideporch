@@ -42,3 +42,5 @@ Addresses are personal data. Sideporch notes each account's address at most once
 
 - Delete anyone's message.
 - New members can only send a few messages a minute (6 by default), which slows down spam while a moderator steps in.
+- Nobody but admins can send the same message (of 12 characters or more) a third time within ten minutes, which stops copy-and-paste spam across channels.
+- When two different people report messages of someone at trust level 0, that person is timed out for a day, so a spammer stops even before a moderator is around. The reports wait under **Moderation** as usual; end the time-out from their profile if it was a mistake.
