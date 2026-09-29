@@ -563,6 +563,42 @@ async fn typing_shows_to_readers() {
 }
 
 #[tokio::test]
+async fn typing_in_a_direct_message_reaches_the_other_person_anywhere() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let general = home_channel(&admin).await;
+    let member = invite(&server, &admin, "Mo Member", "mo").await;
+    let member_id = member.user_id().await;
+    let dm: i64 = common::location(&admin.get(&format!("/dm/{member_id}")).await)
+        .trim_start_matches("/c/")
+        .parse()
+        .unwrap();
+    let mut writer = admin.live_in(dm).await;
+    // Mo looks at another channel, and still sees that Ada writes to him.
+    let mut elsewhere = member.live_in(general).await;
+    writer
+        .send(&json!({ "type": "typing", "channel_id": dm, "parent_id": null }))
+        .await;
+    let typing = next_of(&mut elsewhere, "typing").await;
+    assert_eq!(typing["channel_id"], dm);
+    assert_eq!(typing["stopped"], false);
+    // Emptying the box says so right away, without waiting out the interval.
+    writer
+        .send(&json!({ "type": "typing", "channel_id": dm, "parent_id": null, "stopped": true }))
+        .await;
+    let stopped = next_of(&mut elsewhere, "typing").await;
+    assert_eq!(stopped["stopped"], true);
+
+    // Typing in a channel still only reaches the people looking at it.
+    let mut writer = admin.live_in(general).await;
+    let mut away = member.live_in(dm).await;
+    writer
+        .send(&json!({ "type": "typing", "channel_id": general, "parent_id": null }))
+        .await;
+    assert!(away.next_event(Duration::from_millis(500)).await.is_none());
+}
+
+#[tokio::test]
 async fn reminders_and_scheduled_messages_arrive_later() {
     let server = start().await;
     let admin = admin(&server).await;

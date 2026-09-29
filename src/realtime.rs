@@ -5,7 +5,9 @@
 //! messages in full, edits, reactions and typing; the rest get a short
 //! notice that the channel has something new, once until they read it, or
 //! every time they are mentioned. That keeps the work per message close to
-//! the number of people looking, not everyone online.
+//! the number of people looking, not everyone online. Typing in a direct
+//! conversation is the exception: it reaches its few people wherever they
+//! are, so the sidebar can show it.
 
 use std::{
     collections::HashMap,
@@ -59,11 +61,13 @@ pub enum Event {
         reply_count: Option<i64>,
     },
     /// Someone is writing in a channel or, with `parent_id`, a thread.
+    /// `stopped` says they emptied the message box.
     Typing {
         channel_id: i64,
         parent_id: Option<i64>,
         user_id: i64,
         name: String,
+        stopped: bool,
     },
     /// A message's reactions changed. `html` replaces its reaction bar.
     Reactions {
@@ -109,6 +113,8 @@ struct Envelope {
     activity: Vec<i64>,
     /// Who wrote it; their other browsers need no notice.
     author: Option<i64>,
+    /// Goes to the whole audience in full, whatever they look at.
+    everywhere: bool,
 }
 
 #[derive(Clone)]
@@ -157,6 +163,16 @@ impl Hub {
     }
 
     pub fn publish(&self, audience: Option<Vec<i64>>, event: &Event) {
+        self.send(audience, event, false);
+    }
+
+    /// Sends `event` in full to everyone in `members`, whatever channel
+    /// they look at. Only for small audiences, like a direct conversation.
+    pub fn publish_everywhere(&self, members: Vec<i64>, event: &Event) {
+        self.send(Some(members), event, true);
+    }
+
+    fn send(&self, audience: Option<Vec<i64>>, event: &Event, everywhere: bool) {
         let (notice, activity, author) = match event {
             Event::Message {
                 channel_id,
@@ -189,6 +205,7 @@ impl Hub {
                 notice,
                 activity,
                 author,
+                everywhere,
             }))),
             Err(error) => tracing::error!(%error, "could not encode event"),
         }
@@ -209,6 +226,9 @@ enum ClientMessage {
     Typing {
         channel_id: i64,
         parent_id: Option<i64>,
+        /// The writer emptied the message box.
+        #[serde(default)]
+        stopped: bool,
     },
     /// The browser's time zone, such as `Europe/Berlin`.
     Timezone {
@@ -238,7 +258,7 @@ impl Viewer {
         {
             return None;
         }
-        if self.channel == Some(envelope.channel_id) {
+        if envelope.everywhere || self.channel == Some(envelope.channel_id) {
             return Some(&envelope.json);
         }
         let notice = envelope.notice.as_deref()?;
@@ -309,11 +329,18 @@ async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
                         visible = now;
                     }
                     Ok(ClientMessage::Timezone { name }) => save_timezone(&state, user_id, name).await,
-                    Ok(ClientMessage::Typing { channel_id, parent_id }) => {
+                    // A stop only follows a start, and lets the next start
+                    // through at once.
+                    Ok(ClientMessage::Typing { channel_id, parent_id, stopped: true }) => {
+                        if last_typing.take().is_some() {
+                            announce_typing(&state, user_id, channel_id, parent_id, true).await;
+                        }
+                    }
+                    Ok(ClientMessage::Typing { channel_id, parent_id, stopped: false }) => {
                         let now = tokio::time::Instant::now();
                         if last_typing.is_none_or(|last| now.duration_since(last) >= TYPING_INTERVAL) {
                             last_typing = Some(now);
-                            announce_typing(&state, user_id, channel_id, parent_id).await;
+                            announce_typing(&state, user_id, channel_id, parent_id, false).await;
                         }
                     }
                     Err(_) => {}
@@ -331,8 +358,14 @@ async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
     state.hub.set_visible(user_id, visible, false);
 }
 
-/// Tells the channel's readers that `user_id` is writing.
-async fn announce_typing(state: &AppState, user_id: i64, channel_id: i64, parent_id: Option<i64>) {
+/// Tells the channel's readers that `user_id` is writing, or stopped.
+async fn announce_typing(
+    state: &AppState,
+    user_id: i64,
+    channel_id: i64,
+    parent_id: Option<i64>,
+    stopped: bool,
+) {
     let found = state
         .db
         .call(move |conn| {
@@ -340,19 +373,24 @@ async fn announce_typing(state: &AppState, user_id: i64, channel_id: i64, parent
                 return Ok(None);
             };
             let name = store::user(conn, user_id)?.map(|user| user.display_name);
-            Ok(name.map(|name| (channel.id, name, store::audience(conn, channel_id))))
+            Ok(name.map(|name| (channel, name, store::audience(conn, channel_id))))
         })
         .await;
-    if let Ok(Some((channel_id, name, Ok(audience)))) = found {
-        state.hub.publish(
-            audience,
-            &Event::Typing {
-                channel_id,
-                parent_id,
-                user_id,
-                name,
-            },
-        );
+    let Ok(Some((channel, name, Ok(audience)))) = found else {
+        return;
+    };
+    let event = Event::Typing {
+        channel_id: channel.id,
+        parent_id,
+        user_id,
+        name,
+        stopped,
+    };
+    match audience {
+        Some(members) if channel.kind == store::ChannelKind::Direct => {
+            state.hub.publish_everywhere(members, &event);
+        }
+        audience => state.hub.publish(audience, &event),
     }
 }
 

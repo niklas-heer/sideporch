@@ -244,6 +244,17 @@
 .dark .test-log, .dark .code-preview { background: var(--night-2); }
 .dark .test-action { color: var(--haint); }
 
+/* Someone is typing: three dots that rise in turn, under the message box
+   and on a direct conversation in the sidebar. */
+.typing-dots { display: inline-flex; align-items: center; gap: 2px; height: 0.75rem; }
+.typing-dots i { width: 4px; height: 4px; border-radius: 9999px; background: currentColor; animation: typing-dot 1.2s ease-in-out infinite; }
+.typing-dots i:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typing-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.45; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }

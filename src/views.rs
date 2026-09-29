@@ -327,7 +327,13 @@ fn sidebar_link(item: &SidebarItem, current: Option<i64>, svg: &str) -> Markup {
                 class={ "group flex items-center gap-2 rounded-lg px-3 py-1.5 " (state) } {
                 (icon(svg, "h-4 w-4 shrink-0 opacity-70"))
                 span class="truncate" { (item.label) }
-                span class="ml-auto hidden h-2 w-2 shrink-0 rounded-full bg-lamp group-data-[unread]:block" {}
+                span class="ml-auto flex shrink-0 items-center gap-1.5" {
+                    // app.js marks a direct conversation while someone writes in it.
+                    span class="typing-dots hidden group-data-[typing]:inline-flex" title="Typing" {
+                        i {} i {} i {}
+                    }
+                    span class="hidden h-2 w-2 rounded-full bg-lamp group-data-[unread]:block" {}
+                }
             }
         }
     }
@@ -812,7 +818,7 @@ fn composer(
                 }
             }
             p class="mt-1 hidden px-1 text-xs text-red-700 dark:text-red-300" data-composer-error role="alert" {}
-            p class="mt-0.5 h-4 truncate px-1 text-xs text-muted dark:text-haint" data-typing aria-live="polite" {}
+            p class="mt-0.5 flex h-4 items-center gap-1.5 truncate px-1 text-xs text-muted dark:text-haint" data-typing aria-live="polite" {}
         }
     }
 }

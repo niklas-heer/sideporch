@@ -15,7 +15,7 @@ Sideporch works the way people know from Slack: conversations happen in channels
 - **Direct messages** are between you and one other person. For a group, make a private channel.
 - **Threads** keep side conversations out of the channel: reply to any message to start one. You follow the threads you've written in, and their replies show up in [Activity](@/docs/using/keeping-up.md).
 
-Messages arrive live. The sidebar marks channels with unread messages, and **someone is typing…** shows under the box while someone writes.
+Messages arrive live. The sidebar marks channels with unread messages, and **someone is typing…** shows with moving dots under the box while someone writes; it clears as soon as they empty the box. When someone writes to you in a direct message, the dots show on that conversation in the sidebar too, wherever you are.
 
 ## Write messages
 

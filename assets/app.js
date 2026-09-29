@@ -223,18 +223,54 @@
       (form) => (form.elements.parent_id?.value ?? "") === String(parentId ?? ""),
     );
   }
+  function typingDots() {
+    const dots = document.createElement("span");
+    dots.className = "typing-dots";
+    dots.setAttribute("aria-hidden", "true");
+    dots.append(...[0, 1, 2].map(() => document.createElement("i")));
+    return dots;
+  }
   function renderTyping(form) {
     const label = form.querySelector("[data-typing]");
     if (!label) return;
     const names = [...(typists.get(form)?.values() ?? [])].map((person) => person.name);
-    label.textContent =
-      names.length === 0 ? "" :
+    if (names.length === 0) {
+      label.replaceChildren();
+      return;
+    }
+    label.replaceChildren(
+      typingDots(),
       names.length === 1 ? `${names[0]} is typing…` :
       names.length === 2 ? `${names[0]} and ${names[1]} are typing…` :
-      "Several people are typing…";
+      "Several people are typing…",
+    );
+  }
+  // Direct conversations that aren't open show typing in the sidebar.
+  const sidebarTypists = new Map();
+  function markSidebarTyping(channelId, userId, stopped) {
+    const key = `${channelId}:${userId}`;
+    clearTimeout(sidebarTypists.get(key));
+    sidebarTypists.delete(key);
+    const refresh = () => document.querySelector(`[data-channel-link="${channelId}"]`)
+      ?.toggleAttribute("data-typing", [...sidebarTypists.keys()].some((other) => other.startsWith(`${channelId}:`)));
+    if (!stopped) {
+      sidebarTypists.set(key, setTimeout(() => {
+        sidebarTypists.delete(key);
+        refresh();
+      }, 5000));
+    }
+    refresh();
   }
   function showTyping(event) {
-    if (String(event.user_id) === app?.dataset.me || app?.dataset.channel !== String(event.channel_id)) return;
+    if (String(event.user_id) === app?.dataset.me) return;
+    if (app?.dataset.channel !== String(event.channel_id)) {
+      markSidebarTyping(event.channel_id, event.user_id, event.stopped);
+      return;
+    }
+    if (event.stopped) {
+      stopTyping(event.user_id, event.parent_id);
+      return;
+    }
     const form = composerFor(event.parent_id);
     if (!form) return;
     const people = typists.get(form) ?? new Map();
@@ -285,6 +321,7 @@
     if (event.type !== "message") return;
     const here = app && app.dataset.channel === String(event.channel_id);
     if (here) stopTyping(event.author, event.parent_id);
+    else if (String(event.author).startsWith("u:")) markSidebarTyping(event.channel_id, event.author.slice(2), true);
     if (!here) {
       const link = document.querySelector(`[data-channel-link="${event.channel_id}"]`);
       if (link && link.dataset.muted === undefined && event.author !== `u:${app?.dataset.me}`) {
@@ -563,10 +600,17 @@
       resize();
       sessionStorage.setItem(draftKey, textarea.value);
       const text = textarea.value.trim();
-      if (text && !text.startsWith("/") && Date.now() - typingSent > 3000 && liveSocket?.readyState === WebSocket.OPEN) {
-        typingSent = Date.now();
+      const typing = text && !text.startsWith("/");
+      const due = typing ? Date.now() - typingSent > 3000 : typingSent > 0;
+      if (due && liveSocket?.readyState === WebSocket.OPEN) {
+        typingSent = typing ? Date.now() : 0;
         const parent = form.elements.parent_id?.value;
-        liveSocket.send(JSON.stringify({ type: "typing", channel_id: Number(app.dataset.channel), parent_id: parent ? Number(parent) : null }));
+        liveSocket.send(JSON.stringify({
+          type: "typing",
+          channel_id: Number(app.dataset.channel),
+          parent_id: parent ? Number(parent) : null,
+          stopped: !typing,
+        }));
       }
     });
     const showFiles = () => {
