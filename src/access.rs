@@ -55,6 +55,10 @@ pub const SIGN_UP: Limit = Limit {
     window: Duration::from_hours(1),
 };
 
+/// The most entries a table in memory keeps before starting over, so floods
+/// can't use up memory.
+const MAX_ENTRIES: usize = 100_000;
+
 /// Leading zero bits a sign-up's proof of work needs: about a quarter of
 /// a million hashes, a moment for a browser, and a cost for mass sign-ups.
 pub const PROOF_BITS: u32 = 18;
@@ -228,6 +232,11 @@ impl Access {
             let now = Instant::now();
             if challenges.len() > 10_000 {
                 challenges.retain(|_, at| now.duration_since(*at) < CHALLENGE_LIFETIME);
+                // Someone is fetching forms by the thousand; open forms get
+                // a fresh challenge when they're sent.
+                if challenges.len() > MAX_ENTRIES {
+                    challenges.clear();
+                }
             }
             challenges.insert(challenge.clone(), now);
         }
@@ -294,6 +303,11 @@ impl Access {
                     times.retain(|at| now.duration_since(*at) < Duration::from_hours(1));
                     !times.is_empty()
                 });
+                // Many addresses at once, as IPv6 makes easy: start over
+                // rather than grow without end.
+                if counted.len() > MAX_ENTRIES {
+                    counted.clear();
+                }
             }
             counted.entry(what).or_default().push(Instant::now());
         }
@@ -356,6 +370,9 @@ impl Access {
         let now = Instant::now();
         if seen.len() > 50_000 {
             seen.retain(|_, at| now.duration_since(*at) < SEEN_EVERY);
+            if seen.len() > MAX_ENTRIES {
+                seen.clear();
+            }
         }
         match seen.get(&(user_id, address)) {
             Some(at) if now.duration_since(*at) < SEEN_EVERY => false,
