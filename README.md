@@ -66,6 +66,7 @@ Docker, Homebrew, Nix and NixOS work too. The documentation walks through [insta
 - **20 themes**, profiles and keyboard shortcuts. [Themes](https://sideporch.app/docs/using/themes-and-profiles/)
 - **For public communities**: open sign-up, trust levels, roles, permissions and moderation. [Sign-up and trust](https://sideporch.app/docs/community/sign-up-and-trust/)
 - **Passkeys, authenticator apps and email sign-in links**, with a policy for what signing in takes. [Sign-in](https://sideporch.app/docs/community/sign-in-security/)
+- **Updates you hear about**, security fixes first, installed from the browser or by Sideporch itself, and only when signed. [Updating](https://sideporch.app/docs/get-started/update/)
 - **Backups** from the browser or on a schedule, and **import from Slack**. [Backups](https://sideporch.app/docs/community/backups/)
 - **Webhooks and Lua automations**, written and tested in the browser, or by AI through MCP. [Automations](https://sideporch.app/docs/integrations/automations/)
 - **Small**: half a CPU and 512 MB served 4,800 people online at once in load tests. [How big a server](https://sideporch.app/docs/community/server-size/)
