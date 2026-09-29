@@ -1,6 +1,6 @@
 [package]
 name = "sideporch"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.95"
 description = "A small, self-hosted team chat that ships as one binary"
