@@ -30,6 +30,7 @@ pub mod profile;
 pub mod search;
 pub mod security;
 pub mod settings;
+pub mod speech;
 
 /// How to render messages: this Sideporch's custom emoji and usernames, and
 /// who is looking. Live updates are rendered once for everyone, so they
@@ -490,7 +491,8 @@ const APP_BODY: &str = "bg-white text-ink antialiased dark:bg-night dark:text-ha
 
 fn app_page(title: &str, shell: &Shell<'_>, data: &PageData, main: &Markup) -> Markup {
     let page = html! {
-        div id="app" data-me=(shell.user.id) data-admin[shell.user.is_admin] data-moderator[shell.user.may(crate::community::Permission::Moderate)] data-channel=[data.channel] data-thread=[data.thread] class="flex h-dvh overflow-hidden" {
+        div id="app" data-me=(shell.user.id) data-admin[shell.user.is_admin] data-moderator[shell.user.may(crate::community::Permission::Moderate)]
+            data-voice=(if shell.user.speech.voice { "server" } else { "device" }) data-channel=[data.channel] data-thread=[data.thread] class="flex h-dvh overflow-hidden" {
             (sidebar(shell, false))
             (main)
         }
@@ -628,14 +630,21 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
                 }
             }
             @if channel.may_write(false) {
-                (composer(&format!("/c/{}/messages", channel.id), None, &composer_label, shell.user.grants))
+                (composer(&format!("/c/{}/messages", channel.id), None, &composer_label, shell.user.grants, shell.user.speech.dictation))
             } @else {
                 (read_only_notice(channel, false))
             }
         }
     };
     let thread = view.thread.map(|(root, replies)| {
-        thread_panel(channel, root, replies, view.render, shell.user.grants)
+        thread_panel(
+            channel,
+            root,
+            replies,
+            view.render,
+            shell.user.grants,
+            shell.user.speech.dictation,
+        )
     });
     app_page(
         &channel.name,
@@ -687,6 +696,7 @@ fn thread_panel(
     replies: &[Message],
     render: &Render<'_>,
     grants: crate::community::Grants,
+    dictation: bool,
 ) -> Markup {
     html! {
         aside aria-label="Thread" class="flex min-w-0 flex-1 flex-col border-line lg:border-l lg:w-96 lg:flex-none xl:w-[28rem] dark:border-night-line" {
@@ -708,7 +718,7 @@ fn thread_panel(
                 ol id="replies" { (message_list(replies, render)) }
             }
             @if channel.may_write(true) {
-                (composer(&format!("/c/{}/messages", channel.id), Some(root.id), "Reply", grants))
+                (composer(&format!("/c/{}/messages", channel.id), Some(root.id), "Reply", grants, dictation))
             } @else {
                 (read_only_notice(channel, true))
             }
@@ -747,6 +757,7 @@ fn composer(
     parent: Option<i64>,
     label: &str,
     grants: crate::community::Grants,
+    dictation: bool,
 ) -> Markup {
     let may_upload = grants.has(crate::community::Permission::UploadFiles);
     let may_poll = grants.has(crate::community::Permission::CreatePolls);
@@ -781,6 +792,12 @@ fn composer(
                 }
                 textarea name="body" rows="1" maxlength="10000" aria-label=(label) placeholder=(label)
                     class="max-h-48 min-h-6 flex-1 resize-none bg-transparent px-1 py-1.5 leading-6 outline-hidden placeholder:text-muted dark:placeholder:text-haint" {}
+                @if dictation {
+                    button type="button" data-dictate hidden title="Dictate" aria-label="Dictate" aria-pressed="false"
+                        class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink aria-pressed:bg-red-100 aria-pressed:text-red-700 dark:text-haint dark:hover:bg-night dark:aria-pressed:bg-red-950 dark:aria-pressed:text-red-300" {
+                        (icon(icons::MICROPHONE, "h-5 w-5"))
+                    }
+                }
                 button type="button" data-schedule-button hidden title="Send later" aria-label="Send later"
                     class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night" {
                     (icon(icons::CLOCK, "h-5 w-5"))

@@ -91,6 +91,15 @@ Notifications cover direct messages, mentions and replies in your threads, and s
 
 <p align="center"><img src="docs/screenshots/phones.webp" alt="Sideporch on two phones: the channel list, and a thread." width="560"></p>
 
+### Listen and dictate
+
+**Read aloud** any message from its menu, and **dictate** with the microphone in the composer. Both run on your server's processor with open models written in, and run by, Rust ([tract](https://github.com/sonos/tract)): nothing is sent to a speech service. An admin downloads the models under **Admin → Speech**:
+
+- **Supertonic 3** reads in 31 languages, including English, German, French, Spanish, Italian, Dutch, Polish, Japanese and Korean, with ten voices; it picks the language from the message. About 400 MB.
+- **Whisper** tiny, base or small takes dictation in 99 languages. 150 MB to 1 GB.
+
+Everyone can choose their own voice and speed under **Appearance**. Without a voice model, Sideporch reads aloud with the voices of each person's own device. The models load when first used and leave memory after 15 minutes, so they cost nothing while nobody speaks; while in use they take 0.6 to 3.5 GB of memory, so small servers are better off with Whisper tiny or no models.
+
 ### Themes, profiles and people
 
 Pick one of 20 popular themes, such as GitHub, Solarized, Gruvbox, Catppuccin, Nord, Dracula or High contrast, light, dark or following your system; admins set the team's default. Everything about your account is one click away under your name at the bottom of the sidebar.
@@ -299,7 +308,7 @@ Small. Load tests had everyone online at once, each posting every two minutes, a
 | 1 CPU, 1 GB | 9,600 |
 | 2 CPUs, 2 GB | 12,800 or more |
 
-Real servers are often slower than the test machine, so plan with a quarter of that: the smallest VPS or a Raspberry Pi is plenty for a thousand people online. Memory stays around 20 KB per connected person. [How many people can Sideporch handle?](docs/capacity.md) has the method, all results, and how to run the tests yourself.
+Real servers are often slower than the test machine, so plan with a quarter of that: the smallest VPS or a Raspberry Pi is plenty for a thousand people online. Speech models are the exception: reading aloud and dictation need the memory listed under [Listen and dictate](#listen-and-dictate) while in use, and run one at a time. Memory stays around 20 KB per connected person. [How many people can Sideporch handle?](docs/capacity.md) has the method, all results, and how to run the tests yourself.
 
 ## Good to know
 

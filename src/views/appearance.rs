@@ -111,6 +111,7 @@ fn picker(picker: &Picker<'_>) -> Markup {
 pub fn appearance_page(
     shell: &Shell<'_>,
     picker_state: &Picker<'_>,
+    reading: Option<(&str, f64)>,
     error: Option<&str>,
     saved: bool,
 ) -> Markup {
@@ -127,6 +128,9 @@ pub fn appearance_page(
             }
             p class="mb-5 max-w-xl text-muted dark:text-haint" { "Only you see your theme. Click one to try it." }
             (picker(picker_state))
+            @if let Some((voice, speed)) = reading {
+                (super::speech::personal_section(voice, speed))
+            }
         },
     )
 }

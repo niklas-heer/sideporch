@@ -43,12 +43,18 @@ async fn render_appearance(
     saved: bool,
 ) -> AppResult<Markup> {
     let user_id = user.id;
-    let ((theme, mode), (default_theme, default_mode)) = state
+    let ((theme, mode), (default_theme, default_mode), reading) = state
         .db
         .call(move |conn| {
+            let reading: (String, f64) = conn.query_row(
+                "SELECT speech_voice, speech_speed FROM users WHERE id = ?1",
+                [user_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
             Ok((
                 store::user_appearance(conn, user_id)?,
                 crate::themes::defaults(conn)?,
+                reading,
             ))
         })
         .await?;
@@ -69,6 +75,7 @@ async fn render_appearance(
                 crate::themes::Appearance::parse(&default_mode).unwrap_or_default(),
             )),
         },
+        user.speech.voice.then_some((reading.0.as_str(), reading.1)),
         error,
         saved,
     ))

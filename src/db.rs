@@ -539,6 +539,14 @@ CREATE TABLE pending_logins (
 );
 ",
     ),
+    Migration::Sql(
+        r"
+-- How someone likes messages read aloud: a voice and a speed; empty and 1
+-- follow the instance's choice.
+ALTER TABLE users ADD COLUMN speech_voice TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN speech_speed REAL NOT NULL DEFAULT 1.0;
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

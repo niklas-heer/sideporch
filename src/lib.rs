@@ -33,6 +33,7 @@ mod routes;
 mod search;
 mod secrets;
 mod security;
+mod speech;
 mod store;
 mod system;
 mod themes;
@@ -73,6 +74,9 @@ pub struct Config {
     /// Let link previews reach private addresses; tests serve pages locally.
     #[doc(hidden)]
     pub allow_private_link_previews: bool,
+    /// Where speech models are downloaded from; tests serve them locally.
+    #[doc(hidden)]
+    pub model_base_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -97,6 +101,8 @@ pub(crate) struct AppState {
     setup_file: PathBuf,
     /// Passkey challenges handed out and not answered yet.
     ceremonies: passkeys::Ceremonies,
+    /// Reading aloud and dictation.
+    speech: Arc<speech::Speech>,
 }
 
 /// Whether and how the first account can still be created.
@@ -207,7 +213,9 @@ impl Sideporch {
             setup: Arc::new(Mutex::new(setup)),
             setup_file: setup_link_file(&config.data_dir),
             ceremonies: passkeys::Ceremonies::default(),
+            speech: speech::Speech::new(&config.data_dir, config.model_base_url.clone()),
         };
+        state.speech.start_unloading();
         state.automations.serve(state.clone());
         later::start(state.clone());
         backup::start(state.clone());

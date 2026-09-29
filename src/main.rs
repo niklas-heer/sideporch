@@ -99,6 +99,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         gif_api_base: None,
         allow_insecure_push: false,
         allow_private_link_previews: false,
+        model_base_url: None,
     })
     .await?;
     let listener = tokio::net::TcpListener::bind(args.listen).await?;

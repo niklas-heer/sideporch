@@ -2,7 +2,7 @@
 name = "sideporch"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "A small, self-hosted team chat that ships as one binary"
 license = "MIT"
 repository = "https://github.com/niklas-heer/sideporch"
@@ -21,6 +21,7 @@ full_moon = { version = "2.2.0", default-features = false, features = ["lua54"] 
 futures-util = "0.3.34"
 getrandom = "0.4.3"
 http-body-util = "0.1.5"
+hyper = "1.11.1"
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["ring", "webpki-roots", "http1", "http2", "tls12"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "http2", "tokio"] }
 jiff = { version = "0.2.37", features = ["tzdb-bundle-always"] }
@@ -28,10 +29,11 @@ lettre = { version = "0.11.23", default-features = false, features = ["builder",
 maud = { version = "0.27.0", features = ["axum"] }
 mlua = { version = "0.12.1", features = ["lua54", "vendored", "send", "serde"] }
 phosphor-svgs = "0.5.0"
-qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 ring = { version = "0.17.14", default-features = false, features = ["alloc"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+rustfft = "6.4.1"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 selene-lib = { version = "0.31.0", default-features = false, features = ["lua54"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -44,7 +46,9 @@ tokio = { version = "1.53.1", features = ["fs", "macros", "rt-multi-thread", "ne
 tower-service = "0.3.3"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tract-onnx = "0.23.8"
 web-push-native = "0.5.0"
+whatlang = "0.18.0"
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
 
 [build-dependencies]
@@ -74,6 +78,21 @@ panic = "deny"
 exit = "deny"
 as_conversions = "deny"
 unchecked_time_subtraction = "deny"
+
+# Speech models run slowly unoptimized; debug builds and tests optimize
+# the crates that do the math.
+[profile.dev.package.tract-core]
+opt-level = 3
+[profile.dev.package.tract-linalg]
+opt-level = 3
+[profile.dev.package.tract-data]
+opt-level = 3
+[profile.dev.package.tract-onnx-opl]
+opt-level = 3
+[profile.dev.package.rustfft]
+opt-level = 3
+[profile.dev.package.ndarray]
+opt-level = 3
 
 [profile.release]
 lto = "thin"

@@ -132,6 +132,15 @@ pub struct CurrentUser {
     /// The sign-in policy asks them to add a passkey or an authenticator
     /// app first; every other page sends them there.
     pub must_secure: bool,
+    /// What the server's speech models offer.
+    pub speech: SpeechFlags,
+}
+
+/// Whether the server can read aloud, and take dictation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SpeechFlags {
+    pub voice: bool,
+    pub dictation: bool,
 }
 
 impl CurrentUser {
@@ -160,7 +169,9 @@ pub async fn lookup_session(state: &AppState, token: String) -> AppResult<Option
                     "SELECT u.id, u.display_name, u.is_admin, u.theme, u.appearance, u.avatar_file_id,
                          COALESCE((SELECT value FROM settings WHERE key = 'appearance.theme'), ''),
                          COALESCE((SELECT value FROM settings WHERE key = 'appearance.mode'), ''),
-                         u.last_visit_day, u.muted_until
+                         u.last_visit_day, u.muted_until,
+                         COALESCE((SELECT value FROM settings WHERE key = 'speech.voice_model'), '') != '',
+                         COALESCE((SELECT value FROM settings WHERE key = 'speech.dictation_model'), '') != ''
                      FROM sessions s JOIN users u ON u.id = s.user_id
                      WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.deactivated_at IS NULL",
                     params![token_hash, now],
@@ -183,6 +194,10 @@ pub async fn lookup_session(state: &AppState, token: String) -> AppResult<Option
                                     .get::<_, Option<i64>>(9)?
                                     .filter(|until| *until > now),
                                 must_secure: false,
+                                speech: SpeechFlags {
+                                    voice: row.get(10)?,
+                                    dictation: row.get(11)?,
+                                },
                             },
                             row.get::<_, String>(8)?,
                         ))

@@ -72,6 +72,12 @@ pub fn actions_page(shell: &Shell<'_>, message: &Message, render: &Render<'_>) -
                     }
                 }
             }
+            @if shell.user.speech.voice && !message.deleted {
+                div class="mt-6" {
+                    p class="field-label" { "Read aloud" }
+                    audio controls preload="none" src={ (base) "/speech" } class="w-full max-w-md" {}
+                }
+            }
             @if !own && !message.deleted && matches!(message.author, Author::User { .. }) {
                 details class="mt-6" {
                     summary class="cursor-pointer text-sm font-semibold" { "Report this message" }

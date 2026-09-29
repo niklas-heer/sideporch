@@ -35,6 +35,7 @@ pub async fn start_in(data: TempDir, configure: impl FnOnce(&mut Config)) -> Ser
         gif_api_base: None,
         allow_insecure_push: true,
         allow_private_link_previews: false,
+        model_base_url: None,
     };
     configure(&mut config);
     let app = Sideporch::open(config).await.unwrap();

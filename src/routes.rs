@@ -37,6 +37,7 @@ mod message;
 mod profile;
 mod security;
 mod settings;
+mod speech;
 
 pub use gifs::Posted as GifPosted;
 pub use message::message_href;
@@ -109,6 +110,7 @@ pub fn router(state: AppState) -> Router {
         .merge(backups::router())
         .merge(community::router())
         .merge(security::router())
+        .merge(speech::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),

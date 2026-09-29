@@ -254,6 +254,136 @@ impl Http {
     }
 }
 
+impl Http {
+    /// Requests `url` with GET, following up to five redirects.
+    async fn follow(
+        &self,
+        url: &str,
+    ) -> Result<axum::http::Response<hyper::body::Incoming>, String> {
+        let mut url = url.to_owned();
+        let mut response = None;
+        for _ in 0..6 {
+            let uri: axum::http::Uri = url
+                .parse()
+                .map_err(|_| format!("`{url}` is not a valid URL"))?;
+            if !matches!(uri.scheme_str(), Some("http" | "https")) {
+                return Err("only http and https URLs are allowed".to_owned());
+            }
+            // Literal IP addresses skip name resolution, so check them here.
+            if let Some(host) = uri.host()
+                && let Ok(ip) = host
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .parse::<IpAddr>()
+                && !self.allow_private
+                && !is_public(ip)
+            {
+                return Err(format!("{host} is an internal address"));
+            }
+            let request = axum::http::Request::get(uri.clone())
+                .header("user-agent", &self.user_agent)
+                .body(Full::new(Bytes::new()))
+                .map_err(|error| format!("invalid request: {error}"))?;
+            let answer =
+                tokio::time::timeout(Duration::from_secs(60), self.client.request(request))
+                    .await
+                    .map_err(|_| "the server didn't answer within a minute".to_owned())?
+                    .map_err(|error| describe(&error))?;
+            if answer.status().is_redirection() {
+                let location = answer
+                    .headers()
+                    .get(axum::http::header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or("a redirect without a location")?;
+                url = if location.starts_with("http://") || location.starts_with("https://") {
+                    location.to_owned()
+                } else {
+                    let origin = format!(
+                        "{}://{}",
+                        uri.scheme_str().unwrap_or("https"),
+                        uri.authority().map(ToString::to_string).unwrap_or_default()
+                    );
+                    format!("{origin}{location}")
+                };
+                continue;
+            }
+            response = Some(answer);
+            break;
+        }
+        response.ok_or_else(|| "too many redirects".to_owned())
+    }
+
+    /// Downloads `url` to `target`, following up to five redirects, and
+    /// checks the file's size and SHA-256 before moving it into place.
+    /// `progress` counts the bytes received.
+    pub async fn download(
+        &self,
+        url: &str,
+        target: &std::path::Path,
+        size: u64,
+        sha256: &str,
+        progress: &std::sync::atomic::AtomicU64,
+    ) -> Result<(), String> {
+        use sha2::Digest as _;
+        use tokio::io::AsyncWriteExt as _;
+
+        let response = self.follow(url).await?;
+        if !response.status().is_success() {
+            return Err(format!("the server answered {}", response.status()));
+        }
+        let partial = target.with_extension("partial");
+        if let Some(parent) = target.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        let mut file = tokio::fs::File::create(&partial)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut hasher = sha2::Sha256::new();
+        let mut received = 0_u64;
+        let mut body = response.into_body();
+        loop {
+            let frame = tokio::time::timeout(Duration::from_secs(60), body.frame())
+                .await
+                .map_err(|_| "the download stalled for a minute".to_owned())?;
+            let Some(frame) = frame else { break };
+            let frame = frame.map_err(|error| describe(&error))?;
+            if let Ok(data) = frame.into_data() {
+                received = received.saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
+                if received > size {
+                    drop(tokio::fs::remove_file(&partial).await);
+                    return Err("the file is larger than expected".to_owned());
+                }
+                hasher.update(&data);
+                file.write_all(&data)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                progress.fetch_add(
+                    u64::try_from(data.len()).unwrap_or(0),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
+        }
+        file.flush().await.map_err(|error| error.to_string())?;
+        drop(file);
+        let digest = hasher.finalize();
+        let hex = digest.iter().fold(String::new(), |mut hex, byte| {
+            use std::fmt::Write as _;
+            // Writing to a String cannot fail.
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+        if received != size || hex != sha256 {
+            drop(tokio::fs::remove_file(&partial).await);
+            return Err("the downloaded file doesn't match; try again".to_owned());
+        }
+        tokio::fs::rename(&partial, target)
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// The innermost cause, which names the actual problem.
 fn describe(error: &(dyn std::error::Error + 'static)) -> String {
     let mut cause: &(dyn std::error::Error + 'static) = error;
@@ -288,6 +418,64 @@ mod tests {
         for public in ["1.1.1.1", "140.82.112.3", "2606:4700::1111"] {
             assert!(is_public(public.parse().unwrap()), "{public}");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn downloads_follow_redirects_and_check_the_file() {
+        use sha2::Digest as _;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new()
+            .route(
+                "/moved",
+                axum::routing::get(|| async { axum::response::Redirect::temporary("/file") }),
+            )
+            .route("/file", axum::routing::get(|| async { "model weights" }));
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("models/weights.onnx");
+        let sha =
+            sha2::Sha256::digest(b"model weights")
+                .iter()
+                .fold(String::new(), |mut hex, byte| {
+                    use std::fmt::Write as _;
+                    write!(hex, "{byte:02x}").unwrap();
+                    hex
+                });
+        let progress = std::sync::atomic::AtomicU64::new(0);
+        let http = Http::new(true).unwrap();
+        http.download(&format!("{base}/moved"), &target, 13, &sha, &progress)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"model weights");
+        assert_eq!(progress.load(std::sync::atomic::Ordering::Relaxed), 13);
+        // A different file, or a bigger one, is refused and removed.
+        let other = dir.path().join("other.onnx");
+        let error = http
+            .download(
+                &format!("{base}/file"),
+                &other,
+                13,
+                &"0".repeat(64),
+                &progress,
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("doesn't match"), "{error}");
+        let error = http
+            .download(&format!("{base}/file"), &other, 5, &sha, &progress)
+            .await
+            .unwrap_err();
+        assert!(error.contains("larger than expected"), "{error}");
+        assert!(!other.exists() && !other.with_extension("partial").exists());
+        // Internal addresses stay blocked unless allowed.
+        let guarded = Http::new(false).unwrap();
+        assert!(
+            guarded
+                .download(&format!("{base}/file"), &other, 13, &sha, &progress)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

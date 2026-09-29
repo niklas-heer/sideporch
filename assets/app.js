@@ -906,7 +906,40 @@
     const { at } = await response.json();
     toast(`I'll remind you ${at}, in your notes to self.`);
   }
+  // Reading aloud: the server's voice when it has one, else the device's.
+  let reading = null;
+  function stopReading() {
+    reading?.audio?.pause();
+    if (reading?.device) speechSynthesis.cancel();
+    reading = null;
+  }
+  function readOnDevice(item) {
+    if (!("speechSynthesis" in window)) return toast("This browser can't read aloud.");
+    const text = item.querySelector("[data-body]")?.innerText?.trim();
+    if (!text) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.onend = () => (reading = null);
+    reading = { id: item.dataset.messageId, device: true };
+    speechSynthesis.speak(utterance);
+  }
+  function readAloud(item, base) {
+    stopReading();
+    if (app?.dataset.voice !== "server") return readOnDevice(item);
+    const audio = new Audio(`${base}/speech`);
+    reading = { id: item.dataset.messageId, audio };
+    audio.onended = () => (reading = null);
+    audio.onerror = () => {
+      toast("The server's voice didn't work; this device reads it instead.");
+      readOnDevice(item);
+    };
+    toast("Reading aloud…");
+    audio.play().catch(() => {});
+  }
   const menuExtras = [
+    (item, base) => {
+      if (item.dataset.deleted !== undefined || !item.querySelector("[data-body]")) return null;
+      return reading?.id === item.dataset.messageId ? ["Stop reading", stopReading] : ["Read aloud", () => readAloud(item, base)];
+    },
     (item, base) => (item.dataset.deleted === undefined ? ["Remind me in 1 hour", () => remindAbout(base, "in 1 hour")] : null),
     (item, base) => (item.dataset.deleted === undefined ? ["Remind me tomorrow", () => remindAbout(base, "tomorrow")] : null),
     (item, base) =>
@@ -1513,6 +1546,97 @@
     }
   }
 
+  // Dictation: record in the browser, convert to 16 kHz WAV, and let the
+  // server's speech model write it down.
+  async function toWav16k(blob) {
+    const context = new AudioContext();
+    const decoded = await context.decodeAudioData(await blob.arrayBuffer());
+    context.close();
+    const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * 16000)), 16000);
+    const source = offline.createBufferSource();
+    source.buffer = decoded;
+    source.connect(offline.destination);
+    source.start();
+    const samples = (await offline.startRendering()).getChannelData(0);
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    const text = (offset, value) => [...value].forEach((c, i) => view.setUint8(offset + i, c.charCodeAt(0)));
+    text(0, "RIFF");
+    view.setUint32(4, 36 + samples.length * 2, true);
+    text(8, "WAVEfmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, 16000, true);
+    view.setUint32(28, 32000, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    text(36, "data");
+    view.setUint32(40, samples.length * 2, true);
+    samples.forEach((sample, i) => view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, sample)) * 0x7fff, true));
+    return buffer;
+  }
+
+  function setupDictation(form) {
+    const button = form.querySelector("[data-dictate]");
+    const textarea = form.querySelector("textarea");
+    if (!button || !textarea || !navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return;
+    button.hidden = false;
+    let recorder = null;
+    let limit = 0;
+    button.addEventListener("click", async () => {
+      if (recorder) return recorder.stop();
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        return toast("Sideporch can't use the microphone. Allow it for this site to dictate.");
+      }
+      const chunks = [];
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (event) => chunks.push(event.data);
+      recorder.onstop = async () => {
+        clearTimeout(limit);
+        stream.getTracks().forEach((track) => track.stop());
+        recorder = null;
+        button.setAttribute("aria-pressed", "false");
+        button.disabled = true;
+        button.title = "Writing it down…";
+        try {
+          const wav = await toWav16k(new Blob(chunks, { type: chunks[0]?.type }));
+          const response = await fetch("/speech/transcribe", {
+            method: "POST",
+            headers: { "content-type": "audio/wav", "x-sideporch-fetch": "1" },
+            body: wav,
+          });
+          if (!response.ok) throw new Error(await errorText(response));
+          const { text } = await response.json();
+          if (text) {
+            const before = textarea.value.slice(0, textarea.selectionStart);
+            const after = textarea.value.slice(textarea.selectionEnd);
+            const spaced = (before && !/\s$/.test(before) ? " " : "") + text;
+            textarea.value = before + spaced + after;
+            textarea.selectionStart = textarea.selectionEnd = before.length + spaced.length;
+            textarea.dispatchEvent(new Event("input", { bubbles: true }));
+            textarea.focus();
+          } else {
+            toast("No words heard. Try again a little closer to the microphone.");
+          }
+        } catch (error) {
+          toast(error.message || "Dictation didn't work. Try again.");
+        } finally {
+          button.disabled = false;
+          button.title = "Dictate";
+        }
+      };
+      recorder.start();
+      button.setAttribute("aria-pressed", "true");
+      button.title = "Stop and write it down";
+      toast("Listening. Press the microphone again when you're done.");
+      limit = setTimeout(() => recorder?.stop(), 120_000);
+    });
+  }
+
   function setupPasskeys() {
     const supported = Boolean(window.PublicKeyCredential && navigator.credentials && isSecureContext);
     for (const note of document.querySelectorAll("[data-passkey-unsupported]")) note.hidden = supported;
@@ -1535,6 +1659,29 @@
     }
   }
 
+  // The speech admin page follows downloads until they finish.
+  const speechAdmin = document.querySelector("[data-speech-admin][data-downloading]");
+  if (speechAdmin) {
+    const poll = setInterval(async () => {
+      const response = await fetch("/admin/speech/status").catch(() => null);
+      if (!response?.ok) return;
+      const { models } = await response.json();
+      let running = false;
+      for (const model of models) {
+        running ||= model.running;
+        const card = speechAdmin.querySelector(`[data-model="${model.key}"]`);
+        const bar = card?.querySelector("[data-progress]");
+        if (bar) bar.value = model.received;
+        const label = card?.querySelector("[data-progress-text]");
+        if (label) label.textContent = `Downloading, ${Math.ceil(model.received / 1048576)} of ${Math.ceil(model.total / 1048576)} MB`;
+      }
+      if (!running) {
+        clearInterval(poll);
+        location.reload();
+      }
+    }, 1500);
+  }
+
   for (const link of document.querySelectorAll("a[data-nav-link]")) {
     if (link.pathname === location.pathname) link.setAttribute("aria-current", "page");
   }
@@ -1554,6 +1701,7 @@
     for (const button of document.querySelectorAll("[data-gif-button]")) button.hidden = false;
   }
   document.querySelectorAll("form[data-composer]").forEach(setupComposer);
+  document.querySelectorAll("form[data-composer]").forEach(setupDictation);
   scrollToEnd(document.getElementById("scroller"));
   scrollToEnd(document.getElementById("thread-scroller"));
   if (app) {
