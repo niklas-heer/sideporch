@@ -263,9 +263,21 @@ Scripts, libraries, their history and their data all live in the SQLite database
 
   Agents get what a developer needs: the API reference, channels and recent messages, lint, format, dry-run tests and live runs, run logs, versions and restore, saved data, write-only secrets, settings, and cron previews. Scripts are also available as MCP resources. Automations an agent creates start switched off, and every change is kept in the history under the token's name.
 
+## How big a server?
+
+Small. Load tests had everyone online at once, each posting every two minutes, and a message counted only when it reached everyone within a second:
+
+| Server | People online at once |
+| --- | ---: |
+| ½ CPU, 512 MB | 4,800 |
+| 1 CPU, 1 GB | 9,600 |
+| 2 CPUs, 2 GB | 12,800 or more |
+
+Real servers are often slower than the test machine, so plan with a quarter of that: the smallest VPS or a Raspberry Pi is plenty for a thousand people online. Memory stays around 20 KB per connected person. [How many people can Sideporch handle?](docs/capacity.md) has the method, all results, and how to run the tests yourself.
+
 ## Good to know
 
-- **It's for small groups.** Sideporch runs on one server with SQLite, which is plenty for a team, a club or a family, not for thousands of people.
+- **It's for teams, not enterprises.** Sideporch runs on one server with SQLite. That is plenty for a team, a club, a company of a few thousand or a family, but not built for organisations of tens of thousands.
 - **The server can read everything.** Messages are not end-to-end encrypted. Whoever runs the server, and admins through backups, can read all of them. Use HTTPS.
 - **No calls, no email.** There are no voice or video calls, and notifications are push notifications, not email.
 - **No group direct messages.** Make a private channel instead.
