@@ -264,28 +264,52 @@ async fn live_updates_reach_the_right_people() {
     let bea = invite(&server, &admin, "Bea", "bea").await;
     let cat = invite(&server, &admin, "Cat", "cat").await;
     let general = home_channel(&admin).await;
-    let mut bea_live = bea.live().await;
+    // Bea looks at #general; Cat is on another page.
+    let mut bea_live = bea.live_in(general).await;
     let mut cat_live = cat.live().await;
 
     assert_eq!(
         admin.send(general, "Porch party at 6", None).await,
         StatusCode::NO_CONTENT
     );
-    for live in [&mut bea_live, &mut cat_live] {
-        let event = live
-            .next_event(Duration::from_secs(5))
+    let event = bea_live
+        .next_event(Duration::from_secs(5))
+        .await
+        .expect("event");
+    assert_eq!(event["type"], "message");
+    assert_eq!(event["channel_id"], general);
+    assert!(event["html"].as_str().unwrap().contains("Porch party at 6"));
+    // Elsewhere, a short notice marks the channel unread, once.
+    let notice = cat_live
+        .next_event(Duration::from_secs(5))
+        .await
+        .expect("notice");
+    assert_eq!(notice["type"], "message");
+    assert_eq!(notice["channel_id"], general);
+    assert!(notice.get("html").is_none());
+    admin.send(general, "Bring snacks", None).await;
+    assert!(bea_live.next_event(Duration::from_secs(5)).await.is_some());
+    assert!(
+        cat_live
+            .next_event(Duration::from_millis(300))
             .await
-            .expect("event");
-        assert_eq!(event["type"], "message");
-        assert_eq!(event["channel_id"], general);
-        assert!(event["html"].as_str().unwrap().contains("Porch party at 6"));
-    }
+            .is_none()
+    );
+    // Mentions always come through.
+    admin.send(general, "@cat you too", None).await;
+    let mention = cat_live
+        .next_event(Duration::from_secs(5))
+        .await
+        .expect("mention");
+    assert_eq!(mention["activity"][0], cat.user_id().await);
+    assert!(bea_live.next_event(Duration::from_secs(5)).await.is_some());
 
     let bea_id = bea.user_id().await;
     let dm: i64 = location(&admin.get(&format!("/dm/{bea_id}")).await)
         .trim_start_matches("/c/")
         .parse()
         .unwrap();
+    let mut bea_live = bea.live_in(dm).await;
     assert_eq!(admin.send(dm, "psst", None).await, StatusCode::NO_CONTENT);
     let event = bea_live
         .next_event(Duration::from_secs(5))

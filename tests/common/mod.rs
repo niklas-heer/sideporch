@@ -196,6 +196,15 @@ impl Browser {
         panic!("{needle:?} never appeared on {path}");
     }
 
+    /// A live connection whose page shows `channel_id`, as app.js opens
+    /// it, so events for that channel arrive in full.
+    pub async fn live_in(&self, channel_id: i64) -> Live {
+        let mut live = self.live().await;
+        live.send(&serde_json::json!({ "type": "view", "channel_id": channel_id }))
+            .await;
+        live
+    }
+
     pub async fn live(&self) -> Live {
         let url = self.base.replace("http://", "ws://") + "/ws";
         let mut request = url.into_client_request().unwrap();

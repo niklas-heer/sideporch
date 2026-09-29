@@ -2216,7 +2216,32 @@ pub fn delete_custom_emoji(conn: &Connection, name: &str) -> AppResult<()> {
 }
 
 /// Everything message rendering needs: custom emoji and usernames.
-pub fn render_context(conn: &Connection) -> AppResult<crate::markup::Context> {
+///
+/// Every message and page needs it, and with thousands of accounts building
+/// it is real work, so it is kept per database until an account or custom
+/// emoji is added or removed. Accounts are never deleted and usernames
+/// never change, so the newest account id tells whether any were added.
+pub fn render_context(conn: &Connection) -> AppResult<std::sync::Arc<crate::markup::Context>> {
+    use std::{
+        collections::HashMap as Map,
+        sync::{Arc, LazyLock, Mutex},
+    };
+    type Cached = (String, Arc<crate::markup::Context>);
+    static CACHE: LazyLock<Mutex<Map<String, Cached>>> = LazyLock::new(Mutex::default);
+
+    let fingerprint: String = conn.query_row(
+        "SELECT COALESCE((SELECT MAX(id) FROM users), 0) || ':' ||
+                (SELECT COUNT(*) || ':' || COALESCE(MAX(created_at), 0) FROM custom_emoji)",
+        [],
+        |row| row.get(0),
+    )?;
+    let key = conn.path().unwrap_or_default().to_owned();
+    if let Ok(cache) = CACHE.lock()
+        && let Some((cached, ctx)) = cache.get(&key)
+        && *cached == fingerprint
+    {
+        return Ok(Arc::clone(ctx));
+    }
     let mut ctx = crate::markup::Context::default();
     for emoji in custom_emoji(conn)? {
         ctx.custom_emoji
@@ -2225,6 +2250,13 @@ pub fn render_context(conn: &Connection) -> AppResult<crate::markup::Context> {
     let mut statement = conn.prepare("SELECT lower(username) FROM users")?;
     for username in statement.query_map([], |row| row.get::<_, String>(0))? {
         ctx.usernames.insert(username?);
+    }
+    let ctx = Arc::new(ctx);
+    // An in-memory database has no path, so it can't share a cache entry.
+    if !key.is_empty()
+        && let Ok(mut cache) = CACHE.lock()
+    {
+        cache.insert(key, (fingerprint, Arc::clone(&ctx)));
     }
     Ok(ctx)
 }
@@ -2459,13 +2491,31 @@ pub fn recipients(
     let text = message.body.to_lowercase();
     let everyone = mentions(&text, "channel") || mentions(&text, "here");
     let mut mentioned = Vec::new();
+    // Only look at everyone for @channel and @here; otherwise only at the
+    // names written in the message.
+    let names: Vec<&str> = if everyone {
+        Vec::new()
+    } else {
+        text.split('@')
+            .skip(1)
+            .filter_map(|rest| {
+                let end = rest
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')))
+                    .unwrap_or(rest.len());
+                rest.get(..end).map(|name| name.trim_end_matches('.'))
+            })
+            .filter(|name| !name.is_empty())
+            .collect()
+    };
+    let names = serde_json::to_string(&names).map_err(crate::error::AppError::internal)?;
     // Muted and left channels only reach people mentioned by name.
     let mut statement = conn.prepare(
         "SELECT u.id, lower(u.username), COALESCE(p.muted OR p.hidden, 0) FROM users u
          LEFT JOIN channel_prefs p ON p.user_id = u.id AND p.channel_id = ?1
-         WHERE u.deactivated_at IS NULL",
+         WHERE u.deactivated_at IS NULL
+           AND (?2 OR lower(u.username) IN (SELECT value FROM json_each(?3)))",
     )?;
-    for user in statement.query_map([message.channel_id], |row| {
+    for user in statement.query_map(params![message.channel_id, everyone, names], |row| {
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, String>(1)?,

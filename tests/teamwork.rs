@@ -52,7 +52,7 @@ async fn messages_can_be_edited_deleted_pinned_and_saved() {
     let admin = admin(&server).await;
     let general = home_channel(&admin).await;
     let member = invite(&server, &admin, "Mo Member", "mo").await;
-    let mut live = member.live().await;
+    let mut live = member.live_in(general).await;
 
     member.send(general, "Helo porch", None).await;
     let page = member.page(&format!("/c/{general}")).await;
@@ -164,7 +164,7 @@ async fn deleting_keeps_threads_and_works_without_javascript() {
     let id = last_message_id(&member.page(&format!("/c/{general}")).await);
     let base = format!("/c/{general}/m/{id}");
     fetch_post(&member, &format!("{base}/save"), &[]).await;
-    let mut live = member.live().await;
+    let mut live = member.live_in(general).await;
 
     // A thread's first message stays as a placeholder while replies exist.
     member.send(general, "A reply", Some(id)).await;
@@ -536,8 +536,8 @@ async fn typing_shows_to_readers() {
     let admin = admin(&server).await;
     let general = home_channel(&admin).await;
     let member = invite(&server, &admin, "Mo Member", "mo").await;
-    let mut writer = admin.live().await;
-    let mut reader = member.live().await;
+    let mut writer = admin.live_in(general).await;
+    let mut reader = member.live_in(general).await;
     writer
         .send(&json!({ "type": "typing", "channel_id": general, "parent_id": null }))
         .await;
@@ -700,7 +700,7 @@ async fn links_get_previews_unless_turned_off() {
     let server = common::start_with(|config| config.allow_private_link_previews = true).await;
     let admin = admin(&server).await;
     let general = home_channel(&admin).await;
-    let mut live = admin.live().await;
+    let mut live = admin.live_in(general).await;
     admin
         .send(
             general,
@@ -752,7 +752,7 @@ async fn previews_never_reach_private_addresses() {
     let server = start().await;
     let admin = admin(&server).await;
     let general = home_channel(&admin).await;
-    let mut live = admin.live().await;
+    let mut live = admin.live_in(general).await;
     admin
         .send(general, &format!("Internal: {site}/guide"), None)
         .await;

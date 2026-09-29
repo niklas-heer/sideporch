@@ -271,7 +271,7 @@ struct Importer<'a> {
     people: HashMap<String, i64>,
     /// Slack user id to Sideporch username, for mentions.
     names: HashMap<String, String>,
-    emoji: crate::markup::Context,
+    emoji: std::sync::Arc<crate::markup::Context>,
     report: Report,
 }
 

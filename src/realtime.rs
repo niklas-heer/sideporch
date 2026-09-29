@@ -1,5 +1,11 @@
 //! Live updates over WebSocket. Every event is rendered once on the server
 //! and fanned out to the connections that may see it.
+//!
+//! Each browser says which channel it shows. Only those browsers get new
+//! messages in full, edits, reactions and typing; the rest get a short
+//! notice that the channel has something new, once until they read it, or
+//! every time they are mentioned. That keeps the work per message close to
+//! the number of people looking, not everyone online.
 
 use std::{
     collections::HashMap,
@@ -67,10 +73,42 @@ pub enum Event {
     },
 }
 
+impl Event {
+    const fn channel_id(&self) -> i64 {
+        match self {
+            Self::Message { channel_id, .. }
+            | Self::MessageChanged { channel_id, .. }
+            | Self::MessageDeleted { channel_id, .. }
+            | Self::Typing { channel_id, .. }
+            | Self::Reactions { channel_id, .. } => *channel_id,
+        }
+    }
+}
+
+/// What browsers not showing the channel learn about a new message.
+#[derive(Serialize)]
+struct Notice<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    channel_id: i64,
+    id: i64,
+    parent_id: Option<i64>,
+    author: &'a str,
+    activity: &'a [i64],
+}
+
 struct Envelope {
     /// `None` means every signed-in user may receive the event.
     audience: Option<Vec<i64>>,
+    channel_id: i64,
+    /// The event in full, for browsers showing the channel.
     json: String,
+    /// For new messages: the short notice for everyone else.
+    notice: Option<String>,
+    /// Who the message mentions or answers; they always get the notice.
+    activity: Vec<i64>,
+    /// Who wrote it; their other browsers need no notice.
+    author: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -119,9 +157,39 @@ impl Hub {
     }
 
     pub fn publish(&self, audience: Option<Vec<i64>>, event: &Event) {
+        let (notice, activity, author) = match event {
+            Event::Message {
+                channel_id,
+                id,
+                parent_id,
+                author,
+                activity,
+                ..
+            } => (
+                serde_json::to_string(&Notice {
+                    kind: "message",
+                    channel_id: *channel_id,
+                    id: *id,
+                    parent_id: *parent_id,
+                    author,
+                    activity,
+                })
+                .ok(),
+                activity.clone(),
+                author.strip_prefix("u:").and_then(|id| id.parse().ok()),
+            ),
+            _ => (None, Vec::new(), None),
+        };
         match serde_json::to_string(event) {
             // Sending fails only when nobody is connected, which is fine.
-            Ok(json) => drop(self.sender.send(Arc::new(Envelope { audience, json }))),
+            Ok(json) => drop(self.sender.send(Arc::new(Envelope {
+                audience,
+                channel_id: event.channel_id(),
+                json,
+                notice,
+                activity,
+                author,
+            }))),
             Err(error) => tracing::error!(%error, "could not encode event"),
         }
     }
@@ -146,6 +214,40 @@ enum ClientMessage {
     Timezone {
         name: String,
     },
+    /// The channel the page shows, if any.
+    View {
+        channel_id: Option<i64>,
+    },
+}
+
+/// What one connection is looking at, to pick what it needs.
+#[derive(Default)]
+struct Viewer {
+    channel: Option<i64>,
+    /// Channels this connection was told have something new.
+    notified: std::collections::HashSet<i64>,
+}
+
+impl Viewer {
+    /// The text to send for `envelope`, if any.
+    fn pick<'a>(&mut self, user_id: i64, envelope: &'a Envelope) -> Option<&'a str> {
+        if envelope
+            .audience
+            .as_ref()
+            .is_some_and(|members| !members.contains(&user_id))
+        {
+            return None;
+        }
+        if self.channel == Some(envelope.channel_id) {
+            return Some(&envelope.json);
+        }
+        let notice = envelope.notice.as_deref()?;
+        if envelope.author == Some(user_id) {
+            return None;
+        }
+        (envelope.activity.contains(&user_id) || self.notified.insert(envelope.channel_id))
+            .then_some(notice)
+    }
 }
 
 /// The shortest gap between two typing notices from one connection.
@@ -156,7 +258,13 @@ pub async fn connect(
     user: CurrentUser,
     State(state): State<AppState>,
 ) -> Response {
-    ws.on_upgrade(move |socket| serve(socket, state, user.id))
+    // Browsers only send small notes, and events go out one at a time, so
+    // small buffers suffice. The defaults (128 kB each) would dominate
+    // memory with thousands of people online.
+    ws.read_buffer_size(4 * 1024)
+        .write_buffer_size(16 * 1024)
+        .max_message_size(64 * 1024)
+        .on_upgrade(move |socket| serve(socket, state, user.id))
 }
 
 async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
@@ -164,13 +272,15 @@ async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
     let (mut sink, mut stream) = socket.split();
     let mut keepalive = tokio::time::interval(Duration::from_secs(25));
     let mut visible = false;
+    let mut viewer = Viewer::default();
     let mut last_typing: Option<tokio::time::Instant> = None;
     loop {
         tokio::select! {
             event = events.recv() => match event {
                 Ok(envelope) => {
-                    let visible = envelope.audience.as_ref().is_none_or(|members| members.contains(&user_id));
-                    if visible && sink.send(WsMessage::Text(envelope.json.clone().into())).await.is_err() {
+                    if let Some(text) = viewer.pick(user_id, &envelope)
+                        && sink.send(WsMessage::Text(text.to_owned().into())).await.is_err()
+                    {
                         break;
                     }
                 }
@@ -185,7 +295,14 @@ async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
             incoming = stream.next() => match incoming {
                 Some(Ok(WsMessage::Text(text))) => match serde_json::from_str(&text) {
                     Ok(ClientMessage::Read { channel_id, message_id }) => {
+                        viewer.notified.remove(&channel_id);
                         mark_read(&state, user_id, channel_id, message_id).await;
+                    }
+                    Ok(ClientMessage::View { channel_id }) => {
+                        if let Some(channel_id) = channel_id {
+                            viewer.notified.remove(&channel_id);
+                        }
+                        viewer.channel = channel_id;
                     }
                     Ok(ClientMessage::Visibility { visible: now }) => {
                         state.hub.set_visible(user_id, visible, now);

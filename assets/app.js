@@ -261,6 +261,8 @@
       opened = true;
       if (attempt > 0) location.reload();
       sendVisibility();
+      // Only the channel on screen needs messages in full.
+      socket.send(JSON.stringify({ type: "view", channel_id: app?.dataset.channel ? Number(app.dataset.channel) : null }));
       // Reminders and scheduled messages read times in this zone.
       const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (zone) socket.send(JSON.stringify({ type: "timezone", name: zone }));

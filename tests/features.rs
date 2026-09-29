@@ -202,7 +202,7 @@ async fn custom_emoji_and_reactions() {
     assert!(page.contains(r#"alt=":porch:""#));
     let message = last_message_id(&page);
 
-    let mut admin_live = admin.live().await;
+    let mut admin_live = admin.live_in(general).await;
     let reactions = format!("/c/{general}/m/{message}/reactions");
     let response = bea.post(&reactions, &[("emoji", "+1")]).await;
     assert_eq!(location(&response), format!("/c/{general}#m{message}"));

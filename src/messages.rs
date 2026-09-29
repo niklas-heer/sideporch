@@ -49,7 +49,7 @@ struct Posted {
     message: Message,
     reply_count: Option<i64>,
     audience: Option<Vec<i64>>,
-    ctx: markup::Context,
+    ctx: std::sync::Arc<markup::Context>,
     recipients: store::Recipients,
     automation_event: Option<MessageEvent>,
 }
