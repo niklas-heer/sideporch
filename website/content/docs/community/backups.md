@@ -37,7 +37,7 @@ Stop Sideporch and unpack an archive into an empty data directory:
 
 ```sh
 sudo systemctl stop sideporch
-sideporch restore sideporch-20260928-101500.tar.gz --data /var/lib/sideporch
+sudo sideporch restore sideporch-20260928-101500.tar.gz --data /var/lib/sideporch
 sudo chown -R sideporch:sideporch /var/lib/sideporch
 sudo systemctl start sideporch
 ```

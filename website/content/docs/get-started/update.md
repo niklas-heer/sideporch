@@ -28,8 +28,10 @@ Before it changes the database, Sideporch keeps a copy of it in `upgrade-backups
 Stop Sideporch, restore the copy, and start the version you ran before:
 
 ```sh
-sideporch restore /var/lib/sideporch/upgrade-backups/sideporch-schema17-20261001-080000.db \
+sudo systemctl stop sideporch
+sudo sideporch restore /var/lib/sideporch/upgrade-backups/sideporch-schema17-20261001-080000.db \
   --data /var/lib/sideporch --force
+sudo chown -R sideporch:sideporch /var/lib/sideporch
 ```
 
 An older version refuses to start on a database a newer one has already upgraded, and names the version that did, rather than guessing at tables it doesn't know.

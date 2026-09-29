@@ -17,7 +17,7 @@ Sideporch works for a team behind invite links, and just as well for a community
 With the last two, you can also set:
 
 - **Rules** people agree to when signing up, written in Markdown.
-- How many messages a minute new members (level 0) may send; 6 by default.
+- How many messages a minute new members at level 0 may send; 6 by default. With **Ask to join**, people a moderator lets in start at level 1, so this matters most when anyone can sign up.
 
 Sign-ups are limited to 30 an hour across the server, so a script can't create accounts by the thousand, and a hidden trap field catches simple bots.
 
@@ -25,7 +25,7 @@ Sign-ups are limited to 30 an hour across the server, so a script can't create a
 
 Trust levels keep newcomers from doing harm while they're new, without making everyone ask an admin for everything.
 
-People who sign up on their own start at level **0**; people who join with an invite at level **1**. They move up by themselves as they stay and take part:
+People who sign up on their own start at level **0**; people who join with an invite, or whom a moderator lets in, at level **1**. They move up by themselves as they stay and take part:
 
 | Level | Reached after | Days visited | Messages sent |
 | --- | --- | --- | --- |

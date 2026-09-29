@@ -10,7 +10,7 @@ Everyone manages how they sign in under **Sign-in and security** in their accoun
 
 - **Passkeys**: sign in with a fingerprint, face or device PIN, from the sign-in form's autofill or its passkey button. They can't be phished or guessed, and they sync between your devices.
 - **Authenticator apps** (1Password, Google Authenticator, Aegis…) ask for a six-digit code after the password. Setting one up gives you ten single-use **recovery codes**, for when you lose your phone.
-- **Email**: with an [SMTP server set up](#email), people confirm an address and can sign in with a link, or reset a forgotten password themselves. Links work once, for 15 minutes.
+- **Email**: with an [SMTP server set up](#email), people confirm an address and can sign in with a link, or reset a forgotten password themselves. Sign-in and reset links work once, for 15 minutes; links that confirm an address work for 24 hours.
 
 {% <note> %}
 Passkeys need Sideporch opened by a name (like `chat.example.com` over HTTPS, or `localhost`), not by an IP address: browsers only use them there.

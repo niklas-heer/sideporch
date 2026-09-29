@@ -40,7 +40,7 @@ Check `token` against the one shown in the channel's settings to know the reques
 
 ## Answer back
 
-If the service answers with JSON that has `text`, Sideporch posts it in the channel as the webhook. Add `"response_type": "comment"` to post it in the message's thread instead:
+If the service answers with JSON that has `text`, Sideporch posts it in the channel as the webhook, or in the thread when the message was a reply in one. Add `"response_type": "comment"` to answer in the message's thread even when it wasn't. `username` and `icon_url` (or `icon_emoji`) change who the answer appears to be from.
 
 ```json
 { "text": "Deploying **api**…", "response_type": "comment" }
