@@ -84,7 +84,7 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context, standing: &St
                         (next_level(*next, needs))
                     }
                     @if let Some(until) = standing.timed_out_until {
-                        p class="mt-2 rounded-lg bg-screen px-3 py-2 text-sm dark:bg-night-2" { "Timed out until " (super::timestamp(until)) "." }
+                        p class="mt-2 rounded-lg bg-screen px-3 py-2 text-sm dark:bg-night-2" { "Timed out until " (super::datetime(until)) "." }
                     }
                     (status(user, ctx))
                     div class="mt-4 flex flex-wrap gap-2" {
@@ -193,7 +193,8 @@ fn next_level(level: u8, needs: &crate::community::Requirement) -> Markup {
 
 /// What a hover card shows besides the profile.
 pub struct CardData {
-    pub level: u8,
+    /// Shown to the person and to moderators, as on profiles.
+    pub level: Option<u8>,
     pub local_time: String,
     pub roles: Vec<crate::community::Role>,
     pub timed_out_until: Option<i64>,
@@ -232,13 +233,13 @@ pub fn card(user: &User, ctx: &Context, data: &CardData) -> Markup {
             }
             (status(user, ctx))
             dl class="mt-3 space-y-0.5 text-sm text-muted dark:text-haint" {
-                @if user.server.is_none() {
-                    div { dt class="inline" { "Level " } dd class="inline" { (data.level) " · " (crate::community::level_name(data.level)) } }
+                @if let (None, Some(level)) = (&user.server, data.level) {
+                    div { dt class="inline" { "Level " } dd class="inline" { (level) " · " (crate::community::level_name(level)) } }
                 }
                 div { dt class="inline" { "Local time " } dd class="inline" { (data.local_time) } }
                 div { dt class="inline" { "Joined " } dd class="inline" { (timestamp_date(user.created_at)) } }
                 @if let Some(until) = data.timed_out_until {
-                    div { dd { "Timed out until " (super::timestamp(until)) } }
+                    div { dd { "Timed out until " (super::datetime(until)) } }
                 }
                 @if user.deactivated { div { dd { "Deactivated" } } }
             }
@@ -264,7 +265,7 @@ fn ban_controls(user: &User, standing: &Standing) -> Markup {
                         @for seen in &standing.addresses {
                             li {
                                 code class="font-mono" { (seen.ip) }
-                                span class="text-muted dark:text-haint" { ", first " (super::timestamp(seen.first_seen)) ", last " (super::timestamp(seen.last_seen)) }
+                                span class="text-muted dark:text-haint" { ", first " (super::datetime(seen.first_seen)) ", last " (super::datetime(seen.last_seen)) }
                                 @if !seen.shared_with.is_empty() {
                                     span class="text-muted dark:text-haint" { ", also used by " }
                                     @for (index, (id, name)) in seen.shared_with.iter().enumerate() {

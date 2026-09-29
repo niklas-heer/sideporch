@@ -1351,6 +1351,16 @@ pub fn timestamp(created_at: i64) -> Markup {
     }
 }
 
+/// A moment with its date, shown in the reader's time zone by app.js.
+pub fn datetime(at: i64) -> Markup {
+    let when = jiff::Timestamp::from_millisecond(at).unwrap_or_default();
+    html! {
+        time datetime=(when.to_string()) data-format="datetime" class="text-xs text-muted dark:text-haint" {
+            (when.strftime("%Y-%m-%d %H:%M UTC").to_string())
+        }
+    }
+}
+
 /// A person as a message author, for their avatar.
 pub fn user_author(user: &User) -> Author {
     Author::User {

@@ -3,7 +3,8 @@
 use maud::{Markup, PreEscaped, html};
 
 use super::{
-    ASSET_VERSION, Shell, copy_row, form_error, panel_page, section, timestamp, wide_panel_page,
+    ASSET_VERSION, Shell, copy_row, datetime, form_error, panel_page, section, timestamp,
+    wide_panel_page,
 };
 use std::collections::HashMap;
 
@@ -529,15 +530,6 @@ fn inline_code(text: &str) -> Markup {
             } @else {
                 (part)
             }
-        }
-    }
-}
-
-fn datetime(at: i64) -> Markup {
-    let when = jiff::Timestamp::from_millisecond(at).unwrap_or_default();
-    html! {
-        time datetime=(when.to_string()) data-format="datetime" class="text-xs text-muted dark:text-haint" {
-            (when.strftime("%Y-%m-%d %H:%M UTC").to_string())
         }
     }
 }

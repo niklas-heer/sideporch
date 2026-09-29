@@ -178,11 +178,12 @@ async fn profile(
 
 /// The hover card for someone, as a piece of a page.
 async fn card(
-    _user: CurrentUser,
+    user: CurrentUser,
     State(state): State<AppState>,
     Path(user_id): Path<i64>,
 ) -> AppResult<Markup> {
     let now = crate::now_ms();
+    let sees_level = user.id == user_id || user.may(crate::community::Permission::Moderate);
     let (person, ctx, data) = state
         .db
         .call(move |conn| {
@@ -194,9 +195,11 @@ async fn card(
                 .collect();
             let zone = crate::later::zone(&store::user_timezone(conn, user_id)?);
             let data = views::profile::CardData {
-                level: crate::community::progress(conn, user_id, now)?
-                    .unwrap_or_default()
-                    .level,
+                level: if sees_level {
+                    crate::community::progress(conn, user_id, now)?.map(|progress| progress.level)
+                } else {
+                    None
+                },
                 local_time: jiff::Timestamp::now()
                     .to_zoned(zone)
                     .strftime("%H:%M")

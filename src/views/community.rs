@@ -411,7 +411,7 @@ pub fn moderation_page(
                 } @else {
                     ul class="space-y-1" {
                         @for (id, name, until) in timed_out {
-                            li { a href={ "/people/" (id) } class="font-semibold underline underline-offset-2" { (name) } " until " (timestamp(*until)) }
+                            li { a href={ "/people/" (id) } class="font-semibold underline underline-offset-2" { (name) } " until " (super::datetime(*until)) }
                         }
                     }
                 }
@@ -455,8 +455,8 @@ fn bans_section(bans: &[crate::access::Ban]) -> Markup {
                                 @if !ban.reason.is_empty() { span { (ban.reason) } }
                                 span class="text-muted dark:text-haint" {
                                     @if let Some(by) = &ban.created_by { "by " (by) ", " }
-                                    (timestamp(ban.created_at))
-                                    @if let Some(end) = ban.expires_at { ", until " (timestamp(end)) } @else { ", until lifted" }
+                                    (super::datetime(ban.created_at))
+                                    @if let Some(end) = ban.expires_at { ", until " (super::datetime(end)) } @else { ", until lifted" }
                                 }
                                 form method="post" action={ "/moderation/bans/" (ban.id) "/lift" } class="ml-auto" {
                                     button type="submit" class="btn-quiet px-3 py-1 text-sm" { "Lift" }
