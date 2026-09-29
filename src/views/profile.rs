@@ -86,7 +86,7 @@ pub fn profile_page(shell: &Shell<'_>, user: &User, ctx: &Context, standing: &St
                         }
                         @if own {
                             a href="/settings/profile" class="btn-quiet" { "Edit profile" }
-                            a href="/settings/account" class="btn-quiet" { (icon(icons::KEY, "h-4 w-4")) "Password" }
+                            a href="/settings/security" class="btn-quiet" { (icon(icons::KEY, "h-4 w-4")) "Sign-in and security" }
                         }
                     }
                     @if user.deactivated {
@@ -192,6 +192,9 @@ fn admin_controls(user: &User, standing: &Standing) -> Markup {
                 } @else {
                     form method="post" action={ (base) "/reset-link" } {
                         button type="submit" class="btn-quiet" { (icon(icons::KEY, "h-4 w-4")) "Create password reset link" }
+                    }
+                    form method="post" action={ (base) "/reset-security" } {
+                        button type="submit" class="btn-quiet" title="Removes their passkeys, authenticator app and recovery codes, for when they lost their devices" { "Reset passkeys and app" }
                     }
                     form method="post" action={ (base) "/admin" } {
                         input type="hidden" name="admin" value=(if user.is_admin { "false" } else { "true" });

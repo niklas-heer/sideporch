@@ -566,6 +566,10 @@ pub fn set_password(conn: &Connection, user_id: i64, hash: &str) -> AppResult<()
         params![hash, user_id],
     )?;
     conn.execute("DELETE FROM password_resets WHERE user_id = ?1", [user_id])?;
+    conn.execute(
+        "DELETE FROM login_links WHERE user_id = ?1 AND purpose = 'reset'",
+        [user_id],
+    )?;
     Ok(())
 }
 
@@ -604,8 +608,11 @@ pub fn password_reset_user(
 ) -> AppResult<Option<User>> {
     let user_id: Option<i64> = conn
         .query_row(
-            "SELECT r.user_id FROM password_resets r JOIN users u ON u.id = r.user_id
-             WHERE r.token_hash = ?1 AND r.expires_at > ?2 AND u.deactivated_at IS NULL",
+            "SELECT u.id FROM users u WHERE u.deactivated_at IS NULL AND u.id IN (
+                 SELECT r.user_id FROM password_resets r WHERE r.token_hash = ?1 AND r.expires_at > ?2
+                 UNION ALL
+                 SELECT l.user_id FROM login_links l
+                 WHERE l.token_hash = ?1 AND l.purpose = 'reset' AND l.expires_at > ?2)",
             params![token_hash, now],
             |row| row.get(0),
         )

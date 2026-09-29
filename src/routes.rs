@@ -35,6 +35,7 @@ mod gifs;
 mod later;
 mod message;
 mod profile;
+mod security;
 mod settings;
 
 pub use gifs::Posted as GifPosted;
@@ -107,6 +108,7 @@ pub fn router(state: AppState) -> Router {
         .merge(later::router())
         .merge(backups::router())
         .merge(community::router())
+        .merge(security::router())
         .merge(assets::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -220,8 +222,8 @@ struct LoginForm {
 }
 
 #[derive(Deserialize, Default)]
-struct NextQuery {
-    next: Option<String>,
+pub struct NextQuery {
+    pub next: Option<String>,
 }
 
 async fn login_form(
@@ -255,6 +257,29 @@ async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -> Ap
             .then_some(id),
         None => None,
     };
+    if let Some(user_id) = verified {
+        // With passkeys required, a password only works until someone has one.
+        let passkey_only = state
+            .db
+            .call(move |conn| {
+                Ok(crate::security::Policy::load(conn)?.require
+                    == crate::security::Requirement::Passkeys
+                    && crate::security::factors(conn, user_id)?.passkeys > 0)
+            })
+            .await?;
+        if passkey_only {
+            return Ok((
+                StatusCode::UNAUTHORIZED,
+                views::login_page(
+                    Some("This Sideporch signs in with passkeys. Use the passkey button below."),
+                    &username,
+                    next.as_deref(),
+                    registration(&state).await?,
+                ),
+            )
+                .into_response());
+        }
+    }
     let Some(user_id) = verified else {
         let waiting_name = username.clone();
         let waiting = state
@@ -277,16 +302,22 @@ async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -> Ap
         )
             .into_response());
     };
-    let cookie = auth::start_session(&state, user_id).await?;
-    redirect_with_cookie(next.as_deref().unwrap_or("/"), &cookie)
+    security::after_first_step(&state, user_id, next.as_deref()).await
 }
 
-async fn registration(state: &AppState) -> AppResult<crate::community::Registration> {
-    Ok(state
+/// What the login page offers.
+async fn registration(state: &AppState) -> AppResult<views::LoginOptions> {
+    state
         .db
-        .call(|conn| crate::community::Joining::load(conn))
-        .await?
-        .registration)
+        .call(|conn| {
+            let mail = crate::mail::configured(conn)?;
+            Ok(views::LoginOptions {
+                registration: crate::community::Joining::load(conn)?.registration,
+                email_links: mail && crate::security::Policy::load(conn)?.email_links,
+                email_resets: mail,
+            })
+        })
+        .await
 }
 
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {

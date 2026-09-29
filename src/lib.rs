@@ -18,11 +18,13 @@ mod gifs;
 mod icons;
 mod import;
 mod later;
+mod mail;
 mod markdown;
 mod markup;
 mod mcp;
 mod messages;
 mod outgoing;
+mod passkeys;
 mod polls;
 mod previews;
 mod push;
@@ -30,9 +32,11 @@ mod realtime;
 mod routes;
 mod search;
 mod secrets;
+mod security;
 mod store;
 mod system;
 mod themes;
+mod totp;
 mod views;
 mod webhook;
 
@@ -91,6 +95,8 @@ pub(crate) struct AppState {
     setup: Arc<Mutex<Setup>>,
     /// Where the setup link is kept for `sideporch setup-link`.
     setup_file: PathBuf,
+    /// Passkey challenges handed out and not answered yet.
+    ceremonies: passkeys::Ceremonies,
 }
 
 /// Whether and how the first account can still be created.
@@ -200,6 +206,7 @@ impl Sideporch {
             public_url,
             setup: Arc::new(Mutex::new(setup)),
             setup_file: setup_link_file(&config.data_dir),
+            ceremonies: passkeys::Ceremonies::default(),
         };
         state.automations.serve(state.clone());
         later::start(state.clone());

@@ -488,6 +488,57 @@ CREATE TABLE reports (
 CREATE INDEX reports_open ON reports (resolved_at);
 ",
     ),
+    Migration::Sql(
+        r"
+-- Passkeys: a public key per device, in SPKI form, and its COSE algorithm.
+CREATE TABLE passkeys (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id BLOB NOT NULL UNIQUE,
+    public_key BLOB NOT NULL,
+    algorithm INTEGER NOT NULL,
+    sign_count INTEGER NOT NULL DEFAULT 0,
+    transports TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER
+);
+CREATE INDEX passkeys_by_user ON passkeys (user_id);
+ALTER TABLE users ADD COLUMN webauthn_handle BLOB;
+
+-- Authenticator apps: the secret, sealed with the secret key, and the
+-- last 30-second step used, so a code works once.
+ALTER TABLE users ADD COLUMN totp_secret TEXT;
+ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE recovery_codes (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash BLOB NOT NULL,
+    used_at INTEGER,
+    PRIMARY KEY (user_id, code_hash)
+);
+
+-- A confirmed address, for sign-in links and password resets.
+ALTER TABLE users ADD COLUMN email TEXT;
+CREATE UNIQUE INDEX users_by_email ON users (email) WHERE email IS NOT NULL;
+CREATE TABLE login_links (
+    token_hash BLOB PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+-- Between the password and the second step of signing in.
+CREATE TABLE pending_logins (
+    token_hash BLOB PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0
+);
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

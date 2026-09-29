@@ -11,7 +11,7 @@ use axum::{
 use maud::Markup;
 use serde::Deserialize;
 
-use super::{base_url, redirect_with_cookie, shell_data};
+use super::{base_url, shell_data};
 use crate::{
     AppState,
     auth::{self, CurrentUser},
@@ -110,8 +110,7 @@ async fn reset_user(state: &AppState, token: &str) -> AppResult<store::User> {
         .await?
         .ok_or_else(|| {
             AppError::Gone(
-                "This reset link has expired or was already used. Ask an admin for a new one."
-                    .to_owned(),
+                "This reset link has expired or was already used. Ask for a new one.".to_owned(),
             )
         })
 }
@@ -150,8 +149,8 @@ async fn reset(
             store::end_sessions(conn, user_id, None)
         })
         .await?;
-    let cookie = auth::start_session(&state, user_id).await?;
-    redirect_with_cookie("/", &cookie)
+    // A reset replaces the password, not a passkey or authenticator app.
+    super::security::after_first_step(&state, user_id, None).await
 }
 
 /// Loads someone an admin manages. Admins can't manage themselves here, so

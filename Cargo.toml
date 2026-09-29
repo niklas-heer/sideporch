@@ -24,10 +24,13 @@ http-body-util = "0.1.5"
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["ring", "webpki-roots", "http1", "http2", "tls12"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "http2", "tokio"] }
 jiff = { version = "0.2.37", features = ["tzdb-bundle-always"] }
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1-rustls", "ring", "webpki-roots"] }
 maud = { version = "0.27.0", features = ["axum"] }
 mlua = { version = "0.12.1", features = ["lua54", "vendored", "send", "serde"] }
 phosphor-svgs = "0.5.0"
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
+ring = { version = "0.17.14", default-features = false, features = ["alloc"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 selene-lib = { version = "0.31.0", default-features = false, features = ["lua54"] }

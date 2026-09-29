@@ -112,6 +112,15 @@ Sideporch works for a team behind invite links, and just as well for a community
 - **Permissions** for uploading files, posting links, notifying everyone with `@channel`, starting direct messages, creating channels and polls, adding emoji, inviting people and moderating. Each asks for a trust level, or is left to admins and **roles** you create, such as "Moderators" or "Designers". To turn uploads off, leave them to admins.
 - **Moderation**: anyone can report a message; moderators delete it or dismiss the report, let people in who asked to join, and time people out, so they can read but not post. New members can only send a few messages a minute.
 
+### Sign in safely
+
+- **Passkeys**: sign in with a fingerprint, face or device PIN, from the login form's autofill or its passkey button. They can't be phished or guessed.
+- **Authenticator apps** (1Password, Google Authenticator, Aegis…) ask for a six-digit code after the password, with ten single-use recovery codes.
+- **Email** through your SMTP server: sign-in links, "forgot your password?", and confirming addresses. Links work once, for 15 minutes.
+- Admins decide what signing in takes: a password, a second step for admins or for everyone, or passkeys for everyone. People who don't meet it yet are walked through adding one at their next sign-in. An admin can reset someone's passkeys and app after a lost phone.
+
+Passkeys need Sideporch opened by a name (like `chat.example.com`, over HTTPS, or `localhost`), not an IP address; browsers only use them there.
+
 ### For admins
 
 - **Backups** from the browser, on a schedule, and `sideporch restore`. See [Back up and move](#back-up-and-move).

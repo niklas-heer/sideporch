@@ -1426,6 +1426,115 @@
     input.addEventListener("blur", () => setTimeout(close, 150));
   }
 
+  // Passkeys. The server speaks base64url; WebAuthn speaks ArrayBuffers.
+  const fromBase64 = (text) => {
+    const padded = text.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (text.length % 4)) % 4);
+    return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
+  };
+  const toBase64 = (buffer) =>
+    btoa(String.fromCharCode(...new Uint8Array(buffer)))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+  const postJson = (url, body) =>
+    fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-sideporch-fetch": "1" }, body: JSON.stringify(body) });
+  // Error pages carry their message in the first paragraph.
+  const errorText = async (response) => {
+    const page = await response.text();
+    return new DOMParser().parseFromString(page, "text/html").querySelector("main p, p")?.textContent || "That didn't work. Try again.";
+  };
+  const showPasskeyError = (text) => {
+    const error = document.querySelector("[data-passkey-error]");
+    if (!error) return toast(text);
+    error.textContent = text;
+    error.classList.remove("hidden");
+  };
+  // Cancelling the browser's prompt isn't an error worth showing.
+  const passkeyFailed = (error) => {
+    if (error?.name === "AbortError" || error?.name === "NotAllowedError") return;
+    showPasskeyError(error?.message || "The passkey didn't work. Try again.");
+  };
+
+  async function addPasskey() {
+    try {
+      const started = await postJson("/webauthn/register/options", {});
+      if (!started.ok) throw new Error(await errorText(started));
+      const options = await started.json();
+      const publicKey = options.publicKey;
+      publicKey.challenge = fromBase64(publicKey.challenge);
+      publicKey.user.id = fromBase64(publicKey.user.id);
+      publicKey.excludeCredentials = publicKey.excludeCredentials.map((known) => ({ ...known, id: fromBase64(known.id) }));
+      const credential = await navigator.credentials.create({ publicKey });
+      const response = credential.response;
+      const name = prompt("Name this passkey, so you recognize it later (like “Work laptop”):", "") ?? "";
+      const result = await postJson("/webauthn/register", {
+        ceremony: options.ceremony,
+        id: toBase64(credential.rawId),
+        clientDataJSON: toBase64(response.clientDataJSON),
+        authenticatorData: toBase64(response.getAuthenticatorData()),
+        publicKey: toBase64(response.getPublicKey()),
+        publicKeyAlgorithm: response.getPublicKeyAlgorithm(),
+        transports: response.getTransports?.() ?? [],
+        name,
+      });
+      if (!result.ok) throw new Error(await errorText(result));
+      location.href = (await result.json()).redirect;
+    } catch (error) {
+      passkeyFailed(error);
+    }
+  }
+
+  let passkeyWaiting = null;
+  async function signInWithPasskey(next, mediation) {
+    passkeyWaiting?.abort();
+    const controller = new AbortController();
+    passkeyWaiting = controller;
+    try {
+      const started = await postJson("/webauthn/login/options", {});
+      if (!started.ok) throw new Error(await errorText(started));
+      const options = await started.json();
+      const publicKey = options.publicKey;
+      publicKey.challenge = fromBase64(publicKey.challenge);
+      publicKey.allowCredentials = publicKey.allowCredentials.map((known) => ({ ...known, id: fromBase64(known.id) }));
+      const credential = await navigator.credentials.get({ publicKey, mediation, signal: controller.signal });
+      const response = credential.response;
+      const result = await postJson("/webauthn/login", {
+        ceremony: options.ceremony,
+        id: toBase64(credential.rawId),
+        clientDataJSON: toBase64(response.clientDataJSON),
+        authenticatorData: toBase64(response.authenticatorData),
+        signature: toBase64(response.signature),
+        next: next || "",
+      });
+      if (!result.ok) throw new Error(await errorText(result));
+      location.href = (await result.json()).redirect;
+    } catch (error) {
+      if (mediation !== "conditional") passkeyFailed(error);
+    }
+  }
+
+  function setupPasskeys() {
+    const supported = Boolean(window.PublicKeyCredential && navigator.credentials && isSecureContext);
+    for (const note of document.querySelectorAll("[data-passkey-unsupported]")) note.hidden = supported;
+    if (!supported) return;
+    for (const area of document.querySelectorAll("[data-passkey-area]")) area.hidden = false;
+    for (const button of document.querySelectorAll("[data-passkey-add]")) {
+      button.hidden = false;
+      button.addEventListener("click", addPasskey);
+    }
+    const buttons = document.querySelectorAll("[data-passkey-login]");
+    for (const button of buttons) {
+      button.addEventListener("click", () => signInWithPasskey(button.dataset.next));
+    }
+    // On the login form, offer passkeys in the username field's autofill.
+    const username = document.querySelector('input[autocomplete~="webauthn"]');
+    if (username && PublicKeyCredential.isConditionalMediationAvailable) {
+      PublicKeyCredential.isConditionalMediationAvailable().then((available) => {
+        if (available) signInWithPasskey(buttons[0]?.dataset.next, "conditional");
+      });
+    }
+  }
+
   for (const link of document.querySelectorAll("a[data-nav-link]")) {
     if (link.pathname === location.pathname) link.setAttribute("aria-current", "page");
   }
@@ -1433,6 +1542,7 @@
   markOwnReactions(document);
   drawDiagrams(document);
   setupCopyButtons();
+  setupPasskeys();
   setupQuickSearch();
   setupReactions();
   setupPush().catch((error) => console.warn("sideporch: notifications unavailable", error));

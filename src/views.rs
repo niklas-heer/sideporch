@@ -28,6 +28,7 @@ pub mod later;
 pub mod messages;
 pub mod profile;
 pub mod search;
+pub mod security;
 pub mod settings;
 
 /// How to render messages: this Sideporch's custom emoji and usernames, and
@@ -168,27 +169,59 @@ pub fn text_field(
     }
 }
 
+/// What the login page offers besides a password.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LoginOptions {
+    pub registration: crate::community::Registration,
+    /// Sign-in links by email are on.
+    pub email_links: bool,
+    /// Email works, so people can reset their own password.
+    pub email_resets: bool,
+}
+
 pub fn login_page(
     error: Option<&str>,
     username: &str,
     next: Option<&str>,
-    registration: crate::community::Registration,
+    options: LoginOptions,
 ) -> Markup {
     auth_page(
         "Sign in",
         &html! {
             h1 class="mb-5 text-xl font-bold" { "Sign in" }
             (form_error(error))
+            // app.js shows this where the browser supports passkeys.
+            div data-passkey-area hidden {
+                button type="button" data-passkey-login data-next=[next] class="btn w-full" {
+                    (icon(icons::FINGERPRINT, "h-5 w-5")) "Sign in with a passkey"
+                }
+                p data-passkey-error role="alert" class="mt-2 hidden text-sm text-red-700 dark:text-red-300" {}
+                div class="my-5 flex items-center gap-3 text-sm text-muted dark:text-haint" {
+                    span class="h-px flex-1 bg-line dark:bg-night-line" {}
+                    "or with your password"
+                    span class="h-px flex-1 bg-line dark:bg-night-line" {}
+                }
+            }
             form method="post" action="/login" {
                 @if let Some(next) = next {
                     input type="hidden" name="next" value=(next);
                 }
-                (text_field("Username", "username", "text", username, "username", None))
+                (text_field("Username", "username", "text", username, "username webauthn", None))
                 (text_field("Password", "password", "password", "", "current-password", None))
                 button type="submit" class="btn mt-2 w-full" { "Sign in" }
             }
+            @if options.email_links || options.email_resets {
+                p class="mt-4 flex flex-wrap justify-between gap-2 text-sm" {
+                    @if options.email_links {
+                        a href="/login/email" class="underline underline-offset-2" { "Email me a sign-in link" }
+                    }
+                    @if options.email_resets {
+                        a href="/login/email?purpose=reset" class="underline underline-offset-2" { "Forgot your password?" }
+                    }
+                }
+            }
             p class="mt-5 text-sm text-muted dark:text-haint" {
-                @match registration {
+                @match options.registration {
                     crate::community::Registration::Invite => { "New here? Ask someone on this porch for an invite link." }
                     crate::community::Registration::Open => { "New here? " a href="/signup" class="font-semibold underline underline-offset-2" { "Create an account" } }
                     crate::community::Registration::Approval => { "New here? " a href="/signup" class="font-semibold underline underline-offset-2" { "Ask to join" } }
@@ -418,7 +451,7 @@ fn account_menu(shell: &Shell<'_>) -> Markup {
                 (menu_link(&format!("/people/{}", user.id), icons::USER_CIRCLE, "Your profile"))
                 (menu_link("/settings/profile", icons::PENCIL_SIMPLE, "Edit profile"))
                 (menu_link("/settings/appearance", icons::PALETTE, "Appearance"))
-                (menu_link("/settings/account", icons::KEY, "Password"))
+                (menu_link("/settings/security", icons::KEY, "Sign-in and security"))
                 (menu_link("/emoji", icons::SMILEY, "Custom emoji"))
                 (menu_link("/gifs/library", icons::GIF, "GIF library"))
                 button type="button" data-push-toggle hidden aria-pressed="false"

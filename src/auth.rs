@@ -35,6 +35,11 @@ pub fn random_token() -> AppResult<String> {
         }))
 }
 
+/// Compares secrets without stopping at the first difference.
+pub fn same_bytes(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0_u8, |diff, (x, y)| diff | (x ^ y)) == 0
+}
+
 pub fn hash_token(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
@@ -124,6 +129,9 @@ pub struct CurrentUser {
     pub grants: crate::community::Grants,
     /// Until when a moderator timed them out, if they did.
     pub timed_out_until: Option<i64>,
+    /// The sign-in policy asks them to add a passkey or an authenticator
+    /// app first; every other page sends them there.
+    pub must_secure: bool,
 }
 
 impl CurrentUser {
@@ -174,6 +182,7 @@ pub async fn lookup_session(state: &AppState, token: String) -> AppResult<Option
                                 timed_out_until: row
                                     .get::<_, Option<i64>>(9)?
                                     .filter(|until| *until > now),
+                                must_secure: false,
                             },
                             row.get::<_, String>(8)?,
                         ))
@@ -193,6 +202,11 @@ pub async fn lookup_session(state: &AppState, token: String) -> AppResult<Option
             )?;
             user.grants =
                 crate::community::grants(conn, user.id, user.is_admin, user.trust_level)?;
+            let policy = crate::security::Policy::load(conn)?;
+            if policy.require != crate::security::Requirement::None {
+                user.must_secure =
+                    policy.needs_more(user.is_admin, crate::security::factors(conn, user.id)?);
+            }
             Ok(Some(user))
         })
         .await
@@ -216,6 +230,8 @@ pub async fn end_session(state: &AppState, token: String) -> AppResult<()> {
 /// sends people back to the page they wanted afterwards.
 pub enum AuthRejection {
     Login(Option<String>),
+    /// The sign-in policy wants more from them first.
+    Secure,
     Error(AppError),
 }
 
@@ -226,13 +242,14 @@ impl IntoResponse for AuthRejection {
                 Redirect::to(&format!("/login?next={}", encode_component(&next))).into_response()
             }
             Self::Login(None) => Redirect::to("/login").into_response(),
+            Self::Secure => Redirect::to("/settings/security").into_response(),
             Self::Error(error) => error.into_response(),
         }
     }
 }
 
 /// Percent-encodes a query parameter value.
-fn encode_component(value: &str) -> String {
+pub fn encode_component(value: &str) -> String {
     value
         .bytes()
         .map(|byte| {
@@ -265,10 +282,21 @@ impl FromRequestParts<AppState> for CurrentUser {
             .filter(|path| path != "/");
         let token =
             session_token(&parts.headers).ok_or_else(|| AuthRejection::Login(next.clone()))?;
-        lookup_session(state, token)
+        let user = lookup_session(state, token)
             .await
             .map_err(AuthRejection::Error)?
-            .ok_or(AuthRejection::Login(next))
+            .ok_or(AuthRejection::Login(next))?;
+        // Until they meet the sign-in policy, people only reach the pages
+        // that let them.
+        let path = parts.uri.path();
+        if user.must_secure
+            && !["/settings/security", "/logout", "/webauthn/"]
+                .iter()
+                .any(|allowed| path.starts_with(allowed))
+        {
+            return Err(AuthRejection::Secure);
+        }
+        Ok(user)
     }
 }
 
