@@ -18,6 +18,7 @@ The script:
 
 - picks the build for your system and processor,
 - downloads it from the [GitHub release](https://github.com/niklas-heer/sideporch/releases), and checks it against the release's `SHA256SUMS`,
+- when [minisign](https://jedisct1.github.io/minisign/) is installed, also checks that `SHA256SUMS` is signed with Sideporch's release key (releases from 0.5.0 on),
 - installs `sideporch` into `/usr/local/bin` when it may write there, otherwise into `~/.local/bin`.
 
 Then [run it on the server](@/docs/get-started/run-on-a-server.md), usually as a systemd service.
@@ -39,6 +40,17 @@ Environment variables change what it does:
 | `SIDEPORCH_DOWNLOAD_URL` | GitHub | Where the release files are, for a mirror. |
 
 For example, to install into `/opt/sideporch/bin`: `curl -fsSL https://raw.githubusercontent.com/niklas-heer/sideporch/main/install.sh | SIDEPORCH_INSTALL_DIR=/opt/sideporch/bin sh`.
+
+## Check a download yourself
+
+Every release from 0.5.0 on signs its `SHA256SUMS` with Sideporch's release key, [`sideporch.pub`](https://sideporch.app/sideporch.pub):
+
+```sh
+minisign -Vm SHA256SUMS -P RWRtn2cj2SpGnZDtKTNsgnc8mv68NfwlwFgA+hcmOD+cWH8dSQxGkuoo
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+The same key is built into Sideporch, which checks it before [updating itself](@/docs/get-started/update.md).
 
 ## Docker
 

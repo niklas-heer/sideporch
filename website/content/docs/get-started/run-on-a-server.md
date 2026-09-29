@@ -69,13 +69,15 @@ Every option can also be set with an environment variable.
 | `--data` | `SIDEPORCH_DATA` | `sideporch-data` | Directory for everything Sideporch keeps. Back it up to back up everything. |
 | `--public-url` | `SIDEPORCH_PUBLIC_URL` | taken from each request | The URL people use, such as `https://chat.example.com`, for invite and webhook links. An `https://` URL also makes cookies secure. |
 | `--require-setup-link` | `SIDEPORCH_REQUIRE_SETUP_LINK` | off | Require the one-time link from `sideporch setup-link` to create the first account. |
+| `--update-check` | `SIDEPORCH_UPDATE_CHECK` | `true` | Ask GitHub for new releases every six hours; `false` keeps Sideporch from contacting GitHub. See [Update](@/docs/get-started/update.md). New in 0.5.0. |
 | | `SIDEPORCH_SECRET_KEY` | `secret.key` in the data directory | A passphrase to encrypt [automation secrets](@/docs/integrations/automations.md#secrets) with, instead of the key file. |
 | | `RUST_LOG` | `info` | How much to log: `warn`, `info`, `debug`. |
 
-Two commands work on the data directory:
+Three commands besides running the server:
 
 - `sideporch setup-link` prints the link for creating the first account.
 - `sideporch restore ARCHIVE` unpacks a [backup](@/docs/community/backups.md). Stop the server first.
+- `sideporch update` installs the newest release in place of the program; see [Update](@/docs/get-started/update.md#sideporch-update). New in 0.5.0.
 
 ## Put it behind HTTPS
 
