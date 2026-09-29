@@ -1,10 +1,15 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
-  "ignoreCommand": "[ -n \"$VERCEL_GIT_PREVIOUS_SHA\" ] && git diff --quiet \"$VERCEL_GIT_PREVIOUS_SHA\" \"$VERCEL_GIT_COMMIT_SHA\" -- .",
+  "trailingSlash": true,
+  "framework": null,
+  "installCommand": "true",
+  "buildCommand": "sh ci-build.sh",
+  "outputDirectory": "public",
+  "ignoreCommand": "[ -n \"$VERCEL_GIT_PREVIOUS_SHA\" ] && git diff --quiet \"$VERCEL_GIT_PREVIOUS_SHA\" \"$VERCEL_GIT_COMMIT_SHA\" -- . ../mise.toml ../mise.lock",
   "headers": [
     {
-      "source": "/(fonts|img)/(.*)",
+      "source": "/(fonts|img|pagefind)/(.*)",
       "headers": [
         {
           "key": "Cache-Control",

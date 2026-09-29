@@ -1,0 +1,33 @@
+base_url = "https://sideporch.app"
+title = "Sideporch"
+description = "Your own chat for a team, a club or a community. One program, on a server you control."
+default_language = "en"
+compile_sass = false
+# Pagefind builds the search index (mise run site-build).
+build_search_index = false
+generate_feeds = false
+
+[markdown]
+smart_punctuation = true
+bottom_footnotes = true
+insert_anchor_links = "heading"
+
+[markdown.highlighting]
+error_on_missing_language = true
+# Colours follow the reader's light or dark preference through light-dark().
+style = "inline"
+light_theme = "github-light"
+dark_theme = "github-dark"
+
+[link_checker]
+internal_level = "error"
+external_level = "warn"
+skip_prefixes = [
+  "http://localhost",
+  "http://127.0.0.1",
+  "https://chat.example.com",
+]
+
+[extra]
+repo = "https://github.com/niklas-heer/sideporch"
+edit_base = "https://github.com/niklas-heer/sideporch/edit/main/website/content/"

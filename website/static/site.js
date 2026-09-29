@@ -1,4 +1,4 @@
-// The only moving part of the page: the conversation in the hero arrives
+// The landing page's conversation in the hero arrives
 // once, message by message. Without this script, or with reduced motion,
 // it is simply all there. Also copies the install command.
 "use strict";

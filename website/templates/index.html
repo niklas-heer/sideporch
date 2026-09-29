@@ -1,32 +1,7 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sideporch: your own chat for a team, a club or a community</title>
-  <meta name="description" content="Channels, threads, polls and search for a team, a club, a family or a public community, on a server you control. One program and one data directory; runs on the smallest VPS.">
-  <meta name="theme-color" content="#24403C">
-  <link rel="icon" href="/logo.svg" type="image/svg+xml">
-  <link rel="canonical" href="https://sideporch.app/">
-  <meta property="og:title" content="Sideporch">
-  <meta property="og:description" content="Your own chat for a team, a club or a community. One program, on a server you control.">
-  <meta property="og:url" content="https://sideporch.app/">
-  <meta property="og:image" content="https://sideporch.app/img/channel.webp">
-  <meta property="og:type" content="website">
-  <link rel="preload" href="/fonts/normal-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="/style.css">
-  <script src="/porch.js" defer></script>
-</head>
-<body>
+{% extends "base.html" %}
+{% block header %}
   <div class="dusk">
-    <nav class="bar" aria-label="Site">
-      <a class="brand" href="/"><img src="/logo.svg" alt="" width="36" height="36">Sideporch</a>
-      <ul>
-        <li><a href="#features">Features</a></li>
-        <li><a href="#install">Install</a></li>
-        <li><a href="https://github.com/niklas-heer/sideporch">GitHub</a></li>
-      </ul>
-    </nav>
+    {% include "partials/nav.html" %}
 
     <header class="hero">
       <div class="pitch">
@@ -89,7 +64,8 @@
       </figure>
     </header>
   </div>
-
+{% endblock %}
+{% block content %}
   <main>
     <section id="features" class="features" aria-labelledby="features-title">
       <h2 id="features-title">Everything people expect from team chat, and nothing to rent</h2>
@@ -195,10 +171,4 @@
       <p class="more">The <a href="https://github.com/niklas-heer/sideporch#install">README</a> covers running it for real: HTTPS, backups, updates and moving from Slack. Sideporch is young; expect rough edges before 1.0, and read the <a href="https://github.com/niklas-heer/sideporch/releases">release notes</a> for what changed.</p>
     </section>
   </main>
-
-  <footer>
-    <img src="/logo.svg" alt="" width="28" height="28">
-    <p>Sideporch is free software under the MIT license. <a href="https://github.com/niklas-heer/sideporch">Source on GitHub</a>, <a href="https://github.com/niklas-heer/sideporch/releases">releases</a>, <a href="https://github.com/niklas-heer/sideporch/issues">issues</a>.</p>
-  </footer>
-</body>
-</html>
+{% endblock %}

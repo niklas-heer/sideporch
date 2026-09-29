@@ -19,6 +19,8 @@ type SideporchCi {
     "!scripts",
     "!README.md",
     "!LICENSE",
+    "!website",
+    "website/public",
   ])
 
   """
@@ -44,10 +46,23 @@ type SideporchCi {
   }
 
   """
-  Run formatting, strict Clippy, unit and end-to-end tests on Linux.
+  Run formatting, strict Clippy, unit and end-to-end tests on Linux, and
+  build the website with its links checked.
   """
   pub ci: String! {
-    toolchain.withExec(["mise", "run", "check"]).stdout
+    # Mounting the built site makes the checks wait for it to build.
+    toolchain.withDirectory("/site", site).withExec(["mise", "run", "check"]).stdout
+  }
+
+  """
+  Build the website (sideporch.app) with the tools pinned in mise.lock, as
+  Vercel does, after checking its internal links.
+  """
+  pub site: Directory! {
+    toolchain
+      .withEnvVariable("CHECK", "1")
+      .withExec(["sh", "website/ci-build.sh"])
+      .directory("/src/website/public")
   }
 
   """

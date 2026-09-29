@@ -9,6 +9,11 @@ zig = "0.16.0"
 dagger = "0.21.9"
 # Release notes from conventional commits; see cliff.toml.
 "aqua:orhun/git-cliff" = "2.14.2"
+# The website (website/): a static site generator and its search index.
+# Linux x64 uses Zola's static musl build: Vercel builds on Amazon Linux
+# 2023, whose glibc (2.34) is older than the gnu build needs (2.35).
+"github:getzola/zola" = { version = "0.23.6", platforms = { linux-x64 = { asset_pattern = "zola-v0.23.6-x86_64-unknown-linux-musl.tar.gz" } } }
+"github:CloudCannon/pagefind" = "1.5.2"
 
 [tasks.dev]
 description = "Run Sideporch locally with its data in ./data"
@@ -79,3 +84,18 @@ run = "sh scripts/package.sh"
 [tasks."nix-check"]
 description = "Build and test the package with Nix"
 run = "nix flake check --print-build-logs"
+
+[tasks.site]
+description = "Preview the website with live reload at http://127.0.0.1:1111"
+dir = "website"
+run = "zola serve"
+
+[tasks."site-build"]
+description = "Build the website into website/public, with its search index (SITE_URL=http://127.0.0.1:8765 to serve it elsewhere)"
+dir = "website"
+run = "sh build.sh"
+
+[tasks."site-check"]
+description = "Build the website and check every internal and external link"
+dir = "website"
+run = ["zola check", "mise run site-build"]

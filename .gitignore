@@ -15,3 +15,4 @@ result
 /tools/loadtest/target-linux/
 /tools/loadtest/accounts*.json
 /tools/loadtest/results/.samples
+/website/public/

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {%- if page is defined %}{% set doc = page %}{% elif section is defined %}{% set doc = section %}{% endif %}
+  {%- set doc_title = config.title %}{% set doc_description = config.description %}{% set doc_url = config.base_url %}
+  {%- if doc is defined %}{% set doc_title = doc.title %}{% set doc_url = doc.permalink %}{% if doc.description %}{% set doc_description = doc.description %}{% endif %}{% endif %}
+  <title>{% block title %}{{ doc_title }}{% endblock %}</title>
+  <meta name="description" content="{{ doc_description }}">
+  <meta name="theme-color" content="#24403C">
+  <link rel="icon" href="{{ get_url(path='logo.svg') }}" type="image/svg+xml">
+  <link rel="canonical" href="{{ doc_url | safe }}">
+  <meta property="og:title" content="{{ doc_title }}">
+  <meta property="og:description" content="{{ doc_description }}">
+  <meta property="og:url" content="{{ doc_url | safe }}">
+  <meta property="og:image" content="{{ get_url(path='img/channel.webp') }}">
+  <meta property="og:type" content="website">
+  <link rel="preload" href="{{ get_url(path='fonts/normal-latin.woff2') }}" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{{ get_url(path='style.css', cachebust=true) }}">
+  <script src="{{ get_url(path='site.js', cachebust=true) }}" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  {% block header %}
+  <header class="plain">
+    {% include "partials/nav.html" %}
+  </header>
+  {% endblock %}
+
+  {% block content %}{% endblock %}
+
+  <footer>
+    <img src="{{ get_url(path='logo.svg') }}" alt="" width="28" height="28">
+    <p>Sideporch is free software under the MIT license. <a href="{{ config.extra.repo }}">Source on GitHub</a>, <a href="{{ config.extra.repo }}/releases">releases</a>, <a href="{{ config.extra.repo }}/issues">issues</a>.</p>
+  </footer>
+</body>
+</html>

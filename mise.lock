@@ -52,6 +52,67 @@ checksum = "sha256:2ed6e998d820bfb4800ed5644e1b9586f03078b14243c7fdf3bdd9e0eb0d5
 url = "https://github.com/dagger/dagger/releases/download/v0.21.9/dagger_v0.21.9_darwin_amd64.tar.gz"
 url_api = "https://api.github.com/repos/dagger/dagger/releases/assets/530870097"
 
+[[tools."github:CloudCannon/pagefind"]]
+version = "1.5.2"
+backend = "github:CloudCannon/pagefind"
+specifiers = ["1.5.2"]
+
+[tools."github:CloudCannon/pagefind"."platforms.linux-arm64"]
+checksum = "sha256:f50ec608bcbf431cebd84e0efa3a5b041ee63df2ad81f138023e0cfd2f509424"
+url = "https://github.com/Pagefind/pagefind/releases/download/v1.5.2/pagefind-v1.5.2-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/Pagefind/pagefind/releases/assets/394716032"
+
+[tools."github:CloudCannon/pagefind"."platforms.linux-x64"]
+checksum = "sha256:afb824a9e7f64905a934900481cea5be679c03975e527329e0e5e6cc70f5feda"
+url = "https://github.com/Pagefind/pagefind/releases/download/v1.5.2/pagefind-v1.5.2-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/Pagefind/pagefind/releases/assets/394716026"
+
+[tools."github:CloudCannon/pagefind"."platforms.macos-arm64"]
+checksum = "sha256:7286f394a349bd37677d44a65a20078a02b1747da0b0814d83403bf86be17abe"
+url = "https://github.com/Pagefind/pagefind/releases/download/v1.5.2/pagefind-v1.5.2-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/Pagefind/pagefind/releases/assets/394716035"
+
+[tools."github:CloudCannon/pagefind"."platforms.macos-x64"]
+checksum = "sha256:26f51b4ba921897142338fb13b836420696e251fe197b1782ea7981de311156d"
+url = "https://github.com/Pagefind/pagefind/releases/download/v1.5.2/pagefind-v1.5.2-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/Pagefind/pagefind/releases/assets/394716033"
+
+[[tools."github:getzola/zola"]]
+version = "0.23.6"
+backend = "github:getzola/zola"
+specifiers = ["0.23.6"]
+
+[tools."github:getzola/zola"."platforms.linux-arm64"]
+checksum = "sha256:266448fffbf7c7004ca399d0e76dd699541771096d8a42aede98cebe2a029d02"
+url = "https://github.com/getzola/zola/releases/download/v0.23.6/zola-v0.23.6-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/getzola/zola/releases/assets/560029424"
+provenance = "github-attestations"
+
+[tools."github:getzola/zola"."platforms.macos-arm64"]
+checksum = "sha256:cbffbd29b3f59c3f52633507c8cb945a7a02d8b1399b43b235f5932912297aa3"
+url = "https://github.com/getzola/zola/releases/download/v0.23.6/zola-v0.23.6-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/getzola/zola/releases/assets/560029425"
+provenance = "github-attestations"
+
+[tools."github:getzola/zola"."platforms.macos-x64"]
+checksum = "sha256:79a4d0ab51a4d863c068e6e594c6fce36f0aa17429a414ea63066f5910d14460"
+url = "https://github.com/getzola/zola/releases/download/v0.23.6/zola-v0.23.6-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/getzola/zola/releases/assets/560029423"
+provenance = "github-attestations"
+
+[[tools."github:getzola/zola"]]
+version = "0.23.6"
+backend = "github:getzola/zola"
+
+[tools."github:getzola/zola".options]
+asset_pattern = "zola-v0.23.6-x86_64-unknown-linux-musl.tar.gz"
+
+[tools."github:getzola/zola"."platforms.linux-x64"]
+checksum = "sha256:7d77a4220a4f699cba2fc0e0c7859f780e887e269159ad4fab90e11ea16c906f"
+url = "https://github.com/getzola/zola/releases/download/v0.23.6/zola-v0.23.6-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/getzola/zola/releases/assets/560029418"
+provenance = "github-attestations"
+
 [[tools."github:rust-cross/cargo-zigbuild"]]
 version = "0.23.4"
 backend = "github:rust-cross/cargo-zigbuild"
