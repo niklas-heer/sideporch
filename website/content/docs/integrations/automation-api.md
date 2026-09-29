@@ -2,6 +2,9 @@
 title = "Automation API"
 description = "Every sideporch function automations can call, and the tables their handlers receive."
 weight = 4
+
+[extra]
+edit_path = "src/automations/api.rs"
 +++
 
 <!-- Generated from src/automations/api.rs. Change the API there, then run

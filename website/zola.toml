@@ -31,3 +31,5 @@ skip_prefixes = [
 [extra]
 repo = "https://github.com/niklas-heer/sideporch"
 edit_base = "https://github.com/niklas-heer/sideporch/edit/main/website/content/"
+# For pages made from other files (extra.edit_path in their front matter).
+edit_repo = "https://github.com/niklas-heer/sideporch/edit/main/"

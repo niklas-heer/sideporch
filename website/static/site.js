@@ -44,7 +44,11 @@
     button.className = "copy-code";
     button.textContent = "Copy";
     button.addEventListener("click", () => copy(button, (pre.querySelector("code") ?? pre).innerText.trimEnd()));
-    pre.append(button);
+    // Outside the scrolling block, so it stays in its corner.
+    const box = document.createElement("div");
+    box.className = "code";
+    pre.replaceWith(box);
+    box.append(pre, button);
   }
 
   // Wide tables scroll inside their own box.
@@ -87,11 +91,18 @@
     let pagefind;
     let run = 0;
     const load = async () => (pagefind ??= await import(search.dataset.pagefind));
+    const unavailable = () => {
+      // `zola serve` has no index; `mise run site-build` makes one.
+      const note = document.createElement("li");
+      note.className = "empty";
+      note.textContent = "Search isn't available here: the search index is made by a full build of the site.";
+      results.replaceChildren(note);
+    };
     const open = () => {
       if (!search.open) search.showModal();
       input.focus();
       input.select();
-      load();
+      load().catch(() => {});
     };
     for (const button of document.querySelectorAll("[data-search-open]")) {
       button.hidden = false;
@@ -137,7 +148,12 @@
         results.replaceChildren();
         return;
       }
-      await load();
+      try {
+        await load();
+      } catch {
+        if (mine === run) unavailable();
+        return;
+      }
       // Keys typed while the index loaded resume here out of order; only
       // the newest may search, or an older one would cancel it.
       if (mine !== run) return;
@@ -216,20 +232,25 @@
       finish();
       if (pushed) history.back();
     };
+    const open = (at) => {
+      opener = zoomable[at];
+      show(at);
+      steps.forEach((button) => (button.hidden = zoomable.length < 2));
+      viewer.showModal();
+      viewer.querySelector("[data-viewer-close]").focus();
+    };
+    // Back closes the viewer; Forward opens it again where it was.
     addEventListener("popstate", () => {
       if (viewer.open) finish();
+      else if (history.state?.viewer) open(history.state.index ?? 0);
     });
     zoomable.forEach((link, at) =>
       link.addEventListener("click", (event) => {
         // Keep opening in a new tab or window working.
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         event.preventDefault();
-        opener = link;
-        show(at);
-        steps.forEach((button) => (button.hidden = zoomable.length < 2));
-        viewer.showModal();
-        viewer.querySelector("[data-viewer-close]").focus();
-        history.pushState({ viewer: true }, "");
+        open(at);
+        history.pushState({ viewer: true, index: at }, "");
       }),
     );
     viewer.addEventListener("cancel", (event) => {

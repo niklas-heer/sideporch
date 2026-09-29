@@ -274,8 +274,14 @@ body.docs > footer { max-width: 84rem; }
   position: absolute; top: 0.5rem; right: 0.5rem; padding: 0.2rem 0.6rem; border: 1px solid var(--border); border-radius: 0.4rem;
   font: inherit; font-size: 0.8rem; font-weight: 700; color: var(--fg); background: var(--bg); cursor: pointer; opacity: 0;
 }
-.prose pre:hover .copy-code, .copy-code:focus-visible { opacity: 1; }
-@media (hover: none) { .copy-code { opacity: 1; } }
+.code { position: relative; }
+.code pre { margin: 0; }
+.code:hover .copy-code, .copy-code:focus-visible { opacity: 1; }
+/* Always shown on touch screens, above the code rather than over it. */
+@media (hover: none) {
+  .copy-code { opacity: 1; }
+  .code pre { padding-top: 2.6rem; }
+}
 .prose blockquote { margin-left: 0; margin-right: 0; padding-left: 1rem; border-left: 3px solid var(--border); color: var(--muted); }
 .prose hr { border: 0; border-top: 1px solid var(--border); margin: 2.5rem 0; }
 .prose table, .table-scroll table { border-collapse: collapse; font-size: 0.95rem; }

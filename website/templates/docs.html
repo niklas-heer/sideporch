@@ -13,7 +13,11 @@
       {{ page.content | safe }}
     </article>
     <footer class="page-foot">
+      {%- if page.extra.edit_path %}
+      <a class="edit" href="{{ config.extra.edit_repo }}{{ page.extra.edit_path }}">Edit this page on GitHub</a>
+      {%- else %}
       <a class="edit" href="{{ config.extra.edit_base }}{{ page.relative_path }}">Edit this page on GitHub</a>
+      {%- endif %}
       {{<docs_pager current={page.permalink} />}}
     </footer>
   </main>

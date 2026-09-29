@@ -10,10 +10,16 @@
   <meta name="description" content="{{ doc_description }}">
   <meta name="theme-color" content="#24403C">
   <link rel="icon" href="{{ get_url(path='logo.svg') }}" type="image/svg+xml">
+  {%- if doc is defined %}
   <link rel="canonical" href="{{ doc_url | safe }}">
+  {%- else %}
+  <meta name="robots" content="noindex">
+  {%- endif %}
   <meta property="og:title" content="{{ doc_title }}">
   <meta property="og:description" content="{{ doc_description }}">
+  {%- if doc is defined %}
   <meta property="og:url" content="{{ doc_url | safe }}">
+  {%- endif %}
   <meta property="og:image" content="{{ get_url(path='og.png') }}">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">

@@ -498,7 +498,9 @@ mod tests {
             "+++\n\
              title = \"Automation API\"\n\
              description = \"Every sideporch function automations can call, and the tables their handlers receive.\"\n\
-             weight = 4\n\
+             weight = 4\n\n\
+             [extra]\n\
+             edit_path = \"src/automations/api.rs\"\n\
              +++\n\n\
              <!-- Generated from src/automations/api.rs. Change the API there, then run\n     \
              SIDEPORCH_BLESS=1 cargo test website_page_is_current -->\n\n\
