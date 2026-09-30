@@ -21,7 +21,7 @@ fly apps create sideporch-demo
 fly volumes create sideporch_data --region fra --size 1 --app sideporch-demo
 fly deploy
 fly ips list --app sideporch-demo   # if empty: fly ips allocate-v6, fly ips allocate-v4 --shared
-fly ssh console --app sideporch-demo -C "/sideporch setup-link --data /data"
+fly machine exec "$(fly machines list --app sideporch-demo --quiet)" "/sideporch setup-link --data /data" --app sideporch-demo
 ```
 
 Open the setup link to create the admin account, then:
