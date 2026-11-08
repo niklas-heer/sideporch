@@ -3132,6 +3132,51 @@ pub fn activity(conn: &Connection, user_id: i64) -> AppResult<Vec<ActivityItem>>
     Ok(items)
 }
 
+/// A thread someone follows, for the Threads list on their Activity page.
+pub struct FollowedThread {
+    /// The thread's first message.
+    pub located: Located,
+    /// Whether it has replies from others that this person hasn't seen.
+    pub unread: bool,
+}
+
+/// Threads `user_id` follows in channels they can still read: unread ones
+/// first, then the most recent. A thread is followed if the person chose
+/// to follow it or wrote in it, unless they chose to unfollow it.
+pub fn followed_threads(conn: &Connection, user_id: i64) -> AppResult<Vec<FollowedThread>> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT m.id,
+             EXISTS (SELECT 1 FROM messages r WHERE r.parent_id = m.id AND r.deleted_at IS NULL
+                 AND r.user_id IS NOT ?1
+                 AND r.id > COALESCE((SELECT t.last_read_id FROM thread_reads t
+                                      WHERE t.user_id = ?1 AND t.root_message_id = m.id), m.id)) AS unread
+         FROM messages m JOIN channels c ON c.id = m.channel_id
+         WHERE m.parent_id IS NULL AND m.deleted_at IS NULL AND {}
+           AND m.id IN (SELECT root_message_id FROM thread_follows WHERE user_id = ?1 AND following = 1
+                        UNION SELECT COALESCE(parent_id, id) FROM messages WHERE user_id = ?1)
+           AND NOT EXISTS (SELECT 1 FROM thread_follows f
+                           WHERE f.user_id = ?1 AND f.root_message_id = m.id AND f.following = 0)
+         ORDER BY unread DESC,
+             COALESCE((SELECT MAX(r.id) FROM messages r WHERE r.parent_id = m.id), m.id) DESC
+         LIMIT 50",
+        can_read(1)
+    ))?;
+    let rows = statement
+        .query_map([user_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut threads = Vec::new();
+    for (id, unread) in rows {
+        if let Some(message) = message(conn, id)?
+            && let Some(located) = locate(conn, user_id, message)?
+        {
+            threads.push(FollowedThread { located, unread });
+        }
+    }
+    Ok(threads)
+}
+
 /// Whether lowercase `text` notifies a whole channel.
 pub fn mentions_everyone(text: &str) -> bool {
     mentions(text, "channel") || mentions(text, "here")

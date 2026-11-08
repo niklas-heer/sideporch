@@ -217,3 +217,87 @@ async fn following_a_thread_you_cannot_read_is_not_found() {
         StatusCode::NOT_FOUND
     );
 }
+
+/// Posts a message in `channel` and returns its id.
+async fn post_root(browser: &Browser, channel: i64, body: &str) -> i64 {
+    assert_eq!(
+        browser.send(channel, body, None).await,
+        StatusCode::NO_CONTENT
+    );
+    last_message_id(&browser.page(&format!("/c/{channel}")).await)
+}
+
+async fn follow(browser: &Browser, channel: i64, root: i64) {
+    let response = browser
+        .post(&format!("/c/{channel}/t/{root}/follow"), &[])
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn unread_followed_threads_come_first_on_activity() {
+    let server = start().await;
+    let ada = admin(&server).await;
+    let channel = home_channel(&ada).await;
+    let cy = invite(&server, &ada, "Cy", "cy").await;
+    let older = post_root(&ada, channel, "Plan A?").await;
+    let newer = post_root(&ada, channel, "Plan B?").await;
+    follow(&cy, channel, older).await;
+    follow(&cy, channel, newer).await;
+
+    // Plan A gets a reply first and is still unread; Plan B's replies are
+    // newer, but Cy has read them.
+    assert_eq!(
+        ada.send(channel, "A: Friday works", Some(older)).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        ada.send(channel, "B: Saturday works", Some(newer)).await,
+        StatusCode::NO_CONTENT
+    );
+    cy.page(&format!("/c/{channel}/t/{newer}")).await;
+
+    let page = cy.page("/activity").await;
+    let unread = page.find("Plan A?").unwrap();
+    let read = page.find("Plan B?").unwrap();
+    assert!(unread < read, "unread threads come first");
+    assert_eq!(page.matches("New replies").count(), 1);
+}
+
+#[tokio::test]
+async fn opening_a_thread_marks_it_read() {
+    let server = start().await;
+    let ada = admin(&server).await;
+    let channel = home_channel(&ada).await;
+    let cy = invite(&server, &ada, "Cy", "cy").await;
+    let root = post_root(&ada, channel, "Plan A?").await;
+    follow(&cy, channel, root).await;
+    assert_eq!(
+        ada.send(channel, "Friday works", Some(root)).await,
+        StatusCode::NO_CONTENT
+    );
+    assert!(cy.page("/activity").await.contains("New replies"));
+
+    cy.page(&format!("/c/{channel}/t/{root}")).await;
+    assert!(!cy.page("/activity").await.contains("New replies"));
+    // Ada's own replies never count as unread for her.
+    assert!(!ada.page("/activity").await.contains("New replies"));
+}
+
+#[tokio::test]
+async fn unfollowed_threads_leave_the_list_and_started_ones_join_it() {
+    let server = start().await;
+    let ada = admin(&server).await;
+    let channel = home_channel(&ada).await;
+    let root = post_root(&ada, channel, "Plan A?").await;
+
+    // Ada started the thread, so she follows it without choosing to.
+    assert!(ada.page("/activity").await.contains("Plan A?"));
+    assert_eq!(
+        ada.post(&format!("/c/{channel}/t/{root}/unfollow"), &[])
+            .await
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert!(!ada.page("/activity").await.contains("Plan A?"));
+}

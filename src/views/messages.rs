@@ -6,7 +6,7 @@ use maud::{Markup, html};
 use super::{Render, Shell, channel_label, message_item, panel_page};
 use crate::{
     icons::{self, icon},
-    store::{ActivityItem, Author, Channel, ChannelKind, Located, Message},
+    store::{ActivityItem, Author, Channel, ChannelKind, FollowedThread, Located, Message},
 };
 
 /// Where a list entry came from, linking to it in place.
@@ -155,17 +155,49 @@ pub fn saved_page(shell: &Shell<'_>, saved: &[Located], render: &Render<'_>) -> 
     )
 }
 
-pub fn activity_page(shell: &Shell<'_>, items: &[ActivityItem], render: &Render<'_>) -> Markup {
+pub fn activity_page(
+    shell: &Shell<'_>,
+    threads: &[FollowedThread],
+    items: &[ActivityItem],
+    render: &Render<'_>,
+) -> Markup {
     panel_page(
         "Activity",
         shell,
         &html! { "Activity" },
         &html! {
+            // Unread threads first, then the most recent.
+            @if !threads.is_empty() {
+                section class="mb-8" aria-labelledby="threads-heading" {
+                    h2 id="threads-heading" class="mb-3 px-5 text-sm font-semibold text-muted dark:text-haint" { "Threads you follow" }
+                    ol class="-mx-5 space-y-4" {
+                        @for thread in threads {
+                            li class="list-none" data-unread[thread.unread] {
+                                a href={ "/c/" (thread.located.message.channel_id) "/t/" (thread.located.message.id) }
+                                    class="mb-0.5 flex items-center gap-1.5 px-5 text-sm font-semibold text-muted hover:underline dark:text-haint" {
+                                    @if thread.located.is_direct {
+                                        (icon(icons::CHAT_CIRCLE_TEXT, "h-4 w-4")) (thread.located.channel)
+                                    } @else {
+                                        (icon(icons::HASH, "h-4 w-4")) (thread.located.channel)
+                                    }
+                                    @if thread.unread { span class="ml-1 rounded bg-lamp px-1.5 text-xs font-normal text-floor" { "New replies" } }
+                                }
+                                ol { (message_item(&thread.located.message, false, true, render)) }
+                            }
+                        }
+                    }
+                }
+            }
             @if items.is_empty() {
-                p class="text-muted dark:text-haint" {
-                    "When someone mentions you or replies in a thread you're part of, it shows up here."
+                @if threads.is_empty() {
+                    p class="text-muted dark:text-haint" {
+                        "When someone mentions you or replies in a thread you're part of, it shows up here."
+                    }
                 }
             } @else {
+                @if !threads.is_empty() {
+                    h2 class="mb-3 px-5 text-sm font-semibold text-muted dark:text-haint" { "Mentions and replies" }
+                }
                 ol class="-mx-5 space-y-4" {
                     @for item in items {
                         li class="list-none" data-new[item.new] {

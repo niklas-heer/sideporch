@@ -376,11 +376,13 @@ async fn saved(user: CurrentUser, State(state): State<AppState>) -> AppResult<Ma
 async fn activity(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
     let user_id = user.id;
     let updates = std::sync::Arc::clone(&state.updates);
-    let (items, sidebar, ctx) = state
+    let (threads, items, sidebar, ctx) = state
         .db
         .call(move |conn| {
+            let threads = store::followed_threads(conn, user_id)?;
             let items = store::activity(conn, user_id)?;
             Ok((
+                threads,
                 items,
                 super::sidebar_with_update(conn, &updates, user_id)?,
                 store::render_context(conn)?,
@@ -394,6 +396,7 @@ async fn activity(user: CurrentUser, State(state): State<AppState>) -> AppResult
     };
     Ok(views::messages::activity_page(
         &shell,
+        &threads,
         &items,
         &Render::for_user(&ctx, user.id),
     ))

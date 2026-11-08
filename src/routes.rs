@@ -892,6 +892,7 @@ async fn render_channel(
                         .filter(|root| root.channel_id == channel_id && root.parent_id.is_none())
                         .ok_or(AppError::NotFound)?;
                     let replies = store::replies(conn, root_id)?;
+                    store::mark_thread_read(conn, user_id, root_id)?;
                     Some((root, replies))
                 }
                 None => None,
