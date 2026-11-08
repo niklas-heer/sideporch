@@ -576,6 +576,14 @@ pub fn import_page(shell: &Shell<'_>, error: Option<&str>) -> Markup {
                     a href="/automations" class="btn-quiet" { "Back to automations" }
                 }
             }
+            form method="post" action="/automations/import/url" class="mt-8 max-w-xl space-y-2" {
+                label for="import-url" class="field-label" { "Or from a web address" }
+                div class="flex flex-wrap gap-2" {
+                    input id="import-url" name="url" type="url" required class="field max-w-md" placeholder="https://example.com/weather.sideporch.json";
+                    button type="submit" class="btn-quiet" { "Fetch and preview" }
+                }
+                p class="text-sm text-muted dark:text-haint" { "Fetched by the server, which refuses internal addresses unless Automations settings allow them." }
+            }
         },
     )
 }
@@ -613,7 +621,13 @@ const fn action_label(action: Action, library: bool) -> &'static str {
 }
 
 /// What importing a file would do, with a choice per item.
-pub fn import_preview(shell: &Shell<'_>, json: &str, bundle: &Bundle, plans: &[Plan]) -> Markup {
+pub fn import_preview(
+    shell: &Shell<'_>,
+    json: &str,
+    bundle: &Bundle,
+    plans: &[Plan],
+    from: Option<&str>,
+) -> Markup {
     let missing: std::collections::BTreeSet<&str> = plans
         .iter()
         .flat_map(|plan| plan.missing_secrets.iter().map(String::as_str))
@@ -628,6 +642,9 @@ pub fn import_preview(shell: &Shell<'_>, json: &str, bundle: &Bundle, plans: &[P
                 "The file holds " (plans.len()) @if plans.len() == 1 { " script" } @else { " scripts" }
                 @if !bundle.sideporch.is_empty() { ", exported from Sideporch " (bundle.sideporch) } ". "
                 "Read each one before you switch it on: automations can post, react, and call other services."
+            }
+            @if let Some(from) = from {
+                p class="mb-2 text-sm" { "Downloaded from " code { (from) } ". Nothing is added until you confirm below." }
             }
             @if let Some(description) = &bundle.description {
                 p class="mb-2 text-sm" { (description) }

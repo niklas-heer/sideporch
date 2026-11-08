@@ -45,6 +45,10 @@ Libraries can only be imported, replaced or skipped: automations find them by na
 
 Press **Import**. The Automations page says how many were added.
 
+### From a web address
+
+Under the file box, paste the address of a `.sideporch.json` file and press **Fetch and preview**. The server downloads it and shows the same preview. Only admins can do this, and the server refuses addresses on private or loopback networks unless the Automations settings allow them (the same setting that lets `sideporch.http` reach internal services). Downloads stop at 2 MB and a minute.
+
 ## After importing
 
 Imported automations are switched off, because they can post, react and call other services with this server's secrets. For each one:

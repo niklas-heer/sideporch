@@ -11,11 +11,17 @@ use axum::{
     routing::{get, post},
 };
 
+use serde::Deserialize;
+
 use super::{Change, require_admin, save_change};
 use crate::{
     AppState,
     auth::CurrentUser,
-    automations::bundle::{self, Action, Bundle, Plan},
+    automations::{
+        self,
+        bundle::{self, Action, Bundle, Plan},
+        http::Http,
+    },
     error::{AppError, AppResult},
     routes::shell_data,
     secrets, store,
@@ -26,7 +32,59 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/automations/export", get(export))
         .route("/automations/import", get(import_form).post(preview))
+        .route("/automations/import/url", post(preview_url))
         .route("/automations/import/confirm", post(confirm))
+}
+
+/// Downloads `url` through the guarded HTTP client: internal addresses are
+/// refused unless an admin allowed them, and the answer is capped at `limit`
+/// bytes. Returns the body, or why it couldn't be had.
+pub async fn download(state: &AppState, url: &str, limit: usize) -> Result<Vec<u8>, String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("the address must start with https:// or http://".to_owned());
+    }
+    let settings = state
+        .db
+        .call(|conn| automations::Settings::load(conn))
+        .await
+        .map_err(|error| error.to_string())?;
+    let client = Http::new(settings.allow_private_network).map_err(|error| error.to_string())?;
+    let (status, body) = client.fetch(url, limit).await?;
+    if status != 200 {
+        return Err(format!("the server answered with status {status}"));
+    }
+    Ok(body)
+}
+
+#[derive(Deserialize)]
+struct UrlForm {
+    url: String,
+}
+
+/// Downloads a file from a web address and shows what importing it would
+/// do. Like a file, it is imported only after the preview, switched off.
+async fn preview_url(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Form(form): Form<UrlForm>,
+) -> AppResult<Response> {
+    require_admin(&user)?;
+    let url = form.url.trim().to_owned();
+    match download(&state, &url, bundle::MAX_BYTES).await {
+        Ok(body) => {
+            let text = String::from_utf8_lossy(&body).into_owned();
+            show_preview(&state, &user, &text, Some(&url)).await
+        }
+        Err(error) => {
+            let page = render_import(
+                &state,
+                &user,
+                Some(&format!("Couldn't import from {url}: {error}.")),
+            )
+            .await?;
+            Ok((StatusCode::BAD_REQUEST, page).into_response())
+        }
+    }
 }
 
 /// `/automations/export?id=1&id=2` exports those; without ids, everything.
@@ -122,22 +180,33 @@ async fn preview(
             text = String::from_utf8_lossy(&value).into_owned();
         }
     }
-    let bundle = match bundle::parse(&text) {
+    show_preview(&state, &user, &text, None).await
+}
+
+/// Checks `text` as a bundle and renders what importing it would do. `from`
+/// is the web address it was downloaded from, if any.
+async fn show_preview(
+    state: &AppState,
+    user: &CurrentUser,
+    text: &str,
+    from: Option<&str>,
+) -> AppResult<Response> {
+    let bundle = match bundle::parse(text) {
         Ok(bundle) => bundle,
         Err(error) => {
-            let page = render_import(&state, &user, Some(&error)).await?;
+            let page = render_import(state, user, Some(&error)).await?;
             return Ok((StatusCode::BAD_REQUEST, page).into_response());
         }
     };
-    let (bundle, plans) = plans(&state, bundle).await?;
+    let (bundle, plans) = plans(state, bundle).await?;
     let json = serde_json::to_string(&bundle).map_err(AppError::internal)?;
-    let sidebar = shell_data(&state, user.id).await?;
+    let sidebar = shell_data(state, user.id).await?;
     let shell = Shell {
-        user: &user,
+        user,
         sidebar: &sidebar,
         current: None,
     };
-    Ok(views::automations::import_preview(&shell, &json, &bundle, &plans).into_response())
+    Ok(views::automations::import_preview(&shell, &json, &bundle, &plans, from).into_response())
 }
 
 /// Imports the items as chosen in the preview, switched off.
