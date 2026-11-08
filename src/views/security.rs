@@ -500,7 +500,7 @@ fn oidc_fields(setup: &oidc::Setup) -> Markup {
                     span {
                         span class="block font-semibold" { "Create an account on a first sign-in" }
                         span class="block text-sm text-muted dark:text-haint" {
-                            "Only while sign-up is open. Off, people link their sign-in to an account they already have, from Sign-in and security."
+                            "Only while sign-up is open and the server has no rules to agree to. Off, people link their sign-in to an account they already have, from Sign-in and security."
                         }
                     }
                 }

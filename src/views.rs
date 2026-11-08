@@ -479,7 +479,7 @@ fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
                 ul id="quick-results" role="listbox" hidden
                     class="absolute inset-x-3 top-full z-40 mt-1 max-h-96 overflow-y-auto rounded-xl border border-line bg-white p-1 text-ink shadow-2xl dark:border-night-line dark:bg-night-2 dark:text-haint-2" {}
             }
-            div class="flex-1 overflow-y-auto px-3 pb-4" {
+            div class="flex-1 overflow-y-auto px-3 pb-4" data-sidebar-lists {
                 @if let Some(demo) = &shell.sidebar.demo {
                     p class="mx-1 mb-3 rounded-lg bg-floor-2 px-3 py-2 text-xs text-haint-2" data-demo { (demo) }
                 }

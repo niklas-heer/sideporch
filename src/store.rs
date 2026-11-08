@@ -3622,6 +3622,22 @@ pub fn set_automation_declarations(
         "UPDATE automations SET settings = ?1 WHERE id = ?2",
         params![json, id],
     )?;
+    // A value the new declaration wouldn't accept falls back to its default,
+    // and counts as missing if the setting is required.
+    for (name, text) in automation_setting_values(conn, id)? {
+        let fits = declarations
+            .iter()
+            .find(|declaration| declaration.name == name)
+            .is_none_or(|declaration| {
+                crate::automations::settings::check_value(declaration, &text).is_ok()
+            });
+        if !fits {
+            conn.execute(
+                "DELETE FROM automation_settings WHERE automation_id = ?1 AND name = ?2",
+                params![id, name],
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -3770,6 +3786,34 @@ pub fn use_api_token(
 #[cfg(test)]
 mod tests {
     use super::{direct_key, join_names, mentioned_names, mentions};
+
+    #[test]
+    fn a_new_declaration_drops_saved_values_it_would_not_accept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sideporch.db");
+        crate::db::create_at_version(&path, crate::db::schema_version()).unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "INSERT INTO automations (id, name, source, created_at, updated_at) VALUES (1, 'a', '', 0, 0);
+             INSERT INTO automation_settings (automation_id, name, value) VALUES
+               (1, 'count', 'many'), (1, 'room', 'general');",
+        )
+        .unwrap();
+        let declarations: Vec<crate::automations::settings::Declaration> =
+            serde_json::from_value(serde_json::json!([
+                { "name": "count", "type": "number", "required": true },
+                { "name": "room", "type": "string" },
+            ]))
+            .unwrap();
+        super::set_automation_declarations(&conn, 1, &declarations).unwrap();
+        let saved = super::automation_setting_values(&conn, 1).unwrap();
+        assert_eq!(saved.get("count"), None, "no longer a valid number");
+        assert_eq!(saved.get("room").map(String::as_str), Some("general"));
+        assert_eq!(
+            crate::automations::settings::missing_required(&declarations, &saved),
+            ["count"]
+        );
+    }
 
     #[test]
     fn unfollowing_a_thread_in_a_conversation_stops_its_notices() {

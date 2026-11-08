@@ -379,7 +379,12 @@ async fn sign_in_identity(
     let (issuer, subject) = (provider.issuer.clone(), identity.subject.clone());
     let (create, preferred, name) = (
         provider.create_accounts,
-        identity.preferred_username.clone(),
+        // Only suggests a name: some providers, like Google, send no
+        // preferred_username. The account is still bound by subject.
+        identity
+            .preferred_username
+            .clone()
+            .or_else(|| identity.email.clone()),
         identity.name.clone(),
     );
     let now = now_ms();

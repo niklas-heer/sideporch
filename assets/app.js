@@ -559,13 +559,30 @@
     document.body.append(reconnecting);
   }
 
+  // The newest message listed in `root`.
+  const newest = (root) => Math.max(0, ...[...root.children].map((item) => Number(item.dataset.messageId) || 0));
+
+  // Reports what's on screen as read, with the open thread if there is one.
+  function sendRead(socket) {
+    const channel = app?.dataset.channel;
+    const list = document.getElementById("messages");
+    if (!channel || !list) return;
+    const last = newest(list);
+    if (!last) return;
+    const thread = app.dataset.thread && document.getElementById("replies") ? Number(app.dataset.thread) : undefined;
+    socket.send(JSON.stringify({ type: "read", channel_id: Number(channel), message_id: last, thread_id: thread }));
+  }
+
   function connect() {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(`${protocol}//${location.host}/ws`);
     liveSocket = socket;
     const sendVisibility = () => {
       if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "visibility", visible: document.visibilityState === "visible" }));
+        const visible = document.visibilityState === "visible";
+        socket.send(JSON.stringify({ type: "visibility", visible }));
+        // Coming back to the tab reads what arrived while it was hidden.
+        if (visible) sendRead(socket);
       }
     };
     socket.addEventListener("open", () => {
@@ -631,8 +648,13 @@
     const thread = app.dataset.thread;
     const replies = document.getElementById("replies");
     const threadOpen = Boolean(thread) && Boolean(replies);
-    const newest = (root) => Math.max(0, ...[...root.children].map((item) => Number(item.dataset.messageId) || 0));
     const json = (response) => {
+      // The channel is gone or closed to this person: reloading shows why,
+      // where retrying would say "Reconnecting…" forever.
+      if (response.status === 403 || response.status === 404) {
+        location.reload();
+        return new Promise(() => {});
+      }
       if (!response.ok) throw new Error(`catch-up failed with ${response.status}`);
       return response.json();
     };
@@ -690,13 +712,13 @@
   function patchSidebar(html) {
     const fresh = new DOMParser().parseFromString(html, "text/html");
     // A conversation started while away has no link here to mark: take the
-    // fresh list whole, since only the server knows where it belongs.
-    const nav = 'nav[aria-label="Channels"]';
-    const currentNav = document.querySelector(nav);
-    const freshNav = fresh.querySelector(nav);
-    const isMissing = (link) => !currentNav?.querySelector(`[data-channel-link="${link.dataset.channelLink}"]`);
-    if (currentNav && freshNav && [...freshNav.querySelectorAll("[data-channel-link]")].some(isMissing)) {
-      currentNav.innerHTML = freshNav.innerHTML;
+    // fresh lists whole, since only the server knows where it belongs. The
+    // search box and account menu around them keep their listeners.
+    const currentLists = document.querySelector("[data-sidebar-lists]");
+    const freshLists = fresh.querySelector("[data-sidebar-lists]");
+    const isMissing = (link) => !currentLists?.querySelector(`[data-channel-link="${link.dataset.channelLink}"]`);
+    if (currentLists && freshLists && [...freshLists.querySelectorAll("[data-channel-link]")].some(isMissing)) {
+      currentLists.innerHTML = freshLists.innerHTML;
       return;
     }
     const copyMarks = (next, current) => {

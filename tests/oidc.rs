@@ -606,6 +606,24 @@ async fn a_first_sign_in_creates_an_account_when_allowed_and_sign_up_is_open() {
 }
 
 #[tokio::test]
+async fn a_first_sign_in_without_a_preferred_username_takes_a_name_from_the_email() {
+    let (server, fake, _ada) = setup(true).await;
+    sets_mint(&fake, claims_for(&json!({ "preferred_username": null })));
+    let mut browser = Browser::anonymous(&server);
+    let response = sign_in_with(&mut browser).await;
+    assert_eq!(location(&response), "/");
+    let conn = database(&server);
+    let username: String = conn
+        .query_row(
+            "SELECT u.username FROM users u JOIN oidc_identities i ON i.user_id = u.id",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(username, "mo");
+}
+
+#[tokio::test]
 async fn first_sign_in_is_refused_when_the_admin_did_not_allow_accounts() {
     let (server, _fake, _ada) = setup(false).await;
     let mut browser = Browser::anonymous(&server);
