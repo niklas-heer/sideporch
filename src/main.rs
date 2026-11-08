@@ -45,6 +45,18 @@ struct Args {
     /// address.
     #[arg(long, env = "SIDEPORCH_CLIENT_IP_HEADER")]
     client_ip_header: Option<String>,
+    /// Sign people in through Cloudflare Access: the team domain, such as
+    /// `myteam.cloudflareaccess.com`. Set it with --cloudflare-access-aud.
+    #[arg(long, env = "SIDEPORCH_CLOUDFLARE_ACCESS_TEAM")]
+    cloudflare_access_team: Option<String>,
+    /// The audience (AUD) tag of the Cloudflare Access application in front
+    /// of this server, from its overview in Cloudflare One.
+    #[arg(long, env = "SIDEPORCH_CLOUDFLARE_ACCESS_AUD")]
+    cloudflare_access_aud: Option<String>,
+    /// Refuse pages to requests that didn't come through Cloudflare Access.
+    /// The health check, webhooks, federation and MCP stay open.
+    #[arg(long, env = "SIDEPORCH_CLOUDFLARE_ACCESS_REQUIRED")]
+    cloudflare_access_required: bool,
 }
 
 #[derive(Subcommand)]
@@ -173,6 +185,10 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         update_source: None,
         allow_private_federation: false,
         client_ip_header: args.client_ip_header,
+        cloudflare_access_team: args.cloudflare_access_team,
+        cloudflare_access_aud: args.cloudflare_access_aud,
+        cloudflare_access_required: args.cloudflare_access_required,
+        cloudflare_access_certs_url: None,
     })
     .await?;
     let listener = tokio::net::TcpListener::bind(args.listen).await?;

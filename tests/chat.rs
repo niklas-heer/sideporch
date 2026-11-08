@@ -411,6 +411,10 @@ async fn a_required_setup_link_is_kept_private_and_removed_after_use() {
         update_source: None,
         allow_private_federation: false,
         client_ip_header: None,
+        cloudflare_access_team: None,
+        cloudflare_access_aud: None,
+        cloudflare_access_required: false,
+        cloudflare_access_certs_url: None,
     })
     .await
     .unwrap();

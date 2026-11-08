@@ -127,9 +127,11 @@ pub async fn prepare(
 /// Whether `form` can make a new account right now: setup isn't done, the
 /// invite works, or anyone may sign up without approval. Approved sign-ups
 /// wait in a queue that keeps a password, so they use one.
-async fn form_open(state: &AppState, form: &str) -> AppResult<bool> {
+/// Behind Cloudflare Access, setup also needs a person Access let in.
+async fn form_open(state: &AppState, headers: &HeaderMap, form: &str) -> AppResult<bool> {
     if form == "/setup" || form.starts_with("/setup/") {
-        return Ok(state.setup() != Setup::Done);
+        return Ok(state.setup() != Setup::Done
+            && crate::cloudflare::setup_gate(state, headers).await.is_ok());
     }
     if form == "/signup" {
         let joining = state.db.call(|conn| Joining::load(conn)).await?;
@@ -200,7 +202,7 @@ async fn create_options(
         }
         state.access.count(counted);
     }
-    if !form_open(&state, &input.form).await? {
+    if !form_open(&state, &headers, &input.form).await? {
         return Err(AppError::bad_request(
             "This page can't make new accounts anymore. Reload it.",
         ));

@@ -125,9 +125,14 @@ pub fn router(state: AppState) -> Router {
         .merge(statistics::router())
         .merge(bans::router())
         .merge(assets::router())
+        .merge(crate::cloudflare::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::same_origin,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::cloudflare::require,
         ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -268,8 +273,15 @@ async fn login_form(
     if signed_in(&state, &headers).await?.is_some() {
         return Ok(Redirect::to(next.unwrap_or("/")).into_response());
     }
+    let (notice, next) = match crate::cloudflare::at_login(&state, &headers).await? {
+        crate::cloudflare::AtLogin::Nothing => (None, next),
+        crate::cloudflare::AtLogin::SignIn(user_id) => {
+            return security::after_first_step(&state, user_id, next).await;
+        }
+        crate::cloudflare::AtLogin::Explain { notice, next: then } => (Some(notice), next.or(then)),
+    };
     let registration = registration(&state).await?;
-    Ok(views::login_page(None, "", next, registration).into_response())
+    Ok(views::login_page(notice.as_deref(), "", next, registration).into_response())
 }
 
 async fn login(
@@ -409,7 +421,13 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<
     if let Some(token) = auth::session_token(&headers) {
         auth::end_session(&state, token).await?;
     }
-    redirect_with_cookie("/login", &auth::clear_cookie(&state))
+    // Cloudflare Access would sign them right back in otherwise.
+    let to = if state.cloudflare.is_some() {
+        crate::cloudflare::LOGOUT
+    } else {
+        "/login"
+    };
+    redirect_with_cookie(to, &auth::clear_cookie(&state))
 }
 
 #[derive(Deserialize)]
@@ -482,17 +500,26 @@ fn validate_account(input: AccountInput) -> Result<ValidAccount, (&'static str, 
     })
 }
 
-/// How `/setup` looks for the current setup mode.
-const fn setup_mode(setup: &Setup) -> Option<views::SetupMode> {
+/// How `/setup` looks for the current setup mode. Without a code or link,
+/// Cloudflare Access is what claims the server, when it's set up.
+const fn setup_mode(setup: &Setup, access: Option<&String>) -> Option<views::SetupMode> {
     match setup {
         Setup::Done => None,
+        Setup::Open if access.is_some() => Some(views::SetupMode::CloudflareAccess),
         Setup::Open => Some(views::SetupMode::Open),
         Setup::Secret { chosen, .. } => Some(views::SetupMode::Code { chosen: *chosen }),
     }
 }
 
-async fn open_setup_form(State(state): State<AppState>) -> AppResult<Response> {
-    let Some(mode) = setup_mode(&state.setup()) else {
+async fn open_setup_form(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
+    if state.setup() == Setup::Done {
+        return Ok(Redirect::to("/login").into_response());
+    }
+    let access = match crate::cloudflare::setup_gate(&state, &headers).await {
+        Ok(access) => access,
+        Err(refused) => return Ok(*refused),
+    };
+    let Some(mode) = setup_mode(&state.setup(), access.as_ref()) else {
         return Ok(Redirect::to("/login").into_response());
     };
     Ok(views::setup_page("/setup", mode, None, &AccountForm::default(), "").into_response())
@@ -505,7 +532,14 @@ async fn open_setup(
     Form(input): Form<SetupInput>,
 ) -> AppResult<Response> {
     let setup = state.setup();
-    let Some(mode) = setup_mode(&setup) else {
+    if setup == Setup::Done {
+        return Err(AppError::NotFound);
+    }
+    let access = match crate::cloudflare::setup_gate(&state, &headers).await {
+        Ok(access) => access,
+        Err(refused) => return Ok(*refused),
+    };
+    let Some(mode) = setup_mode(&setup, access.as_ref()) else {
         return Err(AppError::NotFound);
     };
     if let Setup::Secret { .. } = setup {
@@ -544,12 +578,28 @@ async fn open_setup(
         }
     }
     let code = input.setup_code;
-    create_first_account(&state, &headers, "/setup", mode, input.account, &code).await
+    create_first_account(
+        &state,
+        &headers,
+        "/setup",
+        mode,
+        input.account,
+        &code,
+        access,
+    )
+    .await
 }
 
-async fn setup_form(State(state): State<AppState>, Path(token): Path<String>) -> AppResult<Markup> {
+async fn setup_form(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
     if !state.setup_link_matches(&token) {
         return Err(AppError::NotFound);
+    }
+    if let Err(refused) = crate::cloudflare::setup_gate(&state, &headers).await {
+        return Ok(*refused);
     }
     Ok(views::setup_page(
         &format!("/setup/{token}"),
@@ -557,7 +607,8 @@ async fn setup_form(State(state): State<AppState>, Path(token): Path<String>) ->
         None,
         &AccountForm::default(),
         "",
-    ))
+    )
+    .into_response())
 }
 
 async fn setup(
@@ -569,6 +620,10 @@ async fn setup(
     if !state.setup_link_matches(&token) {
         return Err(AppError::NotFound);
     }
+    let access = match crate::cloudflare::setup_gate(&state, &headers).await {
+        Ok(access) => access,
+        Err(refused) => return Ok(*refused),
+    };
     create_first_account(
         &state,
         &headers,
@@ -576,6 +631,7 @@ async fn setup(
         views::SetupMode::Link,
         input,
         "",
+        access,
     )
     .await
 }
@@ -583,7 +639,8 @@ async fn setup(
 /// Creates the first account, an admin, unless someone was faster.
 ///
 /// `code` is the setup code that was already checked, kept in the form so
-/// a mistake in the account doesn't mean typing it again.
+/// a mistake in the account doesn't mean typing it again. `access_email`,
+/// the address Cloudflare Access vouched for, becomes the admin's.
 async fn create_first_account(
     state: &AppState,
     headers: &HeaderMap,
@@ -591,6 +648,7 @@ async fn create_first_account(
     mode: views::SetupMode,
     input: AccountInput,
     code: &str,
+    access_email: Option<String>,
 ) -> AppResult<Response> {
     let refuse = |error: &str, form: &AccountForm| {
         Ok((
@@ -638,6 +696,9 @@ async fn create_first_account(
                 now,
             )?;
             credential.attach(&tx, id, now)?;
+            if let Some(email) = &access_email {
+                crate::security::set_email(&tx, id, Some(email))?;
+            }
             store::create_channel(&tx, "general", false, id, now)?;
             tx.commit()?;
             Ok(Some(id))

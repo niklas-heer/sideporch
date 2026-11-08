@@ -10,6 +10,7 @@ mod auth;
 mod automations;
 mod backup;
 mod blobs;
+mod cloudflare;
 mod community;
 mod db;
 mod demo;
@@ -106,6 +107,22 @@ pub struct Config {
     /// such as `X-Forwarded-For` or `Fly-Client-IP`. Without it, the
     /// connection's address counts and such headers are ignored.
     pub client_ip_header: Option<String>,
+    /// The Cloudflare Access team domain, such as
+    /// `myteam.cloudflareaccess.com` (or just `myteam`). With
+    /// [`Config::cloudflare_access_aud`], people whom Cloudflare Access let
+    /// in sign in to the account with their address, without a password.
+    pub cloudflare_access_team: Option<String>,
+    /// The audience (AUD) tag of the Cloudflare Access application in front
+    /// of this server. Set it together with the team domain.
+    pub cloudflare_access_aud: Option<String>,
+    /// Refuse pages to requests that didn't come through Cloudflare Access,
+    /// so nobody can go around it by reaching the server directly. The
+    /// health check, webhooks, federation and MCP stay open.
+    pub cloudflare_access_required: bool,
+    /// Where Cloudflare Access's signing keys are fetched; tests serve them
+    /// locally.
+    #[doc(hidden)]
+    pub cloudflare_access_certs_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -140,6 +157,8 @@ pub(crate) struct AppState {
     statistics: Arc<statistics::Cache>,
     /// Client addresses, sign-in limits and bans.
     access: Arc<access::Access>,
+    /// Signing in through Cloudflare Access, when it's set up.
+    cloudflare: Option<Arc<cloudflare::CloudflareAccess>>,
 }
 
 /// The shortest setup code Sideporch accepts. Anyone can try codes while
@@ -228,6 +247,36 @@ fn initial_setup(
     })
 }
 
+/// Cloudflare Access sign-in, when the team domain and audience tag are
+/// both set. One without the other is a mistake worth stopping for.
+fn cloudflare_access(config: &Config) -> Result<Option<cloudflare::CloudflareAccess>, Error> {
+    let present = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    match (
+        present(&config.cloudflare_access_team),
+        present(&config.cloudflare_access_aud),
+    ) {
+        (Some(team), Some(aud)) => Ok(Some(cloudflare::CloudflareAccess::new(
+            &team,
+            &aud,
+            config.cloudflare_access_required,
+            config.cloudflare_access_certs_url.clone(),
+        )?)),
+        (None, None) if config.cloudflare_access_required => Err(Error::internal(
+            "Cloudflare Access is required, but its team domain and audience tag aren't set",
+        )),
+        (None, None) => Ok(None),
+        _ => Err(Error::internal(
+            "set both the Cloudflare Access team domain and its audience (AUD) tag, or neither",
+        )),
+    }
+}
+
 /// An opened Sideporch instance.
 pub struct Sideporch {
     state: AppState,
@@ -258,6 +307,7 @@ impl Sideporch {
     ///
     /// Fails if the data directory or database cannot be opened.
     pub async fn open(config: Config) -> Result<Self, Error> {
+        let cloudflare = cloudflare_access(&config)?.map(Arc::new);
         std::fs::create_dir_all(&config.data_dir).map_err(Error::internal)?;
         let db_path = config.data_dir.join("sideporch.db");
         let db = Db::open(&db_path)?;
@@ -339,6 +389,7 @@ impl Sideporch {
             federation: Arc::new(federation),
             statistics: Arc::default(),
             access: Arc::new(access::Access::new(config.client_ip_header.as_deref())?),
+            cloudflare,
         };
         let updates = Arc::clone(&state.updates);
         state.db.call(move |conn| updates.load(conn)).await?;
@@ -427,6 +478,7 @@ fn start_background_work(state: &AppState) {
     updates::start(state.clone());
     federation::outbox::start(state.clone());
     access::start(state.clone());
+    cloudflare::start(state);
     demo::start(state.clone());
 }
 

@@ -48,6 +48,10 @@ pub fn config(data_dir: &std::path::Path) -> Config {
         update_source: None,
         allow_private_federation: false,
         client_ip_header: None,
+        cloudflare_access_team: None,
+        cloudflare_access_aud: None,
+        cloudflare_access_required: false,
+        cloudflare_access_certs_url: None,
     }
 }
 
@@ -87,6 +91,10 @@ pub async fn start_federated() -> Server {
         update_source: None,
         allow_private_federation: true,
         client_ip_header: None,
+        cloudflare_access_team: None,
+        cloudflare_access_aud: None,
+        cloudflare_access_required: false,
+        cloudflare_access_certs_url: None,
     };
     let app = Sideporch::open(config).await.unwrap();
     let setup_path = app.setup_path();

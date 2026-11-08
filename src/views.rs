@@ -302,6 +302,8 @@ pub enum SetupMode {
     Code { chosen: bool },
     /// Reached through the one-time setup link.
     Link,
+    /// Without a code or link, Cloudflare Access decides who may set up.
+    CloudflareAccess,
 }
 
 /// `code`: a setup code already found right, to keep in the form.
@@ -323,6 +325,11 @@ pub fn setup_page(
                 p class="mb-5 rounded-lg border border-line bg-screen px-3 py-2 text-sm text-muted dark:border-night-line dark:bg-night dark:text-haint" {
                     "The first person to open this page becomes the admin, so finish setup now. To require a setup code instead, start Sideporch with "
                     code { "SIDEPORCH_SETUP_CODE" } " set to a secret of your choice."
+                }
+            }
+            @if mode == SetupMode::CloudflareAccess {
+                p class="mb-5 rounded-lg border border-line bg-screen px-3 py-2 text-sm text-muted dark:border-night-line dark:bg-night dark:text-haint" {
+                    "Cloudflare Access let you in, so you can create the admin account. The address it signed you in with becomes the admin's, and signs you in here from then on."
                 }
             }
             (form_error(error))

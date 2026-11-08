@@ -9,7 +9,7 @@ On 2026-09-29, Niklas agreed with the competitive-gap recommendations and sugges
 - **Notification controls**: temporary pauses and recurring quiet hours. Today, channels can be muted and devices can enable push, but there is no personal notification schedule.
 - **Group direct messages**: start a private conversation with several people without creating and naming a private channel. Today, direct messages are between two people; groups use private channels.
 - **Explicit thread following**: follow without posting, unfollow, and prioritize unread followed threads. Today, thread recipients are inferred from the people who wrote in the thread (`src/store.rs`, `recipients`).
-- **OpenID Connect sign-in**: an optional generic identity-provider integration. Today, sign-in supports passwords, passkeys, authenticator codes and email links.
+- **OpenID Connect sign-in**: an optional generic identity-provider integration. Today, sign-in supports passwords, passkeys, authenticator codes, email links, and Cloudflare Access in front of the server (`src/cloudflare.rs`), which trusts Access's signed assertion but talks to no identity provider itself.
 
 **Email catch-up is deferred.** A recipient's email address is not a delivery service: Sideporch already supports an optional admin-configured SMTP relay for sign-in mail (`src/mail.rs`). A future catch-up feature could reuse that relay without requiring the operator to run a mail server.
 

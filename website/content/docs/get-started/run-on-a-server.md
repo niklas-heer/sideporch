@@ -67,6 +67,8 @@ While no account exists, the first visitor creates the admin account. On a serve
   docker exec sideporch /sideporch setup-link    # with Docker
   ```
 
+Behind [Cloudflare Access](@/docs/community/people/sign-in-security.md#cloudflare-access), setup also needs Access, and without a code, whoever Access lets in first becomes the admin.
+
 Open the link (or enter the code) and create your account, with a passkey where your browser offers one. Then invite everyone else from **People**. To let people join without an invite, open sign-up under **Admin → Community**; see [Sign-up and trust](@/docs/community/people/sign-up-and-trust.md).
 
 ## Options
@@ -81,6 +83,9 @@ Every option can also be set with an environment variable.
 | `--setup-code` | `SIDEPORCH_SETUP_CODE` | none | A secret of at least 16 characters that the setup page asks for before anyone can create the first account. Takes the place of `--require-setup-link`. New in 0.7.0. |
 | `--require-setup-link` | `SIDEPORCH_REQUIRE_SETUP_LINK` | off | Require the one-time link from `sideporch setup-link` to create the first account. |
 | `--client-ip-header` | `SIDEPORCH_CLIENT_IP_HEADER` | none: the connection's address | Behind a reverse proxy, the header it puts visitors' addresses in, such as `X-Forwarded-For` or `Fly-Client-IP`. Sign-in limits and [bans](@/docs/community/people/moderation.md#bans) use it. Only set it when every request comes through that proxy, or anyone could claim any address. New in 0.6.0. |
+| `--cloudflare-access-team` | `SIDEPORCH_CLOUDFLARE_ACCESS_TEAM` | none | Sign people in through [Cloudflare Access](@/docs/community/people/sign-in-security.md#cloudflare-access): your team domain, such as `myteam.cloudflareaccess.com`. Set it together with the audience tag. New in 0.7.0. |
+| `--cloudflare-access-aud` | `SIDEPORCH_CLOUDFLARE_ACCESS_AUD` | none | The audience (AUD) tag of the Cloudflare Access application in front of the server. New in 0.7.0. |
+| `--cloudflare-access-required` | `SIDEPORCH_CLOUDFLARE_ACCESS_REQUIRED` | off | Refuse pages to requests that didn't come through Cloudflare Access; webhooks, other servers, MCP and `/healthz` stay open. New in 0.7.0. |
 | `--update-check` | `SIDEPORCH_UPDATE_CHECK` | `true` | Ask GitHub for new releases every six hours; `false` keeps Sideporch from contacting GitHub. See [Update](@/docs/get-started/update.md). New in 0.5.0. |
 | | `SIDEPORCH_SECRET_KEY` | `secret.key` in the data directory | A passphrase to encrypt [automation secrets](@/docs/integrations/automations/data-and-services.md#secrets) with, instead of the key file. |
 | | `RUST_LOG` | `info` | How much to log: `warn`, `info`, `debug`. |
