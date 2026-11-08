@@ -30,6 +30,13 @@ pub enum Sender {
         name: String,
         icon: Option<String>,
     },
+    /// A bot account, posting through the chat API. It shows as a bot, like
+    /// `Bot`, and the message records which bot it was.
+    ApiBot {
+        id: i64,
+        name: String,
+        icon: Option<String>,
+    },
 }
 
 pub struct Draft {
@@ -102,16 +109,33 @@ struct Columns<'a> {
     /// The name and picture a bot or webhook shows.
     bot_name: Option<&'a str>,
     bot_icon: Option<&'a str>,
+    /// The API bot that posted it.
+    bot_id: Option<i64>,
 }
 
 fn sender_columns(sender: &Sender) -> Columns<'_> {
-    let (user_id, webhook_id, automation_id, bot_name, bot_icon) = match sender {
-        Sender::User(id) => (Some(*id), None, None, None, None),
-        Sender::Webhook { id, name, icon } => {
-            (None, Some(*id), None, Some(name.as_str()), icon.as_deref())
+    let (user_id, webhook_id, automation_id, bot_name, bot_icon, bot_id) = match sender {
+        Sender::User(id) => (Some(*id), None, None, None, None, None),
+        Sender::Webhook { id, name, icon } => (
+            None,
+            Some(*id),
+            None,
+            Some(name.as_str()),
+            icon.as_deref(),
+            None,
+        ),
+        Sender::Automation { id, name } => (None, None, Some(*id), Some(name.as_str()), None, None),
+        Sender::Bot { name, icon } => {
+            (None, None, None, Some(name.as_str()), icon.as_deref(), None)
         }
-        Sender::Automation { id, name } => (None, None, Some(*id), Some(name.as_str()), None),
-        Sender::Bot { name, icon } => (None, None, None, Some(name.as_str()), icon.as_deref()),
+        Sender::ApiBot { id, name, icon } => (
+            None,
+            None,
+            None,
+            Some(name.as_str()),
+            icon.as_deref(),
+            Some(*id),
+        ),
     };
     Columns {
         user_id,
@@ -119,6 +143,7 @@ fn sender_columns(sender: &Sender) -> Columns<'_> {
         automation_id,
         bot_name,
         bot_icon,
+        bot_id,
     }
 }
 
@@ -180,6 +205,7 @@ pub async fn post_from(
                 automation_id,
                 bot_name,
                 bot_icon,
+                bot_id,
             } = sender_columns(&draft.sender);
             let id = store::insert_message(
                 &tx,
@@ -191,6 +217,7 @@ pub async fn post_from(
                     automation_id,
                     bot_name,
                     bot_icon,
+                    bot_id,
                     body: &draft.body,
                     attachments: &draft.attachments,
                     files: &draft.files,
@@ -777,7 +804,7 @@ fn publish_reactions(
 
 #[cfg(test)]
 mod tests {
-    use super::valid_client_nonce;
+    use super::{Sender, sender_columns, valid_client_nonce};
 
     #[test]
     fn client_nonces_have_the_shape_browsers_make() {
@@ -790,5 +817,21 @@ mod tests {
         assert!(!valid_client_nonce("has spaces in this one"));
         assert!(!valid_client_nonce("slashes/are/not/allowed"));
         assert!(!valid_client_nonce("unicode-nonce-ünï"));
+    }
+
+    #[test]
+    fn a_bot_post_records_its_bot_and_a_person_records_none() {
+        let person = sender_columns(&Sender::User(7));
+        assert_eq!((person.user_id, person.bot_id), (Some(7), None));
+        let bot = Sender::ApiBot {
+            id: 3,
+            name: "Deploys".to_owned(),
+            icon: Some(":rocket:".to_owned()),
+        };
+        let bot = sender_columns(&bot);
+        assert_eq!(
+            (bot.user_id, bot.bot_name, bot.bot_icon, bot.bot_id),
+            (None, Some("Deploys"), Some(":rocket:"), Some(3))
+        );
     }
 }

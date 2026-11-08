@@ -595,7 +595,7 @@ fn open_without_access(path: &str) -> bool {
         "/offline",
         "/.well-known/sideporch",
     ];
-    const PREFIXES: &[&str] = &["/assets/", "/hooks/", "/federation/"];
+    const PREFIXES: &[&str] = &["/assets/", "/hooks/", "/federation/", "/api/v1/"];
     PATHS.contains(&path) || PREFIXES.iter().any(|prefix| path.starts_with(prefix))
 }
 
@@ -752,6 +752,14 @@ async fn link(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bots_and_other_programs_reach_the_api_without_access() {
+        assert!(open_without_access("/api/v1/me"));
+        assert!(open_without_access("/api/v1/channels/3/messages"));
+        assert!(!open_without_access("/api/v1x"));
+        assert!(!open_without_access("/settings/bots"));
+    }
 
     #[test]
     fn team_domains_are_normalized() {

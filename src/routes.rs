@@ -33,6 +33,7 @@ mod automation;
 mod backups;
 mod bans;
 mod catch_up;
+mod bots;
 mod channels;
 mod community;
 mod credentials;
@@ -126,6 +127,8 @@ pub fn router(state: AppState) -> Router {
         .merge(security::router())
         .merge(oidc::router())
         .merge(credentials::router())
+        .merge(bots::router())
+        .merge(crate::api::router())
         .merge(updates::router())
         .merge(federation::router())
         .merge(speech::router())

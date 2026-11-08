@@ -449,6 +449,7 @@ impl Importer<'_> {
                 webhook_id: None,
                 bot_name: bot_name.as_deref(),
                 bot_icon: None,
+                bot_id: None,
                 automation_id: None,
                 body: &text,
                 attachments: &[],

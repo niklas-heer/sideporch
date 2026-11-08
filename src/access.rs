@@ -65,6 +65,12 @@ pub const SIGN_UP: Limit = Limit {
     max: 3,
     window: Duration::from_hours(1),
 };
+/// Requests per bot API token. Bots work in bursts, so this is generous; it
+/// stops a runaway script without slowing a normal one.
+pub const API_REQUESTS: Limit = Limit {
+    max: 120,
+    window: Duration::from_mins(1),
+};
 
 /// The most entries a table in memory keeps before starting over, so floods
 /// can't use up memory.
@@ -84,6 +90,8 @@ pub enum Counted {
     SignUp(IpAddr),
     SetupCode(IpAddr),
     PasskeyCreate(IpAddr),
+    /// Requests made with one bot API token, by its row id.
+    ApiToken(i64),
 }
 
 /// A range of addresses, such as `203.0.113.0/24` or one address.

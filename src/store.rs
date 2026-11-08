@@ -484,6 +484,8 @@ pub struct NewMessage<'a> {
     pub webhook_id: Option<i64>,
     pub bot_name: Option<&'a str>,
     pub bot_icon: Option<&'a str>,
+    /// The bot account that posted it through the API, if any.
+    pub bot_id: Option<i64>,
     pub automation_id: Option<i64>,
     pub body: &'a str,
     pub attachments: &'a [Attachment],
@@ -1593,8 +1595,8 @@ pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64>
         Some(serde_json::to_string(new.attachments).map_err(crate::error::AppError::internal)?)
     };
     conn.execute(
-        "INSERT INTO messages (channel_id, parent_id, user_id, webhook_id, automation_id, bot_name, bot_icon_url, body, attachments, created_at, gif, poll, buttons, client_nonce)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        "INSERT INTO messages (channel_id, parent_id, user_id, webhook_id, automation_id, bot_name, bot_icon_url, body, attachments, created_at, gif, poll, buttons, client_nonce, bot_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             new.channel_id,
             new.parent_id,
@@ -1612,6 +1614,7 @@ pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64>
                 .then(|| serde_json::to_string(new.buttons).ok())
                 .flatten(),
             new.client_nonce,
+            new.bot_id,
         ],
     )?;
     let id = conn.last_insert_rowid();

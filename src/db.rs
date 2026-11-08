@@ -766,6 +766,45 @@ ALTER TABLE messages ADD COLUMN client_nonce TEXT;
 CREATE UNIQUE INDEX messages_by_client_nonce ON messages (user_id, client_nonce) WHERE client_nonce IS NOT NULL;
 ",
     ),
+    Migration::Sql(
+        r"
+-- Bots: named identities for the chat API, each with its own tokens. A
+-- token is kept only as its SHA-256 hash. Channel scope `all` means every
+-- public channel; `list` means the channels in bot_token_channels.
+CREATE TABLE bots (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    display_name TEXT NOT NULL,
+    icon TEXT,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    revoked_at INTEGER
+);
+
+CREATE TABLE bot_tokens (
+    id INTEGER PRIMARY KEY,
+    bot_id INTEGER NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    token_hash BLOB NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    scopes TEXT NOT NULL,
+    channel_scope TEXT NOT NULL CHECK (channel_scope IN ('all', 'list')),
+    expires_at INTEGER,
+    last_used_at INTEGER,
+    created_at INTEGER NOT NULL,
+    revoked_at INTEGER
+);
+CREATE INDEX bot_tokens_by_bot ON bot_tokens (bot_id);
+
+CREATE TABLE bot_token_channels (
+    token_id INTEGER NOT NULL REFERENCES bot_tokens(id) ON DELETE CASCADE,
+    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    PRIMARY KEY (token_id, channel_id)
+);
+
+-- The bot a message was posted through, if any, so it can be traced.
+ALTER TABLE messages ADD COLUMN bot_id INTEGER REFERENCES bots(id) ON DELETE SET NULL;
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

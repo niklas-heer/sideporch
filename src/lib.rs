@@ -5,11 +5,13 @@
 
 mod access;
 mod ai;
+mod api;
 mod assets;
 mod auth;
 mod automations;
 mod backup;
 mod blobs;
+mod bots;
 mod cloudflare;
 mod community;
 mod db;
