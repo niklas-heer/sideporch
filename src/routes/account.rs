@@ -171,16 +171,28 @@ async fn reset(
     }
     let hash = auth::hash_password(form.password).await?;
     let user_id = person.id;
-    state
+    let token_hash = auth::hash_token(&token);
+    let saved = state
         .db
         .call(move |conn| {
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            // Hashing took a moment; the link may have been replaced since,
+            // such as by `sideporch reset-link`, so check it again.
+            let still = store::password_reset_user(&tx, &token_hash, now_ms())?;
+            if still.is_none_or(|still| still.id != user_id) {
+                return Ok(false);
+            }
             store::set_password(&tx, user_id, &hash)?;
             store::end_sessions(&tx, user_id, None)?;
             tx.commit()?;
-            Ok(())
+            Ok(true)
         })
         .await?;
+    if !saved {
+        return Err(AppError::Gone(
+            "This reset link has expired or was already used. Ask for a new one.".to_owned(),
+        ));
+    }
     // A reset replaces the password, not a passkey or authenticator app.
     super::security::after_first_step(&state, user_id, None).await
 }
