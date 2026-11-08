@@ -14,6 +14,7 @@
 
 pub mod api;
 pub mod bundle;
+pub mod catalogue;
 pub mod cron;
 pub mod events;
 pub mod http;
@@ -72,6 +73,8 @@ pub struct Settings {
     pub timezone: String,
     /// Whether `sideporch.http` may reach private and loopback addresses.
     pub allow_private_network: bool,
+    /// Where the automation store's index is; empty for the default.
+    pub catalogue_url: String,
 }
 
 impl Default for Settings {
@@ -79,12 +82,14 @@ impl Default for Settings {
         Self {
             timezone: "UTC".to_owned(),
             allow_private_network: false,
+            catalogue_url: String::new(),
         }
     }
 }
 
 const TIMEZONE_SETTING: &str = "automations.timezone";
 const PRIVATE_NETWORK_SETTING: &str = "automations.allow_private_network";
+const CATALOGUE_SETTING: &str = "automations.catalogue_url";
 
 impl Settings {
     pub fn load(conn: &Connection) -> AppResult<Self> {
@@ -92,7 +97,17 @@ impl Settings {
             timezone: store::setting(conn, TIMEZONE_SETTING)?.unwrap_or_else(|| "UTC".to_owned()),
             allow_private_network: store::setting(conn, PRIVATE_NETWORK_SETTING)?.as_deref()
                 == Some("true"),
+            catalogue_url: store::setting(conn, CATALOGUE_SETTING)?.unwrap_or_default(),
         })
+    }
+
+    /// The automation store's index address.
+    pub fn catalogue(&self) -> &str {
+        if self.catalogue_url.is_empty() {
+            catalogue::DEFAULT_URL
+        } else {
+            &self.catalogue_url
+        }
     }
 
     pub fn save(&self, conn: &Connection) -> AppResult<()> {
@@ -102,7 +117,16 @@ impl Settings {
                 self.timezone
             )));
         }
+        let catalogue = self.catalogue_url.trim();
+        if !catalogue.is_empty()
+            && !(catalogue.starts_with("https://") || catalogue.starts_with("http://"))
+        {
+            return Err(AppError::bad_request(
+                "The store's address must start with https://, such as https://example.com/index.json.",
+            ));
+        }
         store::set_setting(conn, TIMEZONE_SETTING, &self.timezone)?;
+        store::set_setting(conn, CATALOGUE_SETTING, catalogue)?;
         store::set_setting(
             conn,
             PRIVATE_NETWORK_SETTING,
@@ -140,6 +164,7 @@ struct Inner {
     workers: RwLock<Workers>,
     actions: async_mpsc::UnboundedSender<Action>,
     receiver: Mutex<Option<async_mpsc::UnboundedReceiver<Action>>>,
+    catalogue: catalogue::Cache,
 }
 
 /// Runs the enabled automations and routes events to them.
@@ -157,8 +182,14 @@ impl Automations {
                 workers: RwLock::new(Workers::default()),
                 actions,
                 receiver: Mutex::new(Some(receiver)),
+                catalogue: catalogue::Cache::default(),
             }),
         }
+    }
+
+    /// The automation store's index, as last fetched.
+    pub fn catalogue_cache(&self) -> &catalogue::Cache {
+        &self.inner.catalogue
     }
 
     /// Carries out what scripts ask for. Call once, after startup.

@@ -22,6 +22,7 @@ use crate::{
     views::{self, Shell},
 };
 
+pub mod catalogue;
 pub mod sharing;
 
 /// Runs shown in the editor.
@@ -48,6 +49,7 @@ pub fn router() -> Router<AppState> {
         .route("/hooks/automations/{token}", any(hook))
         .route("/hooks/automations/{token}/{*path}", any(hook_path))
         .merge(sharing::router())
+        .merge(catalogue::router())
 }
 
 const fn require_admin(user: &CurrentUser) -> AppResult<()> {

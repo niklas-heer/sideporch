@@ -1,0 +1,26 @@
+{
+  "format": "sideporch-catalogue",
+  "version": 1,
+  "entries": [
+    {
+      "name": "Welcome new members",
+      "description": "Posts a welcome in #general when someone joins.",
+      "author": "Sideporch",
+      "license": "MIT",
+      "homepage": "https://sideporch.app/docs/integrations/automations/store/",
+      "version": "1.0.0",
+      "file": "https://sideporch.app/automations/welcome-new-members.sideporch.json",
+      "sha256": "0e9e2748b3c20c5a1fe23b2f2aac84a21484195d79611755109754aad59b283b"
+    },
+    {
+      "name": "Weekday standup reminder",
+      "description": "Posts a standup reminder in #general at nine on weekdays.",
+      "author": "Sideporch",
+      "license": "MIT",
+      "homepage": "https://sideporch.app/docs/integrations/automations/store/",
+      "version": "1.0.0",
+      "file": "https://sideporch.app/automations/standup-reminder.sideporch.json",
+      "sha256": "5164a80e572c10b1c377cad99b290d2a005654996abc13e5fb0901844e6e4718"
+    }
+  ]
+}

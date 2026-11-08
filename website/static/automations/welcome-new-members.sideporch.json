@@ -1,0 +1,16 @@
+{
+  "format": "sideporch-automations",
+  "version": 1,
+  "description": "Welcomes each new member in #general.",
+  "author": "Sideporch",
+  "license": "MIT",
+  "homepage": "https://sideporch.app/docs/integrations/automations/store/",
+  "items": [
+    {
+      "kind": "automation",
+      "name": "Welcome new members",
+      "description": "Posts a welcome in #general when someone joins.",
+      "source": "sideporch.on(\"member_joined\", function(member)\n  sideporch.post(\"general\", \"Welcome, \" .. member.user .. \"! Say hello below.\")\nend)\n"
+    }
+  ]
+}

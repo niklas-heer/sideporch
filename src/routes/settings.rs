@@ -164,6 +164,8 @@ async fn automation_settings(
 struct AutomationSettingsForm {
     timezone: String,
     allow_private_network: Option<String>,
+    #[serde(default)]
+    catalogue_url: String,
 }
 
 async fn save_automation_settings(
@@ -175,6 +177,7 @@ async fn save_automation_settings(
     let settings = automations::Settings {
         timezone: form.timezone.trim().to_owned(),
         allow_private_network: form.allow_private_network.is_some(),
+        catalogue_url: form.catalogue_url.trim().to_owned(),
     };
     let result = state
         .db

@@ -34,6 +34,22 @@ pub const MAX_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
 
+/// Downloads `url` for an import or the automation store, through the
+/// guarded client, so internal addresses are refused unless `allow_private`
+/// is set. The body is capped at `limit` bytes. Returns the body, or why it
+/// couldn't be had.
+pub async fn download(allow_private: bool, url: &str, limit: usize) -> Result<Vec<u8>, String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("the address must start with https:// or http://".to_owned());
+    }
+    let client = Http::new(allow_private).map_err(|error| error.to_string())?;
+    let (status, body) = client.fetch(url, limit).await?;
+    if status != 200 {
+        return Err(format!("the server answered with status {status}"));
+    }
+    Ok(body)
+}
+
 /// Whether requests may reach `ip`.
 pub fn is_public(ip: IpAddr) -> bool {
     match ip {

@@ -20,7 +20,7 @@ use crate::{
     automations::{
         self,
         bundle::{self, Action, Bundle, Plan},
-        http::Http,
+        http,
     },
     error::{AppError, AppResult},
     routes::shell_data,
@@ -34,26 +34,6 @@ pub fn router() -> Router<AppState> {
         .route("/automations/import", get(import_form).post(preview))
         .route("/automations/import/url", post(preview_url))
         .route("/automations/import/confirm", post(confirm))
-}
-
-/// Downloads `url` through the guarded HTTP client: internal addresses are
-/// refused unless an admin allowed them, and the answer is capped at `limit`
-/// bytes. Returns the body, or why it couldn't be had.
-pub async fn download(state: &AppState, url: &str, limit: usize) -> Result<Vec<u8>, String> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return Err("the address must start with https:// or http://".to_owned());
-    }
-    let settings = state
-        .db
-        .call(|conn| automations::Settings::load(conn))
-        .await
-        .map_err(|error| error.to_string())?;
-    let client = Http::new(settings.allow_private_network).map_err(|error| error.to_string())?;
-    let (status, body) = client.fetch(url, limit).await?;
-    if status != 200 {
-        return Err(format!("the server answered with status {status}"));
-    }
-    Ok(body)
 }
 
 #[derive(Deserialize)]
@@ -70,7 +50,12 @@ async fn preview_url(
 ) -> AppResult<Response> {
     require_admin(&user)?;
     let url = form.url.trim().to_owned();
-    match download(&state, &url, bundle::MAX_BYTES).await {
+    let allow_private = state
+        .db
+        .call(|conn| automations::Settings::load(conn))
+        .await?
+        .allow_private_network;
+    match http::download(allow_private, &url, bundle::MAX_BYTES).await {
         Ok(body) => {
             let text = String::from_utf8_lossy(&body).into_owned();
             show_preview(&state, &user, &text, Some(&url)).await
@@ -185,7 +170,7 @@ async fn preview(
 
 /// Checks `text` as a bundle and renders what importing it would do. `from`
 /// is the web address it was downloaded from, if any.
-async fn show_preview(
+pub async fn show_preview(
     state: &AppState,
     user: &CurrentUser,
     text: &str,

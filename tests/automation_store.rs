@@ -121,3 +121,102 @@ async fn only_admins_import_from_a_web_address() {
         .await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+/// The example automation the website publishes.
+const WELCOME: &str =
+    include_str!("../website/static/automations/welcome-new-members.sideporch.json");
+
+/// Points the store at `catalogue` and lets this server reach this machine,
+/// as an admin does to try a store on a home network.
+async fn use_store(admin: &Browser, catalogue: &str) {
+    let response = admin
+        .post(
+            "/settings/automations",
+            &[
+                ("timezone", "UTC"),
+                ("allow_private_network", "on"),
+                ("catalogue_url", catalogue),
+            ],
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Serves a catalogue listing `file` from a fake host. Returns the
+/// catalogue's address and the file's.
+async fn fake_store(file: &str) -> (String, String) {
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(file.as_bytes());
+    let sha256: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let url = serve("welcome-new-members.sideporch.json", file.to_owned()).await;
+    let index = serde_json::json!({
+        "format": "sideporch-catalogue",
+        "version": 1,
+        "entries": [{
+            "name": "Welcome new members",
+            "description": "Posts a welcome.",
+            "author": "Ann",
+            "license": "MIT",
+            "version": "1.0.0",
+            "file": url,
+            "sha256": sha256,
+        }],
+    });
+    (serve("index.json", index.to_string()).await, url)
+}
+
+#[tokio::test]
+async fn the_store_lists_what_the_catalogue_holds_and_previews_an_install() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let (catalogue, file) = fake_store(WELCOME).await;
+    use_store(&admin, &catalogue).await;
+
+    let store = admin.page("/automations/browse").await;
+    assert!(store.contains("Welcome new members"), "{store}");
+    assert!(store.contains("Preview install"), "{store}");
+    assert!(store.contains("Sideporch doesn't review"), "{store}");
+
+    let preview = admin
+        .post("/automations/browse/install", &[("file", &file)])
+        .await;
+    assert_eq!(preview.status(), StatusCode::OK);
+    let page = preview.text().await.unwrap();
+    assert!(page.contains("Downloaded from"), "{page}");
+    assert!(page.contains("Welcome new members"), "{page}");
+
+    // The store only installs what it lists.
+    let stranger = admin
+        .post(
+            "/automations/browse/install",
+            &[("file", "http://127.0.0.1:9/elsewhere.json")],
+        )
+        .await;
+    let page = stranger.text().await.unwrap();
+    assert!(page.contains("isn't in the store"), "{page}");
+}
+
+#[tokio::test]
+async fn an_unreachable_store_says_so() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    use_store(&admin, "http://127.0.0.1:9/index.json").await;
+    let store = admin.page("/automations/browse").await;
+    assert!(store.contains("can't be reached"), "{store}");
+    assert!(store.contains("Automation settings"), "{store}");
+}
+
+#[tokio::test]
+async fn the_store_address_must_be_a_web_address() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let response = admin
+        .post(
+            "/settings/automations",
+            &[
+                ("timezone", "UTC"),
+                ("catalogue_url", "ftp://example.com/i.json"),
+            ],
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

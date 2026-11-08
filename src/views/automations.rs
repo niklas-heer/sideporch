@@ -50,6 +50,7 @@ pub fn list_page(
                 a href="/automations/new" class="btn" { (icon(icons::PLUS, "h-5 w-5")) "New automation" }
                 a href="/automations/new?kind=library" class="btn-quiet" { (icon(icons::PLUS, "h-4 w-4")) "New library" }
                 span class="ml-auto flex flex-wrap gap-2" {
+                    a href="/automations/browse" class="btn-quiet" { "Browse the store" }
                     a href="/automations/import" class="btn-quiet" { (icon(icons::UPLOAD_SIMPLE, "h-4 w-4")) "Import" }
                     @if !automations.is_empty() {
                         button type="submit" form="export-form" class="btn-quiet" title="Export the ticked automations, or all of them" {
@@ -727,6 +728,63 @@ pub fn import_preview(
                     a href="/automations/import" class="btn-quiet" { "Choose another file" }
                 }
             }
+        },
+    )
+}
+
+/// The automation store: what the catalogue lists, with a preview for each.
+pub fn browse_page(
+    shell: &Shell<'_>,
+    address: &str,
+    entries: &Result<Vec<crate::automations::catalogue::Entry>, String>,
+    notice: Option<&str>,
+) -> Markup {
+    panel_page(
+        "Automation store",
+        shell,
+        &html! { "Automation store" },
+        &html! {
+            (super::settings::tabs("/automations"))
+            p class="mb-5 text-muted dark:text-haint" {
+                "Automations other people publish, which you can install with a click. Each one is previewed first and starts switched off. "
+                "Sideporch doesn't review what's listed, so read a script before you switch it on."
+            }
+            @if let Some(notice) = notice {
+                p role="status" class="mb-5 rounded-lg border border-line bg-haint-2 px-3 py-2 text-sm text-floor dark:border-night-line dark:bg-floor-2 dark:text-haint-2" { (notice) }
+            }
+            @if let Err(error) = entries {
+                p class="mb-5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-200" {
+                    (error) " Try again in a few minutes, or point the store elsewhere under "
+                    a href="/settings/automations" class="underline" { "Automation settings" } "."
+                }
+            } @else if let Ok(entries) = entries {
+                @if entries.is_empty() {
+                    p class="text-muted dark:text-haint" { "The store lists no automations yet." }
+                }
+                ul class="space-y-3" {
+                    @for entry in entries {
+                        li class="rounded-xl border border-line p-4 dark:border-night-line" data-store-entry {
+                            div class="flex flex-wrap items-baseline gap-2" {
+                                span class="font-semibold" { (entry.name) }
+                                span class="text-xs text-muted dark:text-haint" { "version " (entry.version) }
+                            }
+                            @if !entry.description.is_empty() {
+                                p class="mt-1 text-sm" { (entry.description) }
+                            }
+                            p class="mt-2 flex flex-wrap gap-x-3 text-xs text-muted dark:text-haint" {
+                                @if let Some(author) = &entry.author { span { "by " (author) } }
+                                @if let Some(license) = &entry.license { span { "License " (license) } }
+                                @if let Some(homepage) = &entry.homepage { a href=(homepage) class="underline" rel="noopener noreferrer" { "Homepage" } }
+                            }
+                            form method="post" action="/automations/browse/install" class="mt-3" {
+                                input type="hidden" name="file" value=(entry.file);
+                                button type="submit" class="btn-quiet" { "Preview install" }
+                            }
+                        }
+                    }
+                }
+            }
+            p class="mt-6 text-sm text-muted dark:text-haint" { "Store: " code { (address) } }
         },
     )
 }

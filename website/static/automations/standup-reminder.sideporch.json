@@ -1,0 +1,16 @@
+{
+  "format": "sideporch-automations",
+  "version": 1,
+  "description": "A standup reminder in #general on weekday mornings.",
+  "author": "Sideporch",
+  "license": "MIT",
+  "homepage": "https://sideporch.app/docs/integrations/automations/store/",
+  "items": [
+    {
+      "kind": "automation",
+      "name": "Weekday standup reminder",
+      "description": "Posts a standup reminder in #general at nine on weekdays, in the server's automation time zone.",
+      "source": "sideporch.cron(\"0 9 * * mon-fri\", function()\n  sideporch.post(\"general\", \"Standup in ten minutes: what did you finish yesterday, and what are you on today?\")\nend)\n"
+    }
+  ]
+}

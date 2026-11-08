@@ -193,6 +193,14 @@ pub fn automation_settings_page(
                         code { "{ timezone = \"America/New_York\" }" } ". Use an IANA name."
                     }
                 }
+                div {
+                    label for="catalogue_url" class="field-label" { "Automation store" }
+                    input id="catalogue_url" name="catalogue_url" type="url" class="field font-mono text-sm" value=(settings.catalogue_url)
+                        placeholder=(crate::automations::catalogue::DEFAULT_URL);
+                    p class="mt-1 text-sm text-muted dark:text-haint" {
+                        "The index of automations to browse under Automations → Browse. Leave it empty for the default, or set your own catalogue's address."
+                    }
+                }
                 label class="flex items-start gap-2" {
                     input type="checkbox" name="allow_private_network" value="on" checked[settings.allow_private_network] class="mt-1 h-4 w-4 accent-floor";
                     span {
