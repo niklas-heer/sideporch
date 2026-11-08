@@ -1094,7 +1094,9 @@ mod tests {
     fn upgrading_keeps_old_threads_read_for_the_people_in_them() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sideporch.db");
-        create_at_version(&path, schema_version() - 1).unwrap();
+        // The version just before `thread_reads` was added. Later migrations
+        // only append, so this number stays right.
+        create_at_version(&path, 29).unwrap();
         let conn = connect(&path).unwrap();
         conn.execute_batch(
             "INSERT INTO users (id, username, display_name, password_hash, is_admin, created_at)
