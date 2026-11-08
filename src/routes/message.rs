@@ -42,6 +42,8 @@ pub fn router() -> Router<AppState> {
             "/c/{channel_id}/m/{message_id}/preview/remove",
             post(remove_preview),
         )
+        .route("/c/{channel_id}/t/{root_id}/follow", post(follow))
+        .route("/c/{channel_id}/t/{root_id}/unfollow", post(unfollow))
         .route("/c/{channel_id}/pins", get(pins))
         .route("/saved", get(saved))
         .route("/activity", get(activity))
@@ -105,17 +107,20 @@ async fn actions(
 ) -> AppResult<Markup> {
     let user_id = user.id;
     let updates = std::sync::Arc::clone(&state.updates);
-    let (message, sidebar, ctx, saved) = state
+    let (message, sidebar, ctx, saved, following) = state
         .db
         .call(move |conn| {
             let message = store::readable_message(conn, user_id, channel_id, message_id)?
                 .ok_or(AppError::NotFound)?;
             let saved = store::saved_ids(conn, user_id, &[&message])?;
+            let root = message.parent_id.unwrap_or(message.id);
+            let following = store::following_thread(conn, user_id, root)?;
             Ok((
                 message,
                 super::sidebar_with_update(conn, &updates, user_id)?,
                 store::render_context(conn)?,
                 saved,
+                following,
             ))
         })
         .await?;
@@ -125,7 +130,9 @@ async fn actions(
         current: Some(channel_id),
     };
     let render = Render::for_user(&ctx, user.id).with_saved(&saved);
-    Ok(views::messages::actions_page(&shell, &message, &render))
+    Ok(views::messages::actions_page(
+        &shell, &message, &render, following,
+    ))
 }
 
 /// Answers a background request with `body`, or a form with a redirect to
@@ -229,6 +236,57 @@ async fn save(
         &headers,
         &message_href(&message),
         json!({ "saved": saved }),
+    ))
+}
+
+/// Follows the thread at `root_id` without posting in it.
+async fn follow(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path((channel_id, root_id)): Path<(i64, i64)>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    set_following(&state, &user, channel_id, root_id, &headers, true).await
+}
+
+/// Stops following the thread at `root_id`, even if the person wrote in it.
+async fn unfollow(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path((channel_id, root_id)): Path<(i64, i64)>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    set_following(&state, &user, channel_id, root_id, &headers, false).await
+}
+
+/// Sets whether `user` follows a thread they can read. Following stays on
+/// this server: nothing about it is sent to other servers.
+async fn set_following(
+    state: &AppState,
+    user: &CurrentUser,
+    channel_id: i64,
+    root_id: i64,
+    headers: &HeaderMap,
+    following: bool,
+) -> AppResult<Response> {
+    let user_id = user.id;
+    let now = now_ms();
+    state
+        .db
+        .call(move |conn| {
+            let root = store::readable_message(conn, user_id, channel_id, root_id)?
+                .filter(|root| root.parent_id.is_none() && !root.deleted)
+                .ok_or(AppError::NotFound)?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            store::set_thread_following(&tx, user_id, root.id, following, now)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+    Ok(done(
+        headers,
+        &format!("/c/{channel_id}/t/{root_id}"),
+        json!({ "following": following }),
     ))
 }
 

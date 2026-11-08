@@ -24,11 +24,17 @@ fn located_heading(item: &Located) -> Markup {
     }
 }
 
-pub fn actions_page(shell: &Shell<'_>, message: &Message, render: &Render<'_>) -> Markup {
+pub fn actions_page(
+    shell: &Shell<'_>,
+    message: &Message,
+    render: &Render<'_>,
+    following: bool,
+) -> Markup {
     let base = format!("/c/{}/m/{}", message.channel_id, message.id);
     let own = matches!(message.author, Author::User { id, .. } if Some(id) == render.viewer);
     let can_delete =
         !message.deleted && (own || shell.user.may(crate::community::Permission::Moderate));
+    let root = message.parent_id.unwrap_or(message.id);
     panel_page(
         "Message",
         shell,
@@ -58,6 +64,7 @@ pub fn actions_page(shell: &Shell<'_>, message: &Message, render: &Render<'_>) -
                             @if render.is_saved(message.id) { "Remove from saved" } @else { "Save for later" }
                         }
                     }
+                    (super::thread_follow_button(message.channel_id, root, following, "btn-quiet"))
                 }
                 @if message.preview.is_some() && (own || shell.user.is_admin) {
                     form method="post" action={ (base) "/preview/remove" } {

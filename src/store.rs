@@ -1592,6 +1592,72 @@ pub fn mark_read(
     Ok(())
 }
 
+/// Whether `user_id` follows the thread at `root_id`: their own choice if
+/// they made one, otherwise whether they wrote in it.
+pub fn following_thread(conn: &Connection, user_id: i64, root_id: i64) -> AppResult<bool> {
+    Ok(conn.query_row(
+        "SELECT COALESCE(
+             (SELECT following FROM thread_follows WHERE user_id = ?1 AND root_message_id = ?2),
+             EXISTS (SELECT 1 FROM messages WHERE user_id = ?1 AND (id = ?2 OR parent_id = ?2)))",
+        params![user_id, root_id],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
+/// Follows or unfollows the thread at `root_id`. Following also marks the
+/// thread read, as opening it does.
+pub fn set_thread_following(
+    conn: &Connection,
+    user_id: i64,
+    root_id: i64,
+    following: bool,
+    now: i64,
+) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO thread_follows (user_id, root_message_id, following, updated_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (user_id, root_message_id) DO UPDATE SET following = excluded.following, updated_at = excluded.updated_at",
+        params![user_id, root_id, following, now],
+    )?;
+    if following {
+        mark_thread_read(conn, user_id, root_id)?;
+    }
+    Ok(())
+}
+
+/// Records that `user_id` has read the thread at `root_id` to its newest
+/// message. Opening a thread does this.
+pub fn mark_thread_read(conn: &Connection, user_id: i64, root_id: i64) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO thread_reads (user_id, root_message_id, last_read_id)
+         SELECT ?1, ?2, MAX(id) FROM messages WHERE id = ?2 OR parent_id = ?2
+         ON CONFLICT (user_id, root_message_id) DO UPDATE SET last_read_id = MAX(last_read_id, excluded.last_read_id)",
+        params![user_id, root_id],
+    )?;
+    Ok(())
+}
+
+/// Records a reply `user_id` just posted: they have read the thread up to
+/// it, and an explicit unfollow ends, because replying is a way back in.
+pub fn thread_replied(
+    conn: &Connection,
+    user_id: i64,
+    root_id: i64,
+    reply_id: i64,
+    now: i64,
+) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO thread_reads (user_id, root_message_id, last_read_id) VALUES (?1, ?2, ?3)
+         ON CONFLICT (user_id, root_message_id) DO UPDATE SET last_read_id = MAX(last_read_id, excluded.last_read_id)",
+        params![user_id, root_id, reply_id],
+    )?;
+    conn.execute(
+        "UPDATE thread_follows SET following = 1, updated_at = ?3
+         WHERE user_id = ?1 AND root_message_id = ?2 AND following = 0",
+        params![user_id, root_id, now],
+    )?;
+    Ok(())
+}
+
 pub fn latest_message_id(conn: &Connection, channel_id: i64) -> AppResult<Option<i64>> {
     Ok(conn.query_row(
         "SELECT MAX(id) FROM messages WHERE channel_id = ?1",
@@ -2903,7 +2969,8 @@ pub struct Recipients {
     pub notify: Vec<i64>,
     /// People mentioned by name, or by `@channel` and `@here`.
     pub mentioned: Vec<i64>,
-    /// People who took part in the thread, for their Activity page.
+    /// People who wrote in the thread or follow it, without having
+    /// unfollowed it, for their Activity page.
     pub thread: Vec<i64>,
 }
 
@@ -2926,8 +2993,14 @@ pub fn recipients(
         )?;
     let mut thread = Vec::new();
     if let Some(parent) = message.parent_id {
+        // Everyone who wrote in the thread or follows it, except people who
+        // explicitly unfollowed it.
         let mut statement = conn.prepare(
-            "SELECT DISTINCT user_id FROM messages WHERE (id = ?1 OR parent_id = ?1) AND user_id IS NOT NULL",
+            "SELECT user_id FROM messages
+             WHERE (id = ?1 OR parent_id = ?1) AND user_id IS NOT NULL
+               AND user_id NOT IN (SELECT user_id FROM thread_follows WHERE root_message_id = ?1 AND following = 0)
+             UNION
+             SELECT user_id FROM thread_follows WHERE root_message_id = ?1 AND following = 1",
         )?;
         for user in statement.query_map([parent], |row| row.get::<_, i64>(0))? {
             thread.push(user?);

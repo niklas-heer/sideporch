@@ -916,17 +916,21 @@ async fn render_channel(
             let saved = store::saved_ids(conn, user_id, &shown)?;
             let pins = store::pinned_count(conn, channel_id)?;
             let edit_window = messages::edit_window(conn)?;
+            let following = match &thread {
+                Some((root, _)) => store::following_thread(conn, user_id, root.id)?,
+                None => false,
+            };
             Ok((
                 channel,
                 messages,
                 older,
                 thread,
                 sidebar,
-                (ctx, favorites, gifs, saved, (pins, edit_window)),
+                (ctx, favorites, gifs, saved, (pins, edit_window, following)),
             ))
         })
         .await?;
-    let (ctx, favorites, gifs, saved, (pins, edit_window)) = ctx;
+    let (ctx, favorites, gifs, saved, (pins, edit_window, following)) = ctx;
     let shell = Shell {
         user,
         sidebar: &sidebar,
@@ -941,6 +945,7 @@ async fn render_channel(
             thread: thread
                 .as_ref()
                 .map(|(root, replies)| (root, replies.as_slice())),
+            following,
             render: &Render::for_user(&ctx, user_id).with_saved(&saved),
             favorites: &favorites,
             gifs: &gifs,

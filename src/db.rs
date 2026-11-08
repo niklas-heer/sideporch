@@ -697,6 +697,37 @@ ALTER TABLE users ADD COLUMN quiet_hours_end INTEGER NOT NULL DEFAULT 420;
 ALTER TABLE users ADD COLUMN quiet_hours_days INTEGER NOT NULL DEFAULT 127;
 ",
     ),
+    Migration::Sql(
+        r"
+-- Threads people follow on purpose. `following = 0` is an explicit
+-- unfollow, which holds even while they are still among the people who
+-- wrote in the thread; `following = 1` follows it without posting.
+CREATE TABLE thread_follows (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    root_message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    following INTEGER NOT NULL CHECK (following IN (0, 1)),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, root_message_id)
+);
+CREATE INDEX thread_follows_by_root ON thread_follows (root_message_id);
+
+-- The newest reply each person has seen in a thread. Replies after it
+-- from other people are unread. Without a row, every reply is unread.
+CREATE TABLE thread_reads (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    root_message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    last_read_id INTEGER NOT NULL,
+    PRIMARY KEY (user_id, root_message_id)
+);
+-- People who already took part in a thread with replies have read it, so
+-- upgrading doesn't mark every old thread unread.
+INSERT INTO thread_reads (user_id, root_message_id, last_read_id)
+SELECT p.user_id, p.root, MAX(r.id)
+FROM (SELECT DISTINCT user_id, COALESCE(parent_id, id) AS root FROM messages WHERE user_id IS NOT NULL) p
+JOIN messages r ON r.parent_id = p.root
+GROUP BY p.user_id, p.root;
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix
@@ -958,6 +989,41 @@ mod tests {
             .unwrap()
             .count();
         assert_eq!(copies, KEEP_COPIES);
+    }
+
+    #[test]
+    fn upgrading_keeps_old_threads_read_for_the_people_in_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sideporch.db");
+        create_at_version(&path, schema_version() - 1).unwrap();
+        let conn = connect(&path).unwrap();
+        conn.execute_batch(
+            "INSERT INTO users (id, username, display_name, password_hash, is_admin, created_at)
+               VALUES (1, 'ada', 'Ada', 'x', 1, 0), (2, 'bea', 'Bea', 'x', 0, 0);
+             INSERT INTO channels (id, kind, name, created_at) VALUES (1, 'public', 'general', 0);
+             INSERT INTO messages (id, channel_id, parent_id, user_id, body, created_at) VALUES
+               (1, 1, NULL, 1, 'plan', 0),
+               (2, 1, 1, 2, 'in', 0),
+               (3, 1, NULL, 1, 'alone', 0);",
+        )
+        .unwrap();
+        drop(conn);
+        drop(Db::open(&path).unwrap());
+
+        let conn = connect(&path).unwrap();
+        let mut statement = conn
+            .prepare(
+                "SELECT user_id, root_message_id, last_read_id FROM thread_reads ORDER BY user_id",
+            )
+            .unwrap();
+        let rows: Vec<(i64, i64, i64)> = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        // Both people read the thread up to its newest reply. A post with
+        // no replies has no thread to read yet.
+        assert_eq!(rows, [(1, 1, 2), (2, 1, 2)]);
     }
 
     #[test]

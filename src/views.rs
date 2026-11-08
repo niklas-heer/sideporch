@@ -677,6 +677,8 @@ pub struct ChannelView<'a> {
     pub messages: &'a [Message],
     pub older: Option<i64>,
     pub thread: Option<(&'a Message, &'a [Message])>,
+    /// Whether the viewer follows the open thread.
+    pub following: bool,
     pub render: &'a Render<'a>,
     /// Emoji names the reaction picker shows first.
     pub favorites: &'a [String],
@@ -773,7 +775,7 @@ pub fn channel_page(shell: &Shell<'_>, view: &ChannelView<'_>) -> Markup {
             channel,
             root,
             replies,
-            view.render,
+            view,
             shell.user.grants,
             shell.user.speech.dictation,
         )
@@ -828,14 +830,34 @@ fn empty_channel(channel: &Channel) -> Markup {
     }
 }
 
+/// The button that follows or unfollows a thread, posting to its root.
+pub fn thread_follow_button(channel_id: i64, root_id: i64, following: bool, class: &str) -> Markup {
+    let action = format!(
+        "/c/{channel_id}/t/{root_id}/{}",
+        if following { "unfollow" } else { "follow" }
+    );
+    html! {
+        form method="post" action=(action) {
+            button type="submit" class=(class) {
+                @if following {
+                    (icon(icons::BELL_SLASH, "h-4 w-4")) "Unfollow thread"
+                } @else {
+                    (icon(icons::BELL, "h-4 w-4")) "Follow thread"
+                }
+            }
+        }
+    }
+}
+
 fn thread_panel(
     channel: &Channel,
     root: &Message,
     replies: &[Message],
-    render: &Render<'_>,
+    view: &ChannelView<'_>,
     grants: crate::community::Grants,
     dictation: bool,
 ) -> Markup {
+    let render = view.render;
     html! {
         aside aria-label="Thread" class="flex min-w-0 flex-1 flex-col border-line lg:border-l lg:w-96 lg:flex-none xl:w-[28rem] dark:border-night-line" {
             header class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-5 dark:border-night-line" {
@@ -843,7 +865,10 @@ fn thread_panel(
                 span class="truncate text-sm text-muted dark:text-haint" {
                     @if channel.kind != ChannelKind::Direct { "#" } (channel.name)
                 }
-                a href={ "/c/" (channel.id) } class="ml-auto rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night-2" aria-label="Close thread" {
+                div class="ml-auto" {
+                    (thread_follow_button(channel.id, root.id, view.following, "btn-quiet"))
+                }
+                a href={ "/c/" (channel.id) } class="rounded-lg p-2 text-muted hover:bg-screen hover:text-ink dark:text-haint dark:hover:bg-night-2" aria-label="Close thread" {
                     (icon(icons::X, "h-5 w-5"))
                 }
             }

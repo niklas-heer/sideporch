@@ -120,6 +120,9 @@ pub async fn post_from(
                 )?;
             } else if let Some(user_id) = user_id {
                 store::mark_read(&tx, user_id, draft.channel_id, id)?;
+                if let Some(root) = parent_id {
+                    store::thread_replied(&tx, user_id, root, id, now)?;
+                }
                 // Taking part is how people earn trust.
                 crate::community::refresh(&tx, user_id, now)?;
             }
