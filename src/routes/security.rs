@@ -109,10 +109,21 @@ pub async fn after_first_step(
     user_id: i64,
     next: Option<&str>,
 ) -> AppResult<Response> {
-    let factors = state
+    let now = now_ms();
+    let (factors, recovering) = state
         .db
-        .call(move |conn| security::factors(conn, user_id))
+        .call(move |conn| {
+            Ok((
+                security::factors(conn, user_id)?,
+                security::recovering(conn, user_id, now)?,
+            ))
+        })
         .await?;
+    // A reset link from the server is the only way in while it's unused;
+    // using it removes it before coming here.
+    if recovering {
+        return Err(AppError::bad_request(security::RECOVERING));
+    }
     let next = next.and_then(auth::safe_next).unwrap_or("/");
     if !factors.second_step() {
         let cookie = auth::start_session(state, user_id).await?;
@@ -120,7 +131,6 @@ pub async fn after_first_step(
     }
     let token = auth::random_token()?;
     let hash = auth::hash_token(&token);
-    let now = now_ms();
     state
         .db
         .call(move |conn| security::start_pending(conn, &hash, user_id, now))
@@ -771,7 +781,11 @@ async fn send_link(
             let Some(user_id) = security::user_by_email(conn, &lookup)? else {
                 return Ok(None);
             };
-            if security::recent_links(conn, user_id, now)? >= 5 {
+            // No links while the account is recovered from the server: its
+            // mailbox may be open on the lost device.
+            if security::recent_links(conn, user_id, now)? >= 5
+                || security::recovering(conn, user_id, now)?
+            {
                 return Ok(None);
             }
             let valid = LINK_MINUTES.saturating_mul(MINUTE_MS);

@@ -481,6 +481,29 @@ async fn access_does_not_get_around_requiring_passkeys() {
 }
 
 #[tokio::test]
+async fn access_waits_while_the_account_is_recovered_from_the_server() {
+    let (server, _) = server(false).await;
+    set_up(&server, "ada@example.com").await;
+    // A lost laptop may still have its Access session.
+    let lost = through_access(&server, &assertion("ada@example.com"));
+    let link = sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
+    let response = lost.get("/login").await;
+    assert_eq!(session_cookie(&response), None);
+    assert!(response.text().await.unwrap().contains("being recovered"));
+
+    // Once the link is used, Access signs in again.
+    let mut ada = Browser::anonymous(&server);
+    let used = ada
+        .submit(&link.path, &[("password", "a brand new one")])
+        .await;
+    assert_eq!(location(&used), "/");
+    let response = through_access(&server, &assertion("ada@example.com"))
+        .get("/login")
+        .await;
+    assert!(session_cookie(&response).is_some());
+}
+
+#[tokio::test]
 async fn signing_out_without_access_stays_on_this_server() {
     let (server, _) = server(false).await;
     set_up(&server, "ada@example.com").await;

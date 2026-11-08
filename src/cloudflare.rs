@@ -518,20 +518,31 @@ pub async fn at_login(state: &AppState, headers: &HeaderMap) -> AppResult<AtLogi
             let Some(user_id) = account_for(conn, &lookup)? else {
                 return Ok(None);
             };
+            // A reset link made on the server (`sideporch reset-link`)
+            // means the account is being recovered, maybe from a lost
+            // device that still has its Access session: until the link is
+            // used, Access doesn't sign it in.
+            if security::recovering(conn, user_id, crate::now_ms())? {
+                return Ok(Some(Err(security::RECOVERING)));
+            }
             // With passkeys required, Access works like a password: only
             // until the account has a passkey.
-            let passkey_only = Policy::load(conn)?.require == Requirement::Passkeys
-                && security::factors(conn, user_id)?.passkeys > 0;
-            Ok(Some((user_id, passkey_only)))
+            if Policy::load(conn)?.require == Requirement::Passkeys
+                && security::factors(conn, user_id)?.passkeys > 0
+            {
+                return Ok(Some(Err(
+                    "This Sideporch signs in with passkeys. Use the passkey button below.",
+                )));
+            }
+            Ok(Some(Ok(user_id)))
         })
         .await?;
     Ok(match found {
-        Some((_, true)) => AtLogin::Explain {
-            notice: "This Sideporch signs in with passkeys. Use the passkey button below."
-                .to_owned(),
+        Some(Err(notice)) => AtLogin::Explain {
+            notice: notice.to_owned(),
             next: None,
         },
-        Some((user_id, false)) => AtLogin::SignIn(user_id),
+        Some(Ok(user_id)) => AtLogin::SignIn(user_id),
         None => AtLogin::Explain {
             notice: format!(
                 "Cloudflare Access signed you in as {email}, but no account here uses that address. If you have an account, sign in below to link the address to it."

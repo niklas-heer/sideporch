@@ -946,4 +946,41 @@ async fn email_confirms_addresses_signs_in_and_resets_passwords() {
     assert_eq!(location(&response), "/");
     let (_, response) = sign_in(&server, "ada", "a brand new one").await;
     assert_eq!(location(&response), "/");
+
+    // While a link from the server recovers the account, its mailbox may be
+    // on the lost device: email sends no links, and an emailed reset link
+    // from before can't replace the server's.
+    anonymous
+        .post(
+            "/login/email",
+            &[("email", "ada@example.com"), ("purpose", "reset")],
+        )
+        .await;
+    let early = link_in(&mails.lock().unwrap().last().unwrap().clone(), "/reset/");
+    let recovery = sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
+    let sent = mails.lock().unwrap().len();
+    for purpose in ["", "reset"] {
+        anonymous
+            .post(
+                "/login/email",
+                &[("email", "ada@example.com"), ("purpose", purpose)],
+            )
+            .await;
+    }
+    assert_eq!(
+        mails.lock().unwrap().len(),
+        sent,
+        "no mail while recovering"
+    );
+    assert_eq!(anonymous.get(&early).await.status(), StatusCode::GONE);
+    let mut browser = Browser::anonymous(&server);
+    let response = browser
+        .submit(&recovery.path, &[("password", "recovered at last")])
+        .await;
+    assert_eq!(location(&response), "/");
+    // Afterwards, email works again.
+    anonymous
+        .post("/login/email", &[("email", "ada@example.com")])
+        .await;
+    assert_eq!(mails.lock().unwrap().len(), sent + 1);
 }

@@ -624,7 +624,11 @@ pub fn password_reset_user(
                  SELECT r.user_id FROM password_resets r WHERE r.token_hash = ?1 AND r.expires_at > ?2
                  UNION ALL
                  SELECT l.user_id FROM login_links l
-                 WHERE l.token_hash = ?1 AND l.purpose = 'reset' AND l.expires_at > ?2)",
+                 WHERE l.token_hash = ?1 AND l.purpose = 'reset' AND l.expires_at > ?2
+                   -- While a link from the server recovers the account,
+                   -- emailed ones can't replace it.
+                   AND NOT EXISTS (SELECT 1 FROM password_resets s
+                       WHERE s.user_id = l.user_id AND s.created_by IS NULL AND s.expires_at > ?2))",
             params![token_hash, now],
             |row| row.get(0),
         )
