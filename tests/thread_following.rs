@@ -289,10 +289,20 @@ async fn unfollowed_threads_leave_the_list_and_started_ones_join_it() {
     let server = start().await;
     let ada = admin(&server).await;
     let channel = home_channel(&ada).await;
+    let cy = invite(&server, &ada, "Cy", "cy").await;
     let root = post_root(&ada, channel, "Plan A?").await;
+    // A plain post nobody answered is not a thread yet.
+    post_root(&ada, channel, "Lunch?").await;
+    assert!(!ada.page("/activity").await.contains("Lunch?"));
 
-    // Ada started the thread, so she follows it without choosing to.
+    // Ada wrote the thread, so she follows it once someone replies.
+    assert!(!ada.page("/activity").await.contains("Plan A?"));
+    assert_eq!(
+        cy.send(channel, "Friday works", Some(root)).await,
+        StatusCode::NO_CONTENT
+    );
     assert!(ada.page("/activity").await.contains("Plan A?"));
+
     assert_eq!(
         ada.post(&format!("/c/{channel}/t/{root}/unfollow"), &[])
             .await

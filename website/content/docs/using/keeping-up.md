@@ -8,7 +8,7 @@ weight = 4
 
 **Activity** collects what's addressed to you: messages that mention you (or `@channel` and `@here` in your channels), and replies in threads you're part of. It's the place to catch up after time away.
 
-At the top, **Threads you follow** lists the threads you started, wrote in or chose to follow, without the ones you unfollowed. Threads with replies you haven't read come first, marked **New replies**; the rest follow, most recent first. Opening a thread marks it read. Follow a thread without replying from its panel or the message's menu, and unfollow it the same way: its replies stop reaching you, but a mention still does, and replying in it follows it again.
+At the top, **Threads you follow** lists the threads you wrote in, chose to follow, or started once someone replied, without the ones you unfollowed. A plain post nobody has answered isn't a thread yet. Threads with replies you haven't read come first, marked **New replies**; the rest follow, most recent first. Opening a thread marks it read. Follow a thread without replying from its panel or the message's menu, and unfollow it the same way: its replies stop reaching you, but a mention still does, and replying in it follows it again.
 
 ## Saved
 

@@ -3154,6 +3154,10 @@ pub fn followed_threads(conn: &Connection, user_id: i64) -> AppResult<Vec<Follow
          WHERE m.parent_id IS NULL AND m.deleted_at IS NULL AND {}
            AND m.id IN (SELECT root_message_id FROM thread_follows WHERE user_id = ?1 AND following = 1
                         UNION SELECT COALESCE(parent_id, id) FROM messages WHERE user_id = ?1)
+           -- A post nobody has replied to is not a thread yet, unless followed.
+           AND (EXISTS (SELECT 1 FROM messages r WHERE r.parent_id = m.id)
+                OR EXISTS (SELECT 1 FROM thread_follows f
+                           WHERE f.user_id = ?1 AND f.root_message_id = m.id AND f.following = 1))
            AND NOT EXISTS (SELECT 1 FROM thread_follows f
                            WHERE f.user_id = ?1 AND f.root_message_id = m.id AND f.following = 0)
          ORDER BY unread DESC,
