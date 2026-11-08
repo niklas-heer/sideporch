@@ -29,6 +29,8 @@
                 # Tests keep the API page generated from src/automations/api.rs,
                 # and check every Lua example in the docs.
                 ./website/content/docs
+                # The store's example files are read by a test.
+                ./website/static/automations
               ];
             };
             cargoLock.lockFile = ./Cargo.lock;
