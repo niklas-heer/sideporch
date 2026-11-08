@@ -45,12 +45,18 @@ People who don't meet the setting yet are walked through adding what's missing a
 
 After a lost phone, an admin resets someone's passkeys and authenticator app from their profile; they set them up again at their next sign-in. Someone who only had a passkey also needs a reset link from their profile to choose a password.
 
-When the only admin loses their way in, make a reset link on the server, which works for 24 hours. Add `--reset-sign-in` when their passkey or authenticator app is what's lost: it removes those too, so the new password is enough to get in, and they add new ones afterwards.
+When the only admin forgot their password, make a reset link on the server, which works for 24 hours:
 
 ```sh
 sideporch reset-link ada --data /var/lib/sideporch
-docker exec sideporch /sideporch reset-link ada --reset-sign-in             # with Docker
-fly machine exec MACHINE_ID "/sideporch reset-link ada --reset-sign-in"     # on Fly.io
+docker exec sideporch /sideporch reset-link ada            # with Docker
+fly machine exec MACHINE_ID "/sideporch reset-link ada"    # on Fly.io
+```
+
+When their passkey or authenticator app is what's lost, add `--reset-sign-in`: it removes those, signs the account out everywhere and clears its password, so whoever has the lost device can't get in, and the link is the only way back. They add a new passkey afterwards.
+
+```sh
+sideporch reset-link ada --reset-sign-in --data /var/lib/sideporch
 ```
 
 ## Email
@@ -77,7 +83,7 @@ Sideporch doesn't send notifications by email, only these sign-in messages.
 
 Set it up in Cloudflare One:
 
-1. Under **Access → Applications**, add a **self-hosted** application for your chat's address, such as `chat.example.com`, with a policy that allows your people.
+1. Under **Access → Applications**, add a **self-hosted** application for your chat's whole address, such as `chat.example.com`, not only some paths, with a policy that allows your people. Signing out ends the Access session too only when Access covers the whole address.
 2. Copy the application's **Audience (AUD) tag** from its overview, and your **team domain** (`myteam.cloudflareaccess.com`) from **Settings → Team name and domain**.
 3. Start Sideporch with both:
 

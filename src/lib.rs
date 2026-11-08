@@ -496,8 +496,9 @@ pub struct ResetLink {
 /// This is `sideporch reset-link`: the way back in for someone, often the
 /// only admin, who lost their password or passkey, from a shell on the
 /// server. `reset_sign_in` also removes the account's passkeys and
-/// authenticator app, for when those are what was lost; a reset link
-/// alone still asks for them after the new password.
+/// authenticator app, for when those are what was lost, and signs it out
+/// everywhere with its password cleared, so the link is the only way in; a
+/// reset link alone still asks for them after the new password.
 ///
 /// # Errors
 ///
@@ -529,8 +530,17 @@ pub fn reset_link(
         ))
     })?;
     if reset_sign_in {
+        // Whatever was lost may be in someone else's hands: until the link
+        // is used, nothing else signs in, not a session, the old password
+        // or an email link, so nobody can add a passkey of their own.
         security::reset_factors(&tx, user_id)?;
         tx.execute("DELETE FROM pending_logins WHERE user_id = ?1", [user_id])?;
+        tx.execute("DELETE FROM login_links WHERE user_id = ?1", [user_id])?;
+        tx.execute(
+            "UPDATE users SET password_hash = '' WHERE id = ?1",
+            [user_id],
+        )?;
+        store::end_sessions(&tx, user_id, None)?;
     }
     let token = auth::random_token()?;
     let now = now_ms();

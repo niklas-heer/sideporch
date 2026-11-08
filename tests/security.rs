@@ -587,10 +587,10 @@ async fn reset_links_from_the_command_line_let_admins_back_in() {
 async fn an_admin_who_lost_their_only_passkey_gets_back_in_from_the_server() {
     let server = start().await;
     let mut ada = Browser::anonymous(&server);
-    let mut device = Authenticator::new(&server.base);
-    let created = create_with_passkey(&mut ada, &mut device, "/setup", "Ada Admin", "ada").await;
+    // The passkey is lost, maybe with a laptop someone else now has.
+    let mut lost = Authenticator::new(&server.base);
+    let created = create_with_passkey(&mut ada, &mut lost, "/setup", "Ada Admin", "ada").await;
     assert_eq!(created.status(), StatusCode::SEE_OTHER);
-    drop(device);
 
     // A reset link alone still asks for the lost passkey, and says so.
     let link = sideporch::reset_link(server.data_dir(), "ada", false).unwrap();
@@ -601,9 +601,28 @@ async fn an_admin_who_lost_their_only_passkey_gets_back_in_from_the_server() {
         .await;
     assert_eq!(location(&response), "/login/verify");
 
-    // Resetting sign-in too removes it, so the new password is enough.
+    // Whoever has the lost device is signed in, and knows the password.
+    let mut thief = Browser::anonymous(&server);
+    assert_eq!(
+        passkey_sign_in(&mut thief, &mut lost).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(thief.get("/home").await.status(), StatusCode::OK);
+
+    // Resetting sign-in too shuts every other way in at once: the session,
+    // the passkey and the password. Only the new link works.
     let link = sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
     assert!(!link.second_step);
+    assert_eq!(thief.get("/home").await.status(), StatusCode::SEE_OTHER);
+    assert_ne!(
+        passkey_sign_in(&mut Browser::anonymous(&server), &mut lost)
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let (_, old_password) = sign_in(&server, "ada", "a brand new one").await;
+    assert_ne!(old_password.status(), StatusCode::SEE_OTHER);
+
     let mut back = Browser::anonymous(&server);
     let response = back
         .submit(&link.path, &[("password", "another new one")])

@@ -174,8 +174,11 @@ async fn reset(
     state
         .db
         .call(move |conn| {
-            store::set_password(conn, user_id, &hash)?;
-            store::end_sessions(conn, user_id, None)
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            store::set_password(&tx, user_id, &hash)?;
+            store::end_sessions(&tx, user_id, None)?;
+            tx.commit()?;
+            Ok(())
         })
         .await?;
     // A reset replaces the password, not a passkey or authenticator app.
