@@ -318,22 +318,25 @@ pub fn reset_factors(conn: &Connection, user_id: i64) -> AppResult<()> {
     set_totp(conn, user_id, None, 0)
 }
 
-/// Whether the account is being recovered with a reset link made on the
-/// server (`sideporch reset-link`, the only kind without an admin who made
-/// it). Until it's used, that link is the only way in: whatever was lost
-/// may be in someone else's hands, with its email or Access session.
-pub fn recovering(conn: &Connection, user_id: i64, now: i64) -> AppResult<bool> {
-    Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM password_resets
-         WHERE user_id = ?1 AND created_by IS NULL AND expires_at > ?2)",
-        params![user_id, now],
-        |row| row.get(0),
-    )?)
+/// Whether the account is being recovered from the server (`sideporch
+/// reset-link --reset-sign-in`). Until a new password is set through a
+/// reset link, nothing else signs it in, however long that takes:
+/// whatever was lost may be in someone else's hands, with its email or
+/// Access session.
+pub fn recovering(conn: &Connection, user_id: i64) -> AppResult<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT recovering_since IS NOT NULL FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(false))
 }
 
 /// What people see when they try another way into an account that is
 /// being recovered.
-pub const RECOVERING: &str = "This account is being recovered with a reset link from the server. Open that link to choose a new password.";
+pub const RECOVERING: &str = "This account is being recovered with a reset link from the server. Open that link to choose a new password, or ask for a new one.";
 
 // Signing in in steps
 

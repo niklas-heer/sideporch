@@ -572,9 +572,10 @@ pub fn password_hash(conn: &Connection, user_id: i64) -> AppResult<Option<String
         .optional()?)
 }
 
+/// Sets a new password, which also ends recovering the account.
 pub fn set_password(conn: &Connection, user_id: i64, hash: &str) -> AppResult<()> {
     conn.execute(
-        "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+        "UPDATE users SET password_hash = ?1, recovering_since = NULL WHERE id = ?2",
         params![hash, user_id],
     )?;
     conn.execute("DELETE FROM password_resets WHERE user_id = ?1", [user_id])?;
@@ -625,10 +626,10 @@ pub fn password_reset_user(
                  UNION ALL
                  SELECT l.user_id FROM login_links l
                  WHERE l.token_hash = ?1 AND l.purpose = 'reset' AND l.expires_at > ?2
-                   -- While a link from the server recovers the account,
-                   -- emailed ones can't replace it.
-                   AND NOT EXISTS (SELECT 1 FROM password_resets s
-                       WHERE s.user_id = l.user_id AND s.created_by IS NULL AND s.expires_at > ?2))",
+                   -- While the server recovers the account, emailed links
+                   -- can't stand in for its reset link.
+                   AND NOT EXISTS (SELECT 1 FROM users r
+                       WHERE r.id = l.user_id AND r.recovering_since IS NOT NULL))",
             params![token_hash, now],
             |row| row.get(0),
         )

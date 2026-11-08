@@ -486,12 +486,22 @@ async fn access_waits_while_the_account_is_recovered_from_the_server() {
     set_up(&server, "ada@example.com").await;
     // A lost laptop may still have its Access session.
     let lost = through_access(&server, &assertion("ada@example.com"));
-    let link = sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
+    sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
     let response = lost.get("/login").await;
     assert_eq!(session_cookie(&response), None);
     assert!(response.text().await.unwrap().contains("being recovered"));
 
-    // Once the link is used, Access signs in again.
+    // Nobody used the link in time. The account stays shut until a new
+    // password is set, and running the command again gives a new link.
+    let database = rusqlite::Connection::open(server.data_dir().join("sideporch.db")).unwrap();
+    database
+        .execute("UPDATE password_resets SET expires_at = 0", [])
+        .unwrap();
+    let response = lost.get("/login").await;
+    assert_eq!(session_cookie(&response), None);
+    let link = sideporch::reset_link(server.data_dir(), "ada", false).unwrap();
+
+    // Once a link is used, Access signs in again.
     let mut ada = Browser::anonymous(&server);
     let used = ada
         .submit(&link.path, &[("password", "a brand new one")])

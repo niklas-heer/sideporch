@@ -537,8 +537,8 @@ pub fn reset_link(
         tx.execute("DELETE FROM pending_logins WHERE user_id = ?1", [user_id])?;
         tx.execute("DELETE FROM login_links WHERE user_id = ?1", [user_id])?;
         tx.execute(
-            "UPDATE users SET password_hash = '' WHERE id = ?1",
-            [user_id],
+            "UPDATE users SET password_hash = '', recovering_since = ?2 WHERE id = ?1",
+            rusqlite::params![user_id, now_ms()],
         )?;
         store::end_sessions(&tx, user_id, None)?;
     }

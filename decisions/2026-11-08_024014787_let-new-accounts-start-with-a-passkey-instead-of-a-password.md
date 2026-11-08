@@ -19,7 +19,7 @@ New accounts can sign in with a passkey from the start, instead of a password. T
 - Passkey accounts store an empty password hash, which `auth::verify_password` never accepts, as with imported accounts; no schema change.
 - A new passkey counts as both sign-in steps, like signing in with one, so the account is signed in right away and meets every policy.
 - Sign-ups that wait for approval keep using a password, because the waiting row stores a password hash until someone approves it.
-- Lockouts: an account without a password adds one under Account without an old one; its only passkey can't be removed until it has another way in; and `sideporch reset-link USERNAME` prints a 24-hour reset link from the server, for an admin with nobody else to ask. A reset link still asks for the second step afterwards, so `--reset-sign-in` also removes the passkeys and authenticator app when those are what was lost; the council review found the lockout without it.
+- Lockouts: an account without a password adds one under Account without an old one; its only passkey can't be removed until it has another way in; and `sideporch reset-link USERNAME` prints a 24-hour reset link from the server, for an admin with nobody else to ask. A reset link still asks for the second step afterwards, so `--reset-sign-in` also removes the passkeys and authenticator app when those are what was lost; the council review found the lockout without it. It also marks the account (`users.recovering_since`), signs it out everywhere and clears its password; until a new password is set through a reset link, no other way in (Cloudflare Access, email links) works, even after the link expires, because the lost device may still have those sessions.
 
 ## Context
 

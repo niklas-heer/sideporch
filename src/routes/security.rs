@@ -115,7 +115,7 @@ pub async fn after_first_step(
         .call(move |conn| {
             Ok((
                 security::factors(conn, user_id)?,
-                security::recovering(conn, user_id, now)?,
+                security::recovering(conn, user_id)?,
             ))
         })
         .await?;
@@ -784,7 +784,7 @@ async fn send_link(
             // No links while the account is recovered from the server: its
             // mailbox may be open on the lost device.
             if security::recent_links(conn, user_id, now)? >= 5
-                || security::recovering(conn, user_id, now)?
+                || security::recovering(conn, user_id)?
             {
                 return Ok(None);
             }

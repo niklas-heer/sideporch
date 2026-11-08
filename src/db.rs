@@ -677,6 +677,13 @@ ALTER TABLE users ADD COLUMN level_noticed INTEGER;
 ALTER TABLE channels ADD COLUMN kept INTEGER NOT NULL DEFAULT 0;
 ",
     ),
+    Migration::Sql(
+        r"
+-- When `sideporch reset-link --reset-sign-in` began recovering the
+-- account; until a new password is set, only reset links sign it in.
+ALTER TABLE users ADD COLUMN recovering_since INTEGER;
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

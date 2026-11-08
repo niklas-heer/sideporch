@@ -522,7 +522,7 @@ pub async fn at_login(state: &AppState, headers: &HeaderMap) -> AppResult<AtLogi
             // means the account is being recovered, maybe from a lost
             // device that still has its Access session: until the link is
             // used, Access doesn't sign it in.
-            if security::recovering(conn, user_id, crate::now_ms())? {
+            if security::recovering(conn, user_id)? {
                 return Ok(Some(Err(security::RECOVERING)));
             }
             // With passkeys required, Access works like a password: only
