@@ -16,8 +16,8 @@ with the things people miss from Slack, on a server you control.</p>
 </p>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="website/static/img/0.6.0/channel-dark.webp">
-  <img src="website/static/img/0.6.0/channel.webp" alt="A Sideporch channel with a thread open on the right: messages with reactions, a checklist, and a ranked poll showing which restaurant leads after three rounds.">
+  <source media="(prefers-color-scheme: dark)" srcset="website/static/img/0.7.0/channel-dark.webp">
+  <img src="website/static/img/0.7.0/channel.webp" alt="A Sideporch channel with a thread open on the right: messages with reactions, a checklist, and a ranked poll showing which restaurant leads after three rounds.">
 </picture>
 
 > **Status:** early. It works end to end, but expect rough edges and breaking changes before 1.0.
@@ -75,7 +75,7 @@ Docker, Homebrew, Nix and NixOS work too. The documentation walks through [insta
 - **Webhooks and Lua automations**, written and tested in the browser, or by AI through MCP, and shared between servers as files. [Automations](https://sideporch.app/docs/integrations/automations/), [examples](https://sideporch.app/docs/integrations/automations/examples/)
 - **Small**: half a CPU and 512 MB served 4,800 people online at once in load tests. [How big a server](https://sideporch.app/docs/community/server/server-size/)
 
-![The automation editor: a Lua script that asks for deploy approvals, with what it listens to, a test run panel and Ask AI.](website/static/img/0.6.0/automation.webp)
+![The automation editor: a Lua script that asks for deploy approvals, with what it listens to, a test run panel and Ask AI.](website/static/img/0.7.0/automation.webp)
 
 ## Documentation
 
