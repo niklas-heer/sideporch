@@ -482,17 +482,32 @@ fn start_background_work(state: &AppState) {
     demo::start(state.clone());
 }
 
+/// A reset link from [`reset_link`].
+#[derive(Debug, Clone)]
+pub struct ResetLink {
+    /// `/reset/<token>`, to open on the server's address.
+    pub path: String,
+    /// Signing in still takes a passkey or an authenticator app afterwards.
+    pub second_step: bool,
+}
+
 /// Makes a one-time password reset link for `username`, for 24 hours.
 ///
-/// Returns its path, `/reset/<token>`. This is `sideporch reset-link`: the
-/// way back in for someone, often the only admin, who lost their passkey
-/// or password, from a shell on the server.
+/// This is `sideporch reset-link`: the way back in for someone, often the
+/// only admin, who lost their password or passkey, from a shell on the
+/// server. `reset_sign_in` also removes the account's passkeys and
+/// authenticator app, for when those are what was lost; a reset link
+/// alone still asks for them after the new password.
 ///
 /// # Errors
 ///
 /// Fails if the database can't be opened or no account here has that
 /// username.
-pub fn reset_link(data_dir: &std::path::Path, username: &str) -> Result<String, Error> {
+pub fn reset_link(
+    data_dir: &std::path::Path,
+    username: &str,
+    reset_sign_in: bool,
+) -> Result<ResetLink, Error> {
     let path = data_dir.join("sideporch.db");
     if !path.exists() {
         return Err(Error::internal(format!(
@@ -500,9 +515,10 @@ pub fn reset_link(data_dir: &std::path::Path, username: &str) -> Result<String, 
             data_dir.display()
         )));
     }
-    let conn = db::connect(&path)?;
+    let mut conn = db::connect(&path)?;
     let username = username.trim().trim_start_matches('@').to_lowercase();
-    let user_id: Option<i64> = rusqlite::OptionalExtension::optional(conn.query_row(
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let user_id: Option<i64> = rusqlite::OptionalExtension::optional(tx.query_row(
         "SELECT id FROM users WHERE username = ?1 AND instance_id IS NULL AND deactivated_at IS NULL",
         [&username],
         |row| row.get(0),
@@ -512,16 +528,20 @@ pub fn reset_link(data_dir: &std::path::Path, username: &str) -> Result<String, 
             "no active account here has the username {username}"
         ))
     })?;
+    if reset_sign_in {
+        security::reset_factors(&tx, user_id)?;
+        tx.execute("DELETE FROM pending_logins WHERE user_id = ?1", [user_id])?;
+    }
     let token = auth::random_token()?;
     let now = now_ms();
     let expires = now.saturating_add(24 * 60 * 60 * 1000);
-    conn.execute("DELETE FROM password_resets WHERE user_id = ?1", [user_id])?;
-    conn.execute(
-        "INSERT INTO password_resets (token_hash, user_id, created_by, created_at, expires_at)
-         VALUES (?1, ?2, NULL, ?3, ?4)",
-        rusqlite::params![auth::hash_token(&token), user_id, now, expires],
-    )?;
-    Ok(format!("/reset/{token}"))
+    store::create_password_reset(&tx, &auth::hash_token(&token), user_id, None, now, expires)?;
+    let second_step = security::factors(&tx, user_id)?.second_step();
+    tx.commit()?;
+    Ok(ResetLink {
+        path: format!("/reset/{token}"),
+        second_step,
+    })
 }
 
 /// The file that holds the first-account setup link while one is pending.

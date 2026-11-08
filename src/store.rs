@@ -599,7 +599,7 @@ pub fn create_password_reset(
     conn: &Connection,
     token_hash: &[u8],
     user_id: i64,
-    created_by: i64,
+    created_by: Option<i64>,
     now: i64,
     expires_at: i64,
 ) -> AppResult<()> {

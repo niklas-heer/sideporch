@@ -555,20 +555,59 @@ async fn a_setup_code_is_checked_before_a_passkey_is_made() {
 #[tokio::test]
 async fn reset_links_from_the_command_line_let_admins_back_in() {
     let server = start().await;
-    let ada = admin(&server).await;
-    drop(ada);
-    assert!(sideporch::reset_link(server.data_dir(), "nobody").is_err());
-    let path = sideporch::reset_link(server.data_dir(), "@Ada").unwrap();
-    assert!(path.starts_with("/reset/"));
+    drop(admin(&server).await);
+    assert!(sideporch::reset_link(server.data_dir(), "nobody", false).is_err());
+    let link = sideporch::reset_link(server.data_dir(), "@Ada", false).unwrap();
+    assert!(link.path.starts_with("/reset/"));
+    assert!(!link.second_step);
     let mut browser = Browser::anonymous(&server);
-    let page = browser.page(&path).await;
-    assert!(page.contains("Choose a new password"));
+    assert!(
+        browser
+            .page(&link.path)
+            .await
+            .contains("Choose a new password")
+    );
     let response = browser
-        .submit(&path, &[("password", "a brand new one")])
+        .submit(&link.path, &[("password", "a brand new one")])
         .await;
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     let (_, response) = sign_in(&server, "ada", "a brand new one").await;
     assert_eq!(location(&response), "/");
+}
+
+#[tokio::test]
+async fn an_admin_who_lost_their_only_passkey_gets_back_in_from_the_server() {
+    let server = start().await;
+    let mut ada = Browser::anonymous(&server);
+    let mut device = Authenticator::new(&server.base);
+    let created = create_with_passkey(&mut ada, &mut device, "/setup", "Ada Admin", "ada").await;
+    assert_eq!(created.status(), StatusCode::SEE_OTHER);
+    drop(device);
+
+    // A reset link alone still asks for the lost passkey, and says so.
+    let link = sideporch::reset_link(server.data_dir(), "ada", false).unwrap();
+    assert!(link.second_step);
+    let mut stuck = Browser::anonymous(&server);
+    let response = stuck
+        .submit(&link.path, &[("password", "a brand new one")])
+        .await;
+    assert_eq!(location(&response), "/login/verify");
+
+    // Resetting sign-in too removes it, so the new password is enough.
+    let link = sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
+    assert!(!link.second_step);
+    let mut back = Browser::anonymous(&server);
+    let response = back
+        .submit(&link.path, &[("password", "another new one")])
+        .await;
+    assert_eq!(location(&response), "/");
+    assert!(back.page("/home").await.contains("Ada Admin"));
+    assert!(
+        !back
+            .page("/settings/security")
+            .await
+            .contains("Test laptop")
+    );
 }
 
 #[tokio::test]

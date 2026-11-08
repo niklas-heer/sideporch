@@ -223,7 +223,7 @@ async fn reset_link(
     state
         .db
         .call(move |conn| {
-            store::create_password_reset(conn, &token_hash, user_id, admin_id, now, expires)
+            store::create_password_reset(conn, &token_hash, user_id, Some(admin_id), now, expires)
         })
         .await?;
     let sidebar = shell_data(&state, user.id).await?;

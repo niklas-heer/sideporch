@@ -45,12 +45,12 @@ People who don't meet the setting yet are walked through adding what's missing a
 
 After a lost phone, an admin resets someone's passkeys and authenticator app from their profile; they set them up again at their next sign-in. Someone who only had a passkey also needs a reset link from their profile to choose a password.
 
-When the only admin loses their way in, make a reset link on the server, which works for 24 hours:
+When the only admin loses their way in, make a reset link on the server, which works for 24 hours. Add `--reset-sign-in` when their passkey or authenticator app is what's lost: it removes those too, so the new password is enough to get in, and they add new ones afterwards.
 
 ```sh
 sideporch reset-link ada --data /var/lib/sideporch
-docker exec sideporch /sideporch reset-link ada                 # with Docker
-fly machine exec MACHINE_ID "/sideporch reset-link ada"         # on Fly.io
+docker exec sideporch /sideporch reset-link ada --reset-sign-in             # with Docker
+fly machine exec MACHINE_ID "/sideporch reset-link ada --reset-sign-in"     # on Fly.io
 ```
 
 ## Email

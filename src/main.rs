@@ -75,6 +75,11 @@ enum Command {
     ResetLink {
         /// The account's username.
         username: String,
+        /// Also remove the account's passkeys and authenticator app, when
+        /// those are what was lost. Without this, signing in still asks for
+        /// them after the new password.
+        #[arg(long)]
+        reset_sign_in: bool,
     },
     /// Unpack a backup from Admin → Backups into the data directory.
     ///
@@ -118,29 +123,16 @@ async fn main() -> ExitCode {
     let args = Args::parse();
     match &args.command {
         Some(Command::SetupLink) => return print_setup_link(&args.data),
-        Some(Command::ResetLink { username }) => {
-            return match sideporch::reset_link(&args.data, username) {
-                Ok(path) => {
-                    let base = args
-                        .public_url
-                        .as_deref()
-                        .unwrap_or("")
-                        .trim_end_matches('/');
-                    if base.is_empty() {
-                        println!("{path}");
-                        eprintln!(
-                            "Open this path on your Sideporch's address. It works once, for 24 hours."
-                        );
-                    } else {
-                        println!("{base}{path}");
-                    }
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    eprintln!("Could not make a reset link: {error}");
-                    ExitCode::FAILURE
-                }
-            };
+        Some(Command::ResetLink {
+            username,
+            reset_sign_in,
+        }) => {
+            return print_reset_link(
+                &args.data,
+                args.public_url.as_deref(),
+                username,
+                *reset_sign_in,
+            );
         }
         Some(Command::Restore { archive, force }) => {
             return match sideporch::restore(archive, &args.data, *force) {
@@ -295,6 +287,39 @@ async fn update(check_only: bool, wanted: Option<&str>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `sideporch reset-link`: prints a reset link, and says when signing in
+/// will still ask for a passkey or app.
+fn print_reset_link(
+    data: &std::path::Path,
+    public_url: Option<&str>,
+    username: &str,
+    reset_sign_in: bool,
+) -> ExitCode {
+    let link = match sideporch::reset_link(data, username, reset_sign_in) {
+        Ok(link) => link,
+        Err(error) => {
+            eprintln!("Could not make a reset link: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let base = public_url.unwrap_or("").trim_end_matches('/');
+    println!("{base}{}", link.path);
+    if base.is_empty() {
+        eprintln!("Open this path on your Sideporch's address.");
+    }
+    eprintln!("It works once, for 24 hours.");
+    if reset_sign_in {
+        eprintln!(
+            "Their passkeys and authenticator app are removed; they can add new ones after signing in."
+        );
+    } else if link.second_step {
+        eprintln!(
+            "Signing in will still ask for their passkey or authenticator app. If those are lost, run this again with --reset-sign-in."
+        );
+    }
+    ExitCode::SUCCESS
 }
 
 fn print_setup_link(data: &std::path::Path) -> ExitCode {
