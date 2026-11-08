@@ -1604,6 +1604,7 @@ pub fn dry_environment(
     data: HashMap<String, String>,
     libraries: Arc<HashMap<String, String>>,
     secrets: Arc<BTreeMap<String, String>>,
+    settings: Arc<BTreeMap<String, SettingValue>>,
     http: Option<Arc<Http>>,
     timezone: TimeZone,
 ) -> Environment {
@@ -1616,7 +1617,7 @@ pub fn dry_environment(
         sink: Sink::Dry(Arc::default()),
         libraries,
         secrets,
-        settings: Arc::new(BTreeMap::new()),
+        settings,
         http,
         timezone,
     }

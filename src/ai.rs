@@ -391,6 +391,7 @@ async fn check(
                 libraries,
                 secrets: std::collections::BTreeMap::new(),
                 settings: automations::Settings::default(),
+                declared: std::collections::BTreeMap::new(),
                 http: false,
             };
             automations::test("Automation", &source, context, &TestTrigger::Load).error

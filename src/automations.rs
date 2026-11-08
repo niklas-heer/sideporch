@@ -672,6 +672,8 @@ pub struct TestContext {
     pub libraries: HashMap<String, String>,
     pub secrets: BTreeMap<String, String>,
     pub settings: Settings,
+    /// What `sideporch.setting` answers: the automation's own settings.
+    pub declared: BTreeMap<String, settings::SettingValue>,
     /// Whether HTTP requests really go out.
     pub http: bool,
 }
@@ -697,6 +699,17 @@ impl TestContext {
             libraries,
             secrets: secrets::all(conn, vault)?,
             settings: Settings::load(conn)?,
+            declared: match automation_id
+                .map(|id| store::automation(conn, id))
+                .transpose()?
+                .flatten()
+            {
+                Some(automation) => settings::resolve(
+                    &automation.settings,
+                    &store::automation_setting_values(conn, automation.id)?,
+                ),
+                None => BTreeMap::new(),
+            },
             http,
         })
     }
@@ -721,6 +734,7 @@ pub fn test(name: &str, source: &str, context: TestContext, trigger: &TestTrigge
         context.data,
         Arc::new(context.libraries),
         Arc::clone(&secrets),
+        Arc::new(context.declared),
         http,
         context.settings.zone(),
     );
@@ -927,6 +941,10 @@ mod tests {
             libraries: HashMap::new(),
             secrets: BTreeMap::from([("TOKEN".to_owned(), "s3cret-value".to_owned())]),
             settings: Settings::default(),
+            declared: BTreeMap::from([(
+                "room".to_owned(),
+                settings::SettingValue::Text("general".to_owned()),
+            )]),
             http: false,
         }
     }
@@ -1000,6 +1018,18 @@ mod tests {
             }
         }
         assert!(checked >= 20, "only {checked} examples found");
+    }
+
+    #[test]
+    fn dry_runs_answer_with_the_automations_settings() {
+        let report = test(
+            "Settings",
+            r#"print(sideporch.setting("room"))"#,
+            context(HashMap::new()),
+            &TestTrigger::Load,
+        );
+        assert_eq!(report.error, None);
+        assert_eq!(report.log, ["general"]);
     }
 
     #[test]
