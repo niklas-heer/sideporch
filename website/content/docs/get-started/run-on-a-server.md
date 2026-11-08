@@ -93,7 +93,7 @@ Every option can also be set with an environment variable.
 Four commands besides running the server:
 
 - `sideporch setup-link` prints the link for creating the first account.
-- `sideporch reset-link USERNAME` prints a one-time link for choosing a new password, for when someone, like the only admin, lost their password; with `--reset-sign-in` it also removes their passkeys and authenticator app, for when those are lost. New in 0.7.0.
+- `sideporch reset-link USERNAME` prints a one-time link for choosing a new password, for when someone, like the only admin, lost their password; with `--reset-sign-in` it also removes their passkeys, authenticator app and MCP tokens and signs them out everywhere, for when those are lost. New in 0.7.0.
 - `sideporch restore ARCHIVE` unpacks a [backup](@/docs/community/server/backups.md). Stop the server first.
 - `sideporch update` installs the newest release in place of the program; see [Update](@/docs/get-started/update.md#sideporch-update). New in 0.5.0.
 

@@ -75,9 +75,10 @@ enum Command {
     ResetLink {
         /// The account's username.
         username: String,
-        /// Also remove the account's passkeys and authenticator app, when
-        /// those are what was lost. Without this, signing in still asks for
-        /// them after the new password.
+        /// Also remove the account's passkeys, authenticator app and MCP
+        /// tokens, and sign it out everywhere, when those are what was lost.
+        /// Without this, signing in still asks for them after the new
+        /// password.
         #[arg(long)]
         reset_sign_in: bool,
     },
