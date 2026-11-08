@@ -463,7 +463,7 @@ pub struct Oidc {
     keys: RwLock<Option<Cached<HashMap<String, StoredKey>>>>,
     /// When the keys were last asked for; held while asking, so requests
     /// asking together wait for one answer.
-    asked: tokio::sync::Mutex<Option<Instant>>,
+    asked: tokio::sync::Mutex<Option<(String, Instant)>>,
 }
 
 impl Oidc {
@@ -558,11 +558,12 @@ impl Oidc {
         Ok(document)
     }
 
-    /// The fresh key `kid` names, if it's cached.
-    fn known_key(&self, kid: &str) -> Option<StoredKey> {
+    /// The fresh key `kid` names, if it's cached from `jwks_uri`. Another
+    /// provider can use the same key id for a different key.
+    fn known_key(&self, jwks_uri: &str, kid: &str) -> Option<StoredKey> {
         self.keys.read().ok().and_then(|cache| {
             let cached = cache.as_ref()?;
-            if cached.at.elapsed() >= REFRESH_EVERY {
+            if cached.key != jwks_uri || cached.at.elapsed() >= REFRESH_EVERY {
                 return None;
             }
             cached.value.get(kid).cloned()
@@ -571,17 +572,20 @@ impl Oidc {
 
     /// The key `kid` names, asking the provider when it isn't cached.
     async fn key(&self, jwks_uri: &str, kid: &str) -> Result<StoredKey, Failure> {
-        if let Some(key) = self.known_key(kid) {
+        if let Some(key) = self.known_key(jwks_uri, kid) {
             return Ok(key);
         }
         let mut asked = self.asked.lock().await;
-        if let Some(key) = self.known_key(kid) {
+        if let Some(key) = self.known_key(jwks_uri, kid) {
             return Ok(key);
         }
-        if asked.is_some_and(|at| at.elapsed() < REFETCH_EVERY) {
+        if asked
+            .as_ref()
+            .is_some_and(|(uri, at)| uri == jwks_uri && at.elapsed() < REFETCH_EVERY)
+        {
             return Err(Failure::Refused("signed with an unknown key"));
         }
-        *asked = Some(Instant::now());
+        *asked = Some((jwks_uri.to_owned(), Instant::now()));
         if !transport_allowed(jwks_uri) {
             return Err(Failure::Refused("an endpoint isn't reached over https"));
         }
@@ -598,7 +602,7 @@ impl Oidc {
             });
         }
         drop(asked);
-        self.known_key(kid)
+        self.known_key(jwks_uri, kid)
             .ok_or(Failure::Refused("signed with an unknown key"))
     }
 
@@ -930,6 +934,28 @@ mod tests {
     )]
 
     use super::*;
+
+    #[test]
+    fn a_cached_key_only_answers_for_the_provider_it_came_from() {
+        let oidc = Oidc::new().unwrap();
+        let key = StoredKey {
+            alg: None,
+            key: Key::P256(vec![4]),
+        };
+        *oidc.keys.write().unwrap() = Some(Cached {
+            key: "https://one.example/keys".to_owned(),
+            at: Instant::now(),
+            value: HashMap::from([("shared-id".to_owned(), key)]),
+        });
+        assert!(
+            oidc.known_key("https://one.example/keys", "shared-id")
+                .is_some()
+        );
+        assert!(
+            oidc.known_key("https://two.example/keys", "shared-id")
+                .is_none()
+        );
+    }
 
     fn token(header: &Value, claims: &Value) -> String {
         format!(

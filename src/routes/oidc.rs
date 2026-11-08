@@ -122,7 +122,7 @@ async fn begin(
     headers: &HeaderMap,
     provider: &oidc::Provider,
     start: Start,
-) -> AppResult<Response> {
+) -> AppResult<Begun> {
     let discovery = state
         .oidc
         .discovery(&provider.issuer)
@@ -165,7 +165,14 @@ async fn begin(
         &oidc::pkce_challenge(&verifier),
     );
     let cookie = browser_cookie(state, &browser, oidc::LOGIN_MINUTES * 60);
-    redirect_with_cookie(&location, &cookie)
+    Ok(Begun { location, cookie })
+}
+
+/// A sign-in on its way to the provider: where to send the browser, and the
+/// cookie that ties the answer to it.
+struct Begun {
+    location: String,
+    cookie: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -186,7 +193,7 @@ async fn sign_in(
         .and_then(auth::safe_next)
         .unwrap_or("/")
         .to_owned();
-    begin(
+    let begun = begin(
         &state,
         &headers,
         &provider,
@@ -196,7 +203,8 @@ async fn sign_in(
             next,
         },
     )
-    .await
+    .await?;
+    redirect_with_cookie(&begun.location, &begun.cookie)
 }
 
 #[derive(Deserialize)]
@@ -384,7 +392,12 @@ async fn sign_in_identity(
                 (user_id, None)
             } else {
                 {
-                    if !create || community::Joining::load(&tx)?.registration != Registration::Open
+                    // The sign-up form is where people agree to the rules,
+                    // so a server with rules doesn't make accounts here.
+                    let joining = community::Joining::load(&tx)?;
+                    if !create
+                        || joining.registration != Registration::Open
+                        || !joining.rules.is_empty()
                     {
                         return Err(AppError::bad_request(NOT_LINKED));
                     }
@@ -513,7 +526,7 @@ async fn link(
     if !ready {
         return Err(AppError::bad_request(CANT_USE));
     }
-    begin(
+    let begun = begin(
         &state,
         &headers,
         &provider,
@@ -523,7 +536,16 @@ async fn link(
             next: SECURITY_PAGE.to_owned(),
         },
     )
-    .await
+    .await?;
+    // Linking starts from a form, and browsers apply `form-action` to where
+    // a form's answer redirects. The page's own link isn't held to that.
+    let mut response =
+        crate::views::security::continue_to_provider(&begun.location).into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&begun.cookie).map_err(AppError::internal)?,
+    );
+    Ok(response)
 }
 
 /// `/settings/security/oidc/unlink`: removes the provider's sign-in, unless

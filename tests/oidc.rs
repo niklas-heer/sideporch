@@ -436,17 +436,22 @@ async fn link(member: &mut Browser) {
 /// Starts a link (a POST from the settings page) and returns the callback.
 async fn approve_post(browser: &mut Browser, path: &str) -> String {
     let response = browser.post(path, &[]).await;
-    assert!(
-        response.status().is_redirection(),
-        "{path}: {}",
-        response.status()
-    );
+    // Browsers apply `form-action` to a form's redirect, so a POST here must
+    // answer with a page that links to the provider instead.
+    assert_eq!(response.status(), HttpStatus::OK, "{path}");
     remember(browser, &response);
+    let page = response.text().await.unwrap();
+    let href = page
+        .split(r#"href=""#)
+        .find(|part| part.starts_with("http"))
+        .and_then(|part| part.split('"').next())
+        .expect("a link to the provider")
+        .replace("&amp;", "&");
     let approved = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap()
-        .get(location(&response))
+        .get(&href)
         .send()
         .await
         .unwrap();
@@ -469,6 +474,25 @@ async fn linked_member(server: &Server, fake: &Fake, ada: &Browser) -> Browser {
 async fn assert_signed_in_as_mo(response: reqwest::Response, browser: &Browser) {
     assert_eq!(location(&response), "/", "signed in");
     assert!(browser.page("/home").await.contains("Mo Member"));
+}
+
+#[tokio::test]
+async fn a_first_sign_in_makes_no_account_while_there_are_rules_to_agree_to() {
+    let (server, _fake, ada) = setup(true).await;
+    let response = ada
+        .post(
+            "/admin/community",
+            &[("registration", "open"), ("rules", "Be kind.")],
+        )
+        .await;
+    assert!(response.status().is_success() || response.status().is_redirection());
+    let mut browser = Browser::anonymous(&server);
+    let response = sign_in_with(&mut browser).await;
+    assert_eq!(response.status(), HttpStatus::BAD_REQUEST);
+    assert!(
+        response.text().await.unwrap().contains("isn't linked"),
+        "the visitor is told why"
+    );
 }
 
 #[tokio::test]

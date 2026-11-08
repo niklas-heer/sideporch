@@ -318,6 +318,18 @@ pub fn email_link_page(reset: bool, sent: bool) -> Markup {
     )
 }
 
+/// The last step before the provider, when linking an account.
+pub fn continue_to_provider(location: &str) -> Markup {
+    auth_page(
+        "Link your account",
+        &html! {
+            h1 class="mb-2 text-xl font-bold" { "Link your account" }
+            p class="mb-5 text-muted dark:text-haint" { "Confirm who you are with your provider to finish linking it to this account." }
+            a href=(location) class="btn w-full" { "Continue to your provider" }
+        },
+    )
+}
+
 pub fn use_link_page(token: &str) -> Markup {
     auth_page(
         "Sign in",
