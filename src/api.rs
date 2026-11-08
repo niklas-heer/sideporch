@@ -377,6 +377,7 @@ async fn post_message(
             gif: None,
             poll: None,
             buttons: Vec::new(),
+            client_nonce: None,
         },
     )
     .await?;
