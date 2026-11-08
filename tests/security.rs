@@ -854,6 +854,71 @@ fn link_in(mail: &str, path: &str) -> String {
         .to_owned()
 }
 
+/// Sets up email through a fake mail server, confirms ada@example.com for
+/// `ada`, and turns on sign-in links; returns the mail sent.
+async fn with_email(ada: &Browser) -> Arc<Mutex<Vec<String>>> {
+    let (port, mails) = fake_smtp().await;
+    let port = port.to_string();
+    let settings = [
+        ("require", "none"),
+        ("mail_host", "127.0.0.1"),
+        ("mail_port", port.as_str()),
+        ("mail_security", "none"),
+        ("mail_from", "Sideporch <chat@example.com>"),
+        ("email_links", "on"),
+    ];
+    assert_eq!(
+        ada.post("/admin/sign-in", &settings).await.status(),
+        StatusCode::OK
+    );
+    ada.post("/settings/security/email", &[("email", "ada@example.com")])
+        .await;
+    let mail = mails.lock().unwrap().last().unwrap().clone();
+    let confirm = link_in(&mail, "/settings/security/email/");
+    assert_eq!(ada.get(&confirm).await.status(), StatusCode::SEE_OTHER);
+    mails
+}
+
+/// Asks for ada's email sign-in link, or with `reset`, a reset link.
+async fn ask_for_link(browser: &Browser, purpose: &str) {
+    browser
+        .post(
+            "/login/email",
+            &[("email", "ada@example.com"), ("purpose", purpose)],
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn while_the_server_recovers_an_account_email_sends_no_links() {
+    let server = start().await;
+    let ada = admin(&server).await;
+    let mails = with_email(&ada).await;
+    let anonymous = Browser::anonymous(&server);
+    // The mailbox may be open on the lost device, with a reset link in it.
+    ask_for_link(&anonymous, "reset").await;
+    let early = link_in(&mails.lock().unwrap().last().unwrap().clone(), "/reset/");
+    let recovery = sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
+    let sent = mails.lock().unwrap().len();
+    ask_for_link(&anonymous, "").await;
+    ask_for_link(&anonymous, "reset").await;
+    assert_eq!(
+        mails.lock().unwrap().len(),
+        sent,
+        "no mail while recovering"
+    );
+    assert_eq!(anonymous.get(&early).await.status(), StatusCode::GONE);
+
+    let mut browser = Browser::anonymous(&server);
+    let response = browser
+        .submit(&recovery.path, &[("password", "recovered at last")])
+        .await;
+    assert_eq!(location(&response), "/");
+    // Afterwards, email works again.
+    ask_for_link(&anonymous, "").await;
+    assert_eq!(mails.lock().unwrap().len(), sent + 1);
+}
+
 #[tokio::test]
 async fn email_confirms_addresses_signs_in_and_resets_passwords() {
     let server = start().await;
@@ -946,41 +1011,4 @@ async fn email_confirms_addresses_signs_in_and_resets_passwords() {
     assert_eq!(location(&response), "/");
     let (_, response) = sign_in(&server, "ada", "a brand new one").await;
     assert_eq!(location(&response), "/");
-
-    // While a link from the server recovers the account, its mailbox may be
-    // on the lost device: email sends no links, and an emailed reset link
-    // from before can't replace the server's.
-    anonymous
-        .post(
-            "/login/email",
-            &[("email", "ada@example.com"), ("purpose", "reset")],
-        )
-        .await;
-    let early = link_in(&mails.lock().unwrap().last().unwrap().clone(), "/reset/");
-    let recovery = sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
-    let sent = mails.lock().unwrap().len();
-    for purpose in ["", "reset"] {
-        anonymous
-            .post(
-                "/login/email",
-                &[("email", "ada@example.com"), ("purpose", purpose)],
-            )
-            .await;
-    }
-    assert_eq!(
-        mails.lock().unwrap().len(),
-        sent,
-        "no mail while recovering"
-    );
-    assert_eq!(anonymous.get(&early).await.status(), StatusCode::GONE);
-    let mut browser = Browser::anonymous(&server);
-    let response = browser
-        .submit(&recovery.path, &[("password", "recovered at last")])
-        .await;
-    assert_eq!(location(&response), "/");
-    // Afterwards, email works again.
-    anonymous
-        .post("/login/email", &[("email", "ada@example.com")])
-        .await;
-    assert_eq!(mails.lock().unwrap().len(), sent + 1);
 }
