@@ -13,6 +13,7 @@ Everyone manages how they sign in under **Sign-in and security** in their accoun
 - **Authenticator apps** (1Password, Google Authenticator, Aegis…) ask for a six-digit code after the password. Setting one up gives you ten single-use **recovery codes**, for when you lose your phone.
 - **Email**: with an [SMTP server set up](#email), people confirm an address and can sign in with a link, or reset a forgotten password themselves. Sign-in and reset links work once, for 15 minutes; links that confirm an address work for 24 hours.
 - **Cloudflare Access**: behind [Cloudflare Access](#cloudflare-access), people whom Access let in are signed in without a password.
+- **Single sign-on**: sign in with your team's identity provider, linked to your account, as set up in [single sign-on with OpenID Connect](@/docs/community/people/openid-connect.md).
 
 ## Start with a passkey
 

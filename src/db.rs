@@ -728,6 +728,36 @@ JOIN messages r ON r.parent_id = p.root
 GROUP BY p.user_id, p.root;
 ",
     ),
+    Migration::Sql(
+        r"
+-- Sign-ins through an OpenID Connect provider, from the redirect to the
+-- provider until its answer comes back. Each one is used once.
+CREATE TABLE oidc_logins (
+    state_hash BLOB PRIMARY KEY,
+    browser_hash BLOB NOT NULL,
+    nonce TEXT NOT NULL,
+    verifier TEXT NOT NULL,
+    issuer TEXT NOT NULL,
+    purpose TEXT NOT NULL CHECK (purpose IN ('sign-in', 'link')),
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    next TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+-- The account each provider identity signs in: the issuer and the subject it
+-- gives someone. An email address proves nothing about an account, so it
+-- never links one.
+CREATE TABLE oidc_identities (
+    issuer TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER,
+    PRIMARY KEY (issuer, subject)
+);
+CREATE INDEX oidc_identities_by_user ON oidc_identities (user_id);
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

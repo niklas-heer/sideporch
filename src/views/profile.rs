@@ -397,7 +397,7 @@ fn admin_controls(user: &User, standing: &Standing) -> Markup {
                         button type="submit" class="btn-quiet" { (icon(icons::KEY, "h-4 w-4")) "Create password reset link" }
                     }
                     form method="post" action={ (base) "/reset-security" } {
-                        button type="submit" class="btn-quiet" title="Removes their passkeys, authenticator app and recovery codes, for when they lost their devices" { "Reset passkeys and app" }
+                        button type="submit" class="btn-quiet" title="Removes their passkeys, authenticator app, recovery codes and single sign-on links, for when they lost their devices" { "Reset passkeys and app" }
                     }
                     form method="post" action={ (base) "/admin" } {
                         input type="hidden" name="admin" value=(if user.is_admin { "false" } else { "true" });

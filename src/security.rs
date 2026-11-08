@@ -315,6 +315,8 @@ pub fn use_recovery_code(conn: &Connection, user_id: i64, code: &str, now: i64) 
 pub fn reset_factors(conn: &Connection, user_id: i64) -> AppResult<()> {
     conn.execute("DELETE FROM passkeys WHERE user_id = ?1", [user_id])?;
     conn.execute("DELETE FROM recovery_codes WHERE user_id = ?1", [user_id])?;
+    // A provider's sign-in can sit on a lost device's session just as a passkey can.
+    conn.execute("DELETE FROM oidc_identities WHERE user_id = ?1", [user_id])?;
     set_totp(conn, user_id, None, 0)
 }
 

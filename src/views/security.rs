@@ -6,7 +6,7 @@ use maud::{Markup, PreEscaped, html};
 use super::{Shell, admin::tabs, auth_page, form_error, panel_page, section, timestamp_date};
 use crate::{
     icons::{self, icon},
-    mail,
+    mail, oidc,
     security::{Factors, PasskeyInfo, Policy, Requirement},
 };
 
@@ -19,6 +19,16 @@ pub struct SecurityView<'a> {
     pub notice: Option<&'a str>,
     /// Recovery codes to show once, right after making them.
     pub codes: Option<&'a [String]>,
+    /// The provider's sign-in, when the admin set one up.
+    pub oidc: Option<OidcLink<'a>>,
+}
+
+/// An `OpenID Connect` provider as the settings page shows it.
+pub struct OidcLink<'a> {
+    pub label: &'a str,
+    pub linked: bool,
+    /// Whether the account has another way in, so this sign-in can go.
+    pub can_unlink: bool,
 }
 
 fn notice(text: &str) -> Markup {
@@ -57,6 +67,34 @@ fn recovery_box(codes: &[String]) -> Markup {
                         (icon(icons::COPY, "h-4 w-4")) span data-copy-label { "Copy" }
                     }
                 }
+    }
+}
+
+/// The single sign-on section of the settings page.
+fn oidc_section(link: &OidcLink<'_>) -> Markup {
+    html! {
+            (section("Single sign-on", "Sign in with the account your team's identity provider gives you, instead of a password. The provider is set up by an admin.", &html! {
+                @if link.linked {
+                    p class="mb-4 flex items-center gap-2 font-semibold" { (icon(icons::SHIELD_CHECK, "h-5 w-5 text-floor-3 dark:text-haint")) "Linked to this account" }
+                    @if link.can_unlink {
+                        form method="post" action="/settings/security/oidc/unlink" {
+                            button type="submit" class="btn-quiet text-sm" { "Unlink" }
+                        }
+                    } @else {
+                        p class="text-sm text-muted dark:text-haint" {
+                            "Add a password, a passkey or a confirmed email address before you unlink this sign-in."
+                        }
+                    }
+                } @else {
+                    form method="post" action="/settings/security/oidc" {
+                        button type="submit" class="btn" { "Link this account" }
+                    }
+                    p class="mt-2 text-sm text-muted dark:text-haint" {
+                        "Then " (link.label) " signs you in here. The address you use there doesn't matter; only the account you link does."
+                    }
+                }
+            }))
+
     }
 }
 
@@ -102,6 +140,9 @@ pub fn settings_page(shell: &Shell<'_>, view: &SecurityView<'_>) -> Markup {
                 }
                 p data-passkey-error role="alert" class="mt-2 hidden text-sm text-red-700 dark:text-red-300" {}
             }))
+            @if let Some(link) = &view.oidc {
+                (oidc_section(link))
+            }
             (section("Authenticator app", "Asks for a six-digit code from an app like 1Password, Google Authenticator or Aegis after your password.", &html! {
                 @if factors.totp {
                     div class="flex flex-wrap items-center gap-3" {
@@ -333,6 +374,7 @@ pub fn policy_page(
     policy: Policy,
     mail: &mail::Settings,
     counts: (i64, i64, i64),
+    oidc: &oidc::Setup,
     error: Option<&str>,
     saved: Option<&str>,
 ) -> Markup {
@@ -407,6 +449,57 @@ pub fn policy_page(
                     button type="submit" class="btn-quiet" { "Send test" }
                 }
             }
+            (oidc_fields(oidc))
         },
     )
+}
+
+/// The admin's form for an `OpenID Connect` provider. The secret is never
+/// shown: the field stays empty, and an empty one keeps the stored secret.
+fn oidc_fields(setup: &oidc::Setup) -> Markup {
+    html! {
+        (section("Single sign-on", "Let people sign in with an OpenID Connect provider, such as Keycloak, Authentik, Microsoft Entra or Google. Register the redirect URL /login/oidc/callback on your Sideporch address with the provider, then fill in what it gave you.", &html! {
+            form method="post" action="/admin/sign-in/oidc" class="space-y-4" {
+                label class="block" {
+                    span class="field-label" { "Issuer" }
+                    input type="url" name="issuer" value=(setup.issuer) required placeholder="https://login.example.com/realms/team" class="field";
+                    span class="mt-1 block text-xs text-muted dark:text-haint" { "The provider's address, exactly as its discovery document names it. https only." }
+                }
+                label class="block" {
+                    span class="field-label" { "Client id" }
+                    input type="text" name="client_id" value=(setup.client_id) required class="field";
+                }
+                label class="block" {
+                    span class="field-label" { "Client secret" }
+                    input type="password" name="secret" autocomplete="off" class="field" placeholder=(if setup.secret_saved { "Saved. Leave empty to keep it." } else { "" });
+                    span class="mt-1 block text-xs text-muted dark:text-haint" { "Stored encrypted. It is never shown again." }
+                }
+                label class="block" {
+                    span class="field-label" { "Button label" }
+                    input type="text" name="label" value=(setup.label) maxlength="60" placeholder="Sign in with single sign-on" class="field";
+                }
+                label class="block" {
+                    span class="field-label" { "Only this email domain (optional)" }
+                    input type="text" name="domain" value=(setup.domain) placeholder="example.com" class="field";
+                    span class="mt-1 block text-xs text-muted dark:text-haint" { "Only people whose verified address is in this domain can sign in with the provider." }
+                }
+                label class="flex gap-3" {
+                    input type="checkbox" name="create_accounts" value="on" checked[setup.create_accounts] class="mt-1";
+                    span {
+                        span class="block font-semibold" { "Create an account on a first sign-in" }
+                        span class="block text-sm text-muted dark:text-haint" {
+                            "Only while sign-up is open. Off, people link their sign-in to an account they already have, from Sign-in and security."
+                        }
+                    }
+                }
+                @if setup.configured() {
+                    label class="flex gap-3" {
+                        input type="checkbox" name="clear" value="on" class="mt-1";
+                        span { span class="block font-semibold" { "Turn off sign-in with this provider" } }
+                    }
+                }
+                button type="submit" class="btn" { "Save" }
+            }
+        }))
+    }
 }

@@ -181,15 +181,28 @@ async fn render_settings(
     codes: Option<&[String]>,
 ) -> AppResult<Markup> {
     let user_id = user.id;
-    let (passkeys, factors, policy, email, mail_ready) = state
+    let (passkeys, factors, policy, email, mail_ready, oidc) = state
         .db
         .call(move |conn| {
+            // Whether the provider's sign-in can go: only if another way in exists.
+            let setup = crate::oidc::Setup::load(conn)?;
+            let oidc = if setup.configured() {
+                let linked = crate::oidc::linked(conn, &setup.issuer, user_id)?;
+                let hash = crate::store::password_hash(conn, user_id)?.unwrap_or_default();
+                let other_way = crate::auth::has_password(&hash)
+                    || security::factors(conn, user_id)?.passkeys > 0
+                    || security::email(conn, user_id)?.is_some();
+                Some((setup.button_label().to_owned(), linked, linked && other_way))
+            } else {
+                None
+            };
             Ok((
                 security::passkeys(conn, user_id)?,
                 security::factors(conn, user_id)?,
                 Policy::load(conn)?,
                 security::email(conn, user_id)?,
                 mail::configured(conn)?,
+                oidc,
             ))
         })
         .await?;
@@ -209,6 +222,13 @@ async fn render_settings(
             mail_ready,
             notice,
             codes,
+            oidc: oidc
+                .as_ref()
+                .map(|(label, linked, can_unlink)| pages::OidcLink {
+                    label,
+                    linked: *linked,
+                    can_unlink: *can_unlink,
+                }),
         },
     ))
 }
@@ -221,6 +241,8 @@ async fn settings(
     let notice = match notice.notice.as_str() {
         "passkey" => Some("Passkey added. Use it to sign in on any device that has it."),
         "email" => Some("Address confirmed."),
+        "oidc" => Some("Linked. You can sign in with that account from the sign-in page now."),
+        "oidc-unlinked" => Some("Unlinked. That account signs in another way now."),
         "sent" => Some("We sent a link to that address. Open it to confirm the address."),
         _ => None,
     };
@@ -891,14 +913,14 @@ async fn use_link(State(state): State<AppState>, Path(token): Path<String>) -> A
 
 // Admins
 
-async fn render_policy(
+pub(super) async fn render_policy(
     state: &AppState,
     user: &CurrentUser,
     error: Option<&str>,
     saved: Option<&str>,
 ) -> AppResult<Markup> {
     let vault = std::sync::Arc::clone(&state.vault);
-    let (policy, mail_settings, counts) = state
+    let (policy, mail_settings, counts, oidc_setup) = state
         .db
         .call(move |conn| {
             let counts = conn.query_row(
@@ -912,6 +934,7 @@ async fn render_policy(
                 Policy::load(conn)?,
                 mail::Settings::load(conn, &vault)?,
                 counts,
+                crate::oidc::Setup::load(conn)?,
             ))
         })
         .await?;
@@ -926,6 +949,7 @@ async fn render_policy(
         policy,
         &mail_settings,
         counts,
+        &oidc_setup,
         error,
         saved,
     ))

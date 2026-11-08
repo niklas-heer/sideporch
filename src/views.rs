@@ -178,7 +178,7 @@ pub fn text_field(
 }
 
 /// What the login page offers besides a password.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct LoginOptions {
     pub registration: crate::community::Registration,
     /// On a demo server: when it starts over.
@@ -187,13 +187,23 @@ pub struct LoginOptions {
     pub email_links: bool,
     /// Email works, so people can reset their own password.
     pub email_resets: bool,
+    /// The button's label, when an `OpenID Connect` provider is set up.
+    pub oidc: Option<String>,
+}
+
+/// Where the provider's sign-in button goes, back to `next` afterwards.
+fn oidc_start(next: Option<&str>) -> String {
+    next.map_or_else(
+        || "/login/oidc".to_owned(),
+        |next| format!("/login/oidc?next={}", crate::auth::encode_component(next)),
+    )
 }
 
 pub fn login_page(
     error: Option<&str>,
     username: &str,
     next: Option<&str>,
-    options: LoginOptions,
+    options: &LoginOptions,
 ) -> Markup {
     auth_page(
         "Sign in",
@@ -222,6 +232,9 @@ pub fn login_page(
                 (text_field("Username", "username", "text", username, "username webauthn", None))
                 (text_field("Password", "password", "password", "", "current-password", None))
                 button type="submit" class="btn mt-2 w-full" { "Sign in" }
+            }
+            @if let Some(label) = &options.oidc {
+                a href=(oidc_start(next)) class="btn-quiet mt-3 w-full" { (label) }
             }
             @if options.email_links || options.email_resets {
                 p class="mt-4 flex flex-wrap justify-between gap-2 text-sm" {

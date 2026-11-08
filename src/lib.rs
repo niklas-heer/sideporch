@@ -28,6 +28,7 @@ mod markup;
 mod mcp;
 mod messages;
 mod notifications;
+mod oidc;
 mod outgoing;
 mod passkeys;
 mod polls;
@@ -160,6 +161,8 @@ pub(crate) struct AppState {
     access: Arc<access::Access>,
     /// Signing in through Cloudflare Access, when it's set up.
     cloudflare: Option<Arc<cloudflare::CloudflareAccess>>,
+    /// Talks to the `OpenID Connect` provider the admin set up.
+    oidc: Arc<oidc::Oidc>,
 }
 
 /// The shortest setup code Sideporch accepts. Anyone can try codes while
@@ -391,6 +394,7 @@ impl Sideporch {
             statistics: Arc::default(),
             access: Arc::new(access::Access::new(config.client_ip_header.as_deref())?),
             cloudflare,
+            oidc: Arc::new(oidc::Oidc::new()?),
         };
         let updates = Arc::clone(&state.updates);
         state.db.call(move |conn| updates.load(conn)).await?;

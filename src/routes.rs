@@ -40,6 +40,7 @@ mod gifs;
 mod later;
 mod message;
 mod notifications;
+mod oidc;
 mod profile;
 mod security;
 mod settings;
@@ -121,6 +122,7 @@ pub fn router(state: AppState) -> Router {
         .merge(backups::router())
         .merge(community::router())
         .merge(security::router())
+        .merge(oidc::router())
         .merge(credentials::router())
         .merge(updates::router())
         .merge(federation::router())
@@ -285,7 +287,7 @@ async fn login_form(
         crate::cloudflare::AtLogin::Explain { notice, next: then } => (Some(notice), next.or(then)),
     };
     let registration = registration(&state).await?;
-    Ok(views::login_page(notice.as_deref(), "", next, registration).into_response())
+    Ok(views::login_page(notice.as_deref(), "", next, &registration).into_response())
 }
 
 async fn login(
@@ -313,7 +315,7 @@ async fn login(
                 Some(&error),
                 &username,
                 next.as_deref(),
-                registration(&state).await?,
+                &registration(&state).await?,
             ),
         )
             .into_response());
@@ -346,7 +348,7 @@ async fn login(
                     Some("This Sideporch signs in with passkeys. Use the passkey button below."),
                     &username,
                     next.as_deref(),
-                    registration(&state).await?,
+                    &registration(&state).await?,
                 ),
             )
                 .into_response());
@@ -373,7 +375,7 @@ async fn login(
                 Some(error),
                 &username,
                 next.as_deref(),
-                registration(&state).await?,
+                &registration(&state).await?,
             ),
         )
             .into_response());
@@ -416,6 +418,10 @@ async fn registration(state: &AppState) -> AppResult<views::LoginOptions> {
                 registration: crate::community::Joining::load(conn)?.registration,
                 email_links: mail && crate::security::Policy::load(conn)?.email_links,
                 email_resets: mail,
+                oidc: {
+                    let setup = crate::oidc::Setup::load(conn)?;
+                    setup.configured().then(|| setup.button_label().to_owned())
+                },
             })
         })
         .await
