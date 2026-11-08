@@ -329,18 +329,27 @@ impl CloudflareAccess {
     }
 
     async fn fetch_keys(&self) -> Result<HashMap<String, RsaKey>, String> {
+        // One deadline for the whole answer: a stalled body must not hold
+        // the refresh lock, and with it every Access sign-in, forever.
+        tokio::time::timeout(TIMEOUT, self.fetch_key_set())
+            .await
+            .map_err(|_| "Cloudflare did not answer in time".to_owned())?
+    }
+
+    async fn fetch_key_set(&self) -> Result<HashMap<String, RsaKey>, String> {
         let request = axum::http::Request::get(&self.certs_url)
             .body(Empty::new())
             .map_err(|error| error.to_string())?;
-        let response = tokio::time::timeout(TIMEOUT, self.client.request(request))
+        let response = self
+            .client
+            .request(request)
             .await
-            .map_err(|_| "Cloudflare did not answer in time".to_owned())?
             .map_err(|error| format!("could not reach Cloudflare: {error}"))?;
         let status = response.status();
         let body = Limited::new(response.into_body(), MAX_KEYS_BYTES)
             .collect()
             .await
-            .map_err(|_| "Cloudflare's answer was too large".to_owned())?
+            .map_err(|_| "Cloudflare's answer was too large or broke off".to_owned())?
             .to_bytes();
         if !status.is_success() {
             return Err(format!("Cloudflare answered {status}"));
