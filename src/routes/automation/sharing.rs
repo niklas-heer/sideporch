@@ -20,7 +20,7 @@ use crate::{
     automations::{
         self,
         bundle::{self, Action, Bundle, Plan},
-        http,
+        catalogue, http,
     },
     error::{AppError, AppResult},
     routes::shell_data,
@@ -58,9 +58,13 @@ async fn preview_url(
     match http::download(allow_private, &url, bundle::MAX_BYTES).await {
         Ok(body) => {
             let text = String::from_utf8_lossy(&body).into_owned();
+            let sha256 = catalogue::sha256_hex(&body);
             let origin = views::automations::Origin {
                 url: &url,
                 signed: false,
+                version: None,
+                sha256: &sha256,
+                update: installed_from(&state, &url).await?,
             };
             show_preview(&state, &user, &text, Some(&origin)).await
         }
@@ -172,6 +176,19 @@ async fn preview(
     show_preview(&state, &user, &text, None).await
 }
 
+/// Whether an automation here was installed from `url`.
+pub async fn installed_from(state: &AppState, url: &str) -> AppResult<bool> {
+    let url = url.to_owned();
+    state
+        .db
+        .call(move |conn| {
+            Ok(store::automation_origins(conn)?
+                .values()
+                .any(|origin| origin.url == url))
+        })
+        .await
+}
+
 /// Checks `text` as a bundle and renders what importing it would do. `origin`
 /// says where it was downloaded from, and whether Sideporch checked it.
 pub async fn show_preview(
@@ -217,7 +234,7 @@ async fn confirm(
         .collect();
     // A file from the web or the store has to be confirmed when unsigned.
     if form.get("trust").map(String::as_str) == Some("unsigned")
-        && form.get("confirm_unsigned").is_none()
+        && !form.contains_key("confirm_unsigned")
     {
         return Err(AppError::bad_request(
             "Tick the box to confirm you want to install this unsigned automation. Nothing was added.",
@@ -226,6 +243,33 @@ async fn confirm(
     let imported = import(&state, plans, &actions, user.id, "import")
         .await?
         .map_err(AppError::bad_request)?;
+    // Automations from the store or a web address remember where they came from.
+    let origin = form
+        .get("origin_url")
+        .filter(|url| !url.is_empty())
+        .map(|url| store::AutomationOrigin {
+            url: url.clone(),
+            version: form
+                .get("origin_version")
+                .filter(|version| !version.is_empty())
+                .cloned(),
+            sha256: form
+                .get("origin_sha256")
+                .filter(|sha256| !sha256.is_empty())
+                .cloned(),
+        });
+    if let Some(origin) = origin {
+        let ids: Vec<i64> = imported.iter().map(|item| item.id).collect();
+        state
+            .db
+            .call(move |conn| {
+                for id in ids {
+                    store::set_automation_origin(conn, id, &origin)?;
+                }
+                Ok(())
+            })
+            .await?;
+    }
     Ok(Redirect::to(&format!("/automations?imported={}", imported.len())).into_response())
 }
 

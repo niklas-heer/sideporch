@@ -18,6 +18,12 @@ Each entry names a file, its SHA-256 checksum and, when its publisher signed it,
 
 A checksum or signature that doesn't match is a hard refusal. An unsigned file can still be installed, but only after you confirm that you want an unsigned automation.
 
+## Updates
+
+Sideporch remembers where an automation was installed from, with the version and checksum. When the store lists a newer version of it, the Automations page shows **Update available** next to the automation. Pressing it opens the same preview, with **Replace** chosen: the automation keeps its name, its history and its webhook URL, takes the new script, and is switched off again until you switch it on. An automation written here, or imported from a file, has no store to update from.
+
+The store is read when the Automations page opens, and only when an installed automation came from it.
+
 ## The store's address
 
 The store is read from `https://sideporch.app/automations/index.json` unless you change it under **Settings → Automations → Automation store**. Leave the field empty for the default. The index is kept for ten minutes; if it can't be reached, the page says so and nothing is installed.

@@ -9,10 +9,10 @@
 /// The public key that signs releases, as minisign prints it.
 pub const RELEASE_KEY: &str = "RWRtn2cj2SpGnZDtKTNsgnc8mv68NfwlwFgA+hcmOD+cWH8dSQxGkuoo";
 
-/// Checks that `signature` (a `.minisig` file) was made with `public_key`
-/// over `data`, and returns its trusted comment. What the comment says is
-/// the caller's to check: it is signed along with the data, so it can
-/// name the release or file the signature is for.
+/// Checks a minisign signature over `data`, and returns its trusted comment.
+///
+/// The comment is signed along with the data, so it can name the release or
+/// file the signature is for. What it says is the caller's to check.
 ///
 /// # Errors
 ///

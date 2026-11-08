@@ -805,6 +805,15 @@ CREATE TABLE bot_token_channels (
 ALTER TABLE messages ADD COLUMN bot_id INTEGER REFERENCES bots(id) ON DELETE SET NULL;
 ",
     ),
+    Migration::Sql(
+        r"
+-- Where an automation was installed from, so Sideporch can offer a newer
+-- version. NULL for automations written here or imported from a file.
+ALTER TABLE automations ADD COLUMN origin_url TEXT;
+ALTER TABLE automations ADD COLUMN origin_version TEXT;
+ALTER TABLE automations ADD COLUMN origin_sha256 TEXT;
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

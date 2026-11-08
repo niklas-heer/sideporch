@@ -138,6 +138,9 @@ async fn install(
     let origin = views::automations::Origin {
         url: &entry.file,
         signed,
+        version: Some(&entry.version),
+        sha256: &entry.sha256,
+        update: sharing::installed_from(&state, &entry.file).await?,
     };
     sharing::show_preview(&state, &user, &text, Some(&origin)).await
 }

@@ -22,6 +22,7 @@ pub fn list_page(
     automations: &[Automation],
     triggers: &HashMap<i64, Triggers>,
     imported: Option<usize>,
+    updates: &HashMap<i64, crate::automations::catalogue::Entry>,
 ) -> Markup {
     let (libraries, scripts): (Vec<&Automation>, Vec<&Automation>) = automations
         .iter()
@@ -84,6 +85,15 @@ pub fn list_page(
                                     span class="block text-xs text-muted dark:text-haint" { "Changed " (timestamp(automation.updated_at)) }
                                 }
                                 (status_badge(automation.enabled, automation.last_error.is_some()))
+                            }
+                            @if let Some(newer) = updates.get(&automation.id) {
+                                form method="post" action="/automations/browse/install" class="shrink-0" {
+                                    input type="hidden" name="file" value=(newer.file);
+                                    button type="submit" class="btn-quiet" title="Preview the store's newer version" {
+                                        span class="rounded bg-amber-100 px-2 text-xs font-semibold text-amber-900 dark:bg-amber-950 dark:text-amber-200" { "Update available" }
+                                        " " (newer.version)
+                                    }
+                                }
                             }
                         }
                     }
@@ -621,11 +631,73 @@ const fn action_label(action: Action, library: bool) -> &'static str {
     }
 }
 
-/// Where a previewed file was downloaded from, and whether its signature
-/// was checked.
+/// Where a previewed file was downloaded from, what the store listed for
+/// it, and whether it replaces an automation installed from there.
 pub struct Origin<'a> {
     pub url: &'a str,
     pub signed: bool,
+    /// The store's version, for a file from the store.
+    pub version: Option<&'a str>,
+    /// The file's SHA-256, as it was checked.
+    pub sha256: &'a str,
+    /// An automation here came from this file, so this one updates it.
+    pub update: bool,
+}
+
+/// Says which secrets the previewed scripts read that this server lacks.
+fn missing_secrets_notice(missing: &std::collections::BTreeSet<&str>) -> Markup {
+    html! {
+    @if !missing.is_empty() {
+        p class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200" {
+            "Add these secrets under " a href="/settings/secrets" class="underline" { "Secrets" } " before switching them on: "
+            @for (index, name) in missing.iter().enumerate() {
+                @if index > 0 { ", " }
+                code { (name) }
+            }
+        }
+    }
+    }
+}
+
+/// What a previewed file's download says: where it came from, whether its
+/// signature was checked, and whether it updates an automation here.
+fn origin_notice(origin: &Origin<'_>) -> Markup {
+    html! {
+        p class="mb-2 text-sm" { "Downloaded from " code { (origin.url) } ". Nothing is added until you confirm below." }
+        @if origin.update {
+            p class="mb-2 text-sm" {
+                "This updates the automation you installed from here. It keeps its history and webhook URL, and is switched off again until you switch it on."
+            }
+        }
+        @if origin.signed {
+            p class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200" {
+                "Signed by Sideporch. The file matches its checksum and its signature."
+            }
+        } @else {
+            p class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200" {
+                "Not signed. Nobody checked who made this file, so only install it if you trust who published it."
+            }
+        }
+    }
+}
+
+/// The hidden fields that carry a download's origin to the confirmation,
+/// and the box an unsigned download needs ticked.
+fn origin_fields(origin: &Origin<'_>) -> Markup {
+    html! {
+        input type="hidden" name="trust" value=(if origin.signed { "signed" } else { "unsigned" });
+        input type="hidden" name="origin_url" value=(origin.url);
+        input type="hidden" name="origin_sha256" value=(origin.sha256);
+        @if let Some(version) = origin.version {
+            input type="hidden" name="origin_version" value=(version);
+        }
+        @if !origin.signed {
+            label class="flex items-start gap-2 text-sm" {
+                input type="checkbox" name="confirm_unsigned" value="on" required class="mt-1 h-4 w-4 accent-floor";
+                span { "I trust who published this unsigned automation, and I've read what it does." }
+            }
+        }
+    }
 }
 
 /// What importing a file would do, with a choice per item.
@@ -652,33 +724,16 @@ pub fn import_preview(
                 "Read each one before you switch it on: automations can post, react, and call other services."
             }
             @if let Some(origin) = origin {
-                p class="mb-2 text-sm" { "Downloaded from " code { (origin.url) } ". Nothing is added until you confirm below." }
-                @if origin.signed {
-                    p class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200" {
-                        "Signed by Sideporch. The file matches its checksum and its signature."
-                    }
-                } @else {
-                    p class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200" {
-                        "Not signed. Nobody checked who made this file, so only install it if you trust who published it."
-                    }
-                }
+                (origin_notice(origin))
             }
             @if let Some(description) = &bundle.description {
                 p class="mb-2 text-sm" { (description) }
             }
-            @if !missing.is_empty() {
-                p class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200" {
-                    "Add these secrets under " a href="/settings/secrets" class="underline" { "Secrets" } " before switching them on: "
-                    @for (index, name) in missing.iter().enumerate() {
-                        @if index > 0 { ", " }
-                        code { (name) }
-                    }
-                }
-            }
+            (missing_secrets_notice(&missing))
             form method="post" action="/automations/import/confirm" class="space-y-4" {
                 textarea name="bundle" hidden { (json) }
                 @if let Some(origin) = origin {
-                    input type="hidden" name="trust" value=(if origin.signed { "signed" } else { "unsigned" });
+                    (origin_fields(origin))
                 }
                 ol class="space-y-3" {
                     @for (index, plan) in plans.iter().enumerate() {
@@ -735,18 +790,10 @@ pub fn import_preview(
                                 label for={ "action-" (index) } class="field-label" { "Import" }
                                 select id={ "action-" (index) } name={ "action_" (index) } class="field max-w-sm" {
                                     @for action in plan.choices() {
-                                        option value=(action.key()) { (action_label(action, plan.item.is_library())) }
+                                        option value=(action.key()) selected[origin.is_some_and(|origin| origin.update) && action == Action::Replace] { (action_label(action, plan.item.is_library())) }
                                     }
                                 }
                             }
-                        }
-                    }
-                }
-                @if let Some(origin) = origin {
-                    @if !origin.signed {
-                        label class="flex items-start gap-2 text-sm" {
-                            input type="checkbox" name="confirm_unsigned" value="on" required class="mt-1 h-4 w-4 accent-floor";
-                            span { "I trust who published this unsigned automation, and I've read what it does." }
                         }
                     }
                 }

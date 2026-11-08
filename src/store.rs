@@ -3538,6 +3538,45 @@ pub fn automation_values(conn: &Connection, id: i64) -> AppResult<HashMap<String
     Ok(values.collect::<Result<_, _>>()?)
 }
 
+/// Where an automation was installed from: the file's address, and the
+/// version and checksum the store listed for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomationOrigin {
+    pub url: String,
+    pub version: Option<String>,
+    pub sha256: Option<String>,
+}
+
+/// The automations that were installed from somewhere, by id.
+pub fn automation_origins(conn: &Connection) -> AppResult<HashMap<i64, AutomationOrigin>> {
+    let mut statement = conn.prepare(
+        "SELECT id, origin_url, origin_version, origin_sha256 FROM automations WHERE origin_url IS NOT NULL",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get(0)?,
+            AutomationOrigin {
+                url: row.get(1)?,
+                version: row.get(2)?,
+                sha256: row.get(3)?,
+            },
+        ))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+pub fn set_automation_origin(
+    conn: &Connection,
+    id: i64,
+    origin: &AutomationOrigin,
+) -> AppResult<()> {
+    conn.execute(
+        "UPDATE automations SET origin_url = ?1, origin_version = ?2, origin_sha256 = ?3 WHERE id = ?4",
+        params![origin.url, origin.version, origin.sha256, id],
+    )?;
+    Ok(())
+}
+
 pub fn set_automation_error(conn: &Connection, id: i64, error: Option<&str>) -> AppResult<()> {
     conn.execute(
         "UPDATE automations SET last_error = ?1 WHERE id = ?2",

@@ -8,6 +8,7 @@
 //! previewing it. Sideporch doesn't review what's listed.
 
 use std::{
+    collections::HashMap,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -15,7 +16,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use super::{Settings, http};
-use crate::{AppState, updates};
+use crate::{AppState, store, updates};
 
 /// What the index says it is.
 pub const FORMAT: &str = "sideporch-catalogue";
@@ -88,7 +89,8 @@ pub fn parse(text: &str) -> Result<Vec<Entry>, String> {
         if entry.name.is_empty() {
             return Err("an entry has no name".to_owned());
         }
-        entry.version = entry.version.trim().to_owned();
+        let version = entry.version.trim().to_owned();
+        entry.version = version;
         if entry.version.is_empty() {
             return Err(format!("{} has no version", entry.name));
         }
@@ -147,6 +149,46 @@ pub fn check_signature(
     }
 }
 
+/// Whether `available` is a newer version than `installed`. Compares the
+/// numbers in each dotted version (`1.10.0` is newer than `1.9.2`); a
+/// version without numbers is only newer when it differs.
+pub fn is_newer(installed: &str, available: &str) -> bool {
+    fn numbers(version: &str) -> Vec<u64> {
+        version
+            .split(['.', '-', '+'])
+            .map_while(|part| part.parse().ok())
+            .collect()
+    }
+    let (old, new) = (numbers(installed), numbers(available));
+    if old.is_empty() || new.is_empty() {
+        return installed != available;
+    }
+    let width = old.len().max(new.len());
+    let padded = |numbers: &[u64]| -> Vec<u64> {
+        (0..width)
+            .map(|index| numbers.get(index).copied().unwrap_or(0))
+            .collect()
+    };
+    padded(&new) > padded(&old)
+}
+
+/// The store's newer versions of installed automations, by id: an installed
+/// automation is offered the entry whose file it came from, when that entry
+/// has a newer version.
+pub fn newer_versions(
+    installed: &HashMap<i64, store::AutomationOrigin>,
+    entries: &[Entry],
+) -> HashMap<i64, Entry> {
+    installed
+        .iter()
+        .filter_map(|(id, origin)| {
+            let entry = entries.iter().find(|entry| entry.file == origin.url)?;
+            let version = origin.version.as_deref().unwrap_or_default();
+            is_newer(version, &entry.version).then(|| (*id, entry.clone()))
+        })
+        .collect()
+}
+
 /// The index as last fetched, reused for a few minutes.
 #[derive(Default)]
 pub struct Cache {
@@ -162,9 +204,12 @@ struct Fetched {
 impl Cache {
     /// The entries fetched from `url` a moment ago, if still fresh.
     pub fn get(&self, url: &str) -> Option<Vec<Entry>> {
-        let guard = self.fetched.lock().ok()?;
-        let fetched = guard.as_ref()?;
-        (fetched.url == url && fetched.at.elapsed() < CACHE_FOR).then(|| fetched.entries.clone())
+        self.fetched.lock().ok().and_then(|guard| {
+            guard
+                .as_ref()
+                .filter(|fetched| fetched.url == url && fetched.at.elapsed() < CACHE_FOR)
+                .map(|fetched| fetched.entries.clone())
+        })
     }
 
     pub fn put(&self, url: &str, entries: Vec<Entry>) {
@@ -227,6 +272,42 @@ mod tests {
     }
 
     #[test]
+    fn compares_versions_by_their_numbers() {
+        assert!(is_newer("1.9.2", "1.10.0"));
+        assert!(is_newer("1.2", "1.2.1"));
+        assert!(!is_newer("1.2.0", "1.2.0"));
+        assert!(!is_newer("2.0.0", "1.9.9"));
+        assert!(is_newer("nightly-a", "nightly-b"));
+    }
+
+    #[test]
+    fn offers_the_newer_entry_of_what_was_installed_from_it() {
+        let entries = parse(INDEX).unwrap();
+        let origin = |url: &str, version: &str| store::AutomationOrigin {
+            url: url.to_owned(),
+            version: Some(version.to_owned()),
+            sha256: None,
+        };
+        let installed = HashMap::from([
+            (
+                1,
+                origin("https://example.com/weather.sideporch.json", "1.1.0"),
+            ),
+            (
+                2,
+                origin("https://example.com/weather.sideporch.json", "1.2.0"),
+            ),
+            (3, origin("https://example.com/elsewhere.json", "0.1.0")),
+        ]);
+        let offered = newer_versions(&installed, &entries);
+        assert_eq!(offered.len(), 1);
+        assert_eq!(
+            offered.get(&1).map(|entry| entry.version.as_str()),
+            Some("1.2.0")
+        );
+    }
+
+    #[test]
     fn hashes_like_sha256sum() {
         assert_eq!(
             sha256_hex(b"abc"),
@@ -246,9 +327,7 @@ mod tests {
         for entry in entries {
             let name = entry.file.rsplit('/').next().unwrap().to_owned();
             let text = std::fs::read_to_string(dir.join(&name)).unwrap();
-            let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
-            let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-            assert_eq!(hex, entry.sha256, "{name}");
+            assert_eq!(sha256_hex(text.as_bytes()), entry.sha256, "{name}");
             assert_eq!(
                 entry.signature, None,
                 "{name} is unsigned until the maintainer signs it"

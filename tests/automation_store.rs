@@ -14,6 +14,8 @@
 
 mod common;
 
+use std::sync::{Arc, Mutex};
+
 use axum::{Router, routing::get};
 use base64ct::{Base64, Encoding as _};
 use blake2::Digest as _;
@@ -42,10 +44,13 @@ fn sign(seed: u8, data: &[u8], trusted_comment: &str) -> (String, String) {
 
 /// The SHA-256 of `text`, in hex, as a store lists it.
 fn sha256(text: &str) -> String {
+    use std::fmt::Write as _;
     <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes())
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+        .fold(String::new(), |mut hex, byte| {
+            write!(hex, "{byte:02x}").unwrap();
+            hex
+        })
 }
 
 /// Serves `body` at `/<path>` on a local port; returns the file's URL.
@@ -55,6 +60,22 @@ async fn serve(path: &'static str, body: String) -> String {
         get(move || {
             let body = body.clone();
             async move { body }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{address}/{path}")
+}
+
+/// Serves whatever `body` holds at the time of each request, so a test can
+/// publish a new version at the same address.
+async fn serve_changing(path: &'static str, body: Arc<Mutex<String>>) -> String {
+    let app = Router::new().route(
+        &format!("/{path}"),
+        get(move || {
+            let body = Arc::clone(&body);
+            async move { body.lock().unwrap().clone() }
         }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -388,4 +409,95 @@ async fn an_unsigned_entry_installs_only_when_confirmed() {
     assert_eq!(unconfirmed.status(), StatusCode::BAD_REQUEST);
     let list = admin.page("/automations").await;
     assert!(!list.contains(">Welcome new members<"), "nothing was added");
+}
+
+/// A catalogue index with one entry, served at its own address.
+async fn index_for(name: &str, version: &str, file: &str, checksum: &str) -> String {
+    let index = json!({
+        "format": "sideporch-catalogue",
+        "version": 1,
+        "entries": [{
+            "name": name,
+            "description": "Posts a welcome.",
+            "version": version,
+            "file": file,
+            "sha256": checksum,
+        }],
+    });
+    serve("index.json", index.to_string()).await
+}
+
+#[tokio::test]
+async fn an_installed_automation_is_offered_its_newer_version_and_keeps_its_history() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let v2 = WELCOME.replace("Say hello below.", "Introduce yourself below.");
+    let file_body = Arc::new(Mutex::new(WELCOME.to_owned()));
+    let file = serve_changing("welcome-new-members.sideporch.json", Arc::clone(&file_body)).await;
+
+    // Version 1.0.0 is installed from the store.
+    let v1_index = index_for("Welcome new members", "1.0.0", &file, &sha256(WELCOME)).await;
+    use_store(&admin, &v1_index).await;
+    let page = install(&admin, &file).await.text().await.unwrap();
+    assert!(!page.contains("This updates"), "{page}");
+    let confirm = admin
+        .post(
+            "/automations/import/confirm",
+            &[
+                ("bundle", WELCOME),
+                ("action_0", "import"),
+                ("trust", "unsigned"),
+                ("confirm_unsigned", "on"),
+                ("origin_url", &file),
+                ("origin_version", "1.0.0"),
+                ("origin_sha256", &sha256(WELCOME)),
+            ],
+        )
+        .await;
+    assert!(confirm.status().is_redirection(), "{}", confirm.status());
+    assert!(
+        !admin
+            .page("/automations")
+            .await
+            .contains("Update available")
+    );
+
+    // Version 1.1.0 is published at the same address.
+    *file_body.lock().unwrap() = v2.clone();
+    let v2_index = index_for("Welcome new members", "1.1.0", &file, &sha256(&v2)).await;
+    use_store(&admin, &v2_index).await;
+    let list = admin.page("/automations").await;
+    assert!(list.contains("Update available"), "{list}");
+    assert!(list.contains("1.1.0"), "{list}");
+
+    // The update goes through the same preview, with Replace chosen.
+    let preview = install(&admin, &file).await.text().await.unwrap();
+    assert!(preview.contains("This updates the automation"), "{preview}");
+    assert!(preview.contains("value=\"replace\" selected"), "{preview}");
+    let confirm = admin
+        .post(
+            "/automations/import/confirm",
+            &[
+                ("bundle", &v2),
+                ("action_0", "replace"),
+                ("trust", "unsigned"),
+                ("confirm_unsigned", "on"),
+                ("origin_url", &file),
+                ("origin_version", "1.1.0"),
+                ("origin_sha256", &sha256(&v2)),
+            ],
+        )
+        .await;
+    assert!(confirm.status().is_redirection(), "{}", confirm.status());
+
+    // Same automation, new script, still switched off, and no offer left.
+    let list = admin.page("/automations").await;
+    assert_eq!(list.matches(">Welcome new members<").count(), 1, "{list}");
+    assert!(!list.contains("Update available"), "{list}");
+    let editor = admin.page("/automations/1").await;
+    assert!(editor.contains("Introduce yourself below"), "{editor}");
+    assert!(
+        !editor.contains("name=\"enabled\" value=\"on\" checked"),
+        "{editor}"
+    );
 }

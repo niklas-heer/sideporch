@@ -8,6 +8,8 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::{any, get, post},
 };
+use std::collections::HashMap;
+
 use maud::Markup;
 use serde::{Deserialize, Serialize};
 
@@ -72,7 +74,28 @@ async fn list(
     Query(query): Query<ListQuery>,
 ) -> AppResult<Markup> {
     require_admin(&user)?;
-    let list = state.db.call(|conn| store::automations(conn)).await?;
+    let (list, origins, settings) = state
+        .db
+        .call(|conn| {
+            Ok((
+                store::automations(conn)?,
+                store::automation_origins(conn)?,
+                automations::Settings::load(conn)?,
+            ))
+        })
+        .await?;
+    // Only automations from the store or a web address can have an update,
+    // so the store is read only when one of them is installed.
+    let updates = if origins.is_empty() {
+        HashMap::new()
+    } else {
+        automations::catalogue::index(&state, &settings)
+            .await
+            .map_or_else(
+                |_| HashMap::new(),
+                |entries| automations::catalogue::newer_versions(&origins, &entries),
+            )
+    };
     let sidebar = shell_data(&state, user.id).await?;
     let shell = Shell {
         user: &user,
@@ -85,6 +108,7 @@ async fn list(
         &list,
         &triggers,
         query.imported,
+        &updates,
     ))
 }
 

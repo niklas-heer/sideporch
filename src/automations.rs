@@ -119,7 +119,8 @@ impl Settings {
         }
         let catalogue = self.catalogue_url.trim();
         if !catalogue.is_empty()
-            && !(catalogue.starts_with("https://") || catalogue.starts_with("http://"))
+            && !catalogue.starts_with("https://")
+            && !catalogue.starts_with("http://")
         {
             return Err(AppError::bad_request(
                 "The store's address must start with https://, such as https://example.com/index.json.",
