@@ -12,9 +12,8 @@ primary_region = "fra"
   SIDEPORCH_PUBLIC_URL = "https://sideporch-demo.fly.dev"
   # Fly's proxy puts the visitor's address here; limits and bans use it.
   SIDEPORCH_CLIENT_IP_HEADER = "Fly-Client-IP"
-  # Anyone can reach it before the admin exists; README.md shows how to get
-  # the one-time setup link.
-  SIDEPORCH_REQUIRE_SETUP_LINK = "true"
+  # Anyone can reach it before the admin exists, so the setup page asks for
+  # SIDEPORCH_SETUP_CODE, a Fly secret kept in 1Password; see README.md.
   # The demo is updated by deploying a new release image.
   SIDEPORCH_UPDATE_CHECK = "false"
 

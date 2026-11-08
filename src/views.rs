@@ -254,8 +254,26 @@ pub fn account_fields(form: &AccountForm) -> Markup {
     }
 }
 
-/// `open`: anyone who reaches the page can claim it, so say so.
-pub fn setup_page(action: &str, open: bool, error: Option<&str>, form: &AccountForm) -> Markup {
+/// How the first account is claimed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupMode {
+    /// Anyone who reaches the page can claim it, so say so.
+    Open,
+    /// The page asks for a setup code: one the operator `chose`, or the
+    /// random one `sideporch setup-link` prints.
+    Code { chosen: bool },
+    /// Reached through the one-time setup link.
+    Link,
+}
+
+/// `code`: a setup code already found right, to keep in the form.
+pub fn setup_page(
+    action: &str,
+    mode: SetupMode,
+    error: Option<&str>,
+    form: &AccountForm,
+    code: &str,
+) -> Markup {
     auth_page(
         "Set up",
         &html! {
@@ -263,14 +281,28 @@ pub fn setup_page(action: &str, open: bool, error: Option<&str>, form: &AccountF
             p class="mb-5 text-muted dark:text-haint" {
                 "Create the admin account. It can invite everyone else, manage channels, and write automations."
             }
-            @if open {
+            @if mode == SetupMode::Open {
                 p class="mb-5 rounded-lg border border-line bg-screen px-3 py-2 text-sm text-muted dark:border-night-line dark:bg-night dark:text-haint" {
-                    "The first person to open this page becomes the admin, so finish setup now. To require a one-time link instead, start Sideporch with "
-                    code { "--require-setup-link" } "."
+                    "The first person to open this page becomes the admin, so finish setup now. To require a setup code instead, start Sideporch with "
+                    code { "SIDEPORCH_SETUP_CODE" } " set to a secret of your choice."
                 }
             }
             (form_error(error))
             form method="post" action=(action) {
+                @if let SetupMode::Code { chosen } = mode {
+                    (text_field(
+                        "Setup code",
+                        "setup_code",
+                        "password",
+                        code,
+                        "off",
+                        Some(if chosen {
+                            "The secret this server was started with as SIDEPORCH_SETUP_CODE."
+                        } else {
+                            "Run sideporch setup-link on the server, and open the link it prints or paste its last part here."
+                        }),
+                    ))
+                }
                 (account_fields(form))
                 button type="submit" class="btn mt-2 w-full" { "Create account" }
             }

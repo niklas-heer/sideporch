@@ -50,14 +50,24 @@ Sideporch listens on `127.0.0.1:8080`, so only the server itself reaches it unti
 
 ## Create the admin account
 
-While no account exists, the first visitor creates the admin account. On a server others can reach, start Sideporch with `--require-setup-link` (as above): then creating the first account needs a one-time link, which stays out of service and container logs. Get it on the server:
+While no account exists, the first visitor creates the admin account. On a server others can reach before you set it up, lock setup in one of two ways:
 
-```sh
-sudo -u sideporch sideporch setup-link --data /var/lib/sideporch
-docker exec sideporch /sideporch setup-link    # with Docker
-```
+- **A setup code you choose** (new in 0.7.0), easiest where there's no shell, like Docker, Fly.io or Kubernetes. Generate one, keep it in your password manager, and start Sideporch with it; the setup page asks for it:
 
-Open the link, create your account, and invite everyone else from **People**. To let people join without an invite, open sign-up under **Admin → Community**; see [Sign-up and trust](@/docs/community/people/sign-up-and-trust.md).
+  ```sh
+  openssl rand -base64 24    # a code nobody can guess
+  docker run -d -p 8080:8080 -v sideporch:/data -e SIDEPORCH_SETUP_CODE='…' ghcr.io/niklas-heer/sideporch
+  ```
+
+  It needs at least 16 characters. Wrong codes are limited per address, and the code does nothing once the first account exists, so you can leave it set.
+- **A one-time link** with `--require-setup-link` (as in the service above), which stays out of service and container logs. Get it on the server:
+
+  ```sh
+  sudo -u sideporch sideporch setup-link --data /var/lib/sideporch
+  docker exec sideporch /sideporch setup-link    # with Docker
+  ```
+
+Open the link (or enter the code), create your account, and invite everyone else from **People**. To let people join without an invite, open sign-up under **Admin → Community**; see [Sign-up and trust](@/docs/community/people/sign-up-and-trust.md).
 
 ## Options
 
@@ -68,6 +78,7 @@ Every option can also be set with an environment variable.
 | `--listen` | `SIDEPORCH_LISTEN` | `127.0.0.1:8080` | Address and port to listen on. |
 | `--data` | `SIDEPORCH_DATA` | `sideporch-data` | Directory for everything Sideporch keeps. Back it up to back up everything. |
 | `--public-url` | `SIDEPORCH_PUBLIC_URL` | taken from each request | The URL people use, such as `https://chat.example.com`, for invite and webhook links. An `https://` URL also makes cookies secure. |
+| `--setup-code` | `SIDEPORCH_SETUP_CODE` | none | A secret of at least 16 characters that the setup page asks for before anyone can create the first account. Takes the place of `--require-setup-link`. New in 0.7.0. |
 | `--require-setup-link` | `SIDEPORCH_REQUIRE_SETUP_LINK` | off | Require the one-time link from `sideporch setup-link` to create the first account. |
 | `--client-ip-header` | `SIDEPORCH_CLIENT_IP_HEADER` | none: the connection's address | Behind a reverse proxy, the header it puts visitors' addresses in, such as `X-Forwarded-For` or `Fly-Client-IP`. Sign-in limits and [bans](@/docs/community/people/moderation.md#bans) use it. Only set it when every request comes through that proxy, or anyone could claim any address. New in 0.6.0. |
 | `--update-check` | `SIDEPORCH_UPDATE_CHECK` | `true` | Ask GitHub for new releases every six hours; `false` keeps Sideporch from contacting GitHub. See [Update](@/docs/get-started/update.md). New in 0.5.0. |

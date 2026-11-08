@@ -73,6 +73,11 @@ pub struct Config {
     /// default the first person to open Sideporch creates it; lock setup
     /// when the server is reachable by others before you set it up.
     pub require_setup_link: bool,
+    /// A setup code the operator chose, such as a secret kept in a password
+    /// manager. While no account exists, `/setup` asks for it. Easier than
+    /// the setup link on platforms without a shell, and used instead of it
+    /// when both are set. At least [`MIN_SETUP_CODE`] characters.
+    pub setup_code: Option<String>,
     /// Where the GIPHY API lives; tests point it at a local fake.
     #[doc(hidden)]
     pub gif_api_base: Option<String>,
@@ -137,14 +142,23 @@ pub(crate) struct AppState {
     access: Arc<access::Access>,
 }
 
+/// The shortest setup code Sideporch accepts. Anyone can try codes while
+/// no account exists, so a code must be too long to guess.
+pub const MIN_SETUP_CODE: usize = 16;
+
 /// Whether and how the first account can still be created.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Setup {
     Done,
     /// Whoever opens `/setup` first creates the admin account.
     Open,
-    /// Only the one-time link `/setup/<token>` works.
-    Link(String),
+    /// `/setup` asks for this secret. A random one also works as the
+    /// one-time link `/setup/<token>`; one the operator `chose` doesn't, so
+    /// it stays out of browser history and access logs.
+    Secret {
+        token: String,
+        chosen: bool,
+    },
 }
 
 impl AppState {
@@ -152,8 +166,16 @@ impl AppState {
         self.setup.lock().map_or(Setup::Done, |setup| setup.clone())
     }
 
-    fn setup_token_matches(&self, candidate: &str) -> bool {
-        matches!(self.setup(), Setup::Link(token)
+    /// Whether `candidate` is the setup secret. Hashing both sides keeps
+    /// the comparison from leaking how much of a guess was right.
+    fn setup_code_matches(&self, candidate: &str) -> bool {
+        matches!(self.setup(), Setup::Secret { token, .. }
+            if Sha256::digest(&token) == Sha256::digest(candidate.trim()))
+    }
+
+    /// Whether `candidate` is the random one-time setup link's token.
+    fn setup_link_matches(&self, candidate: &str) -> bool {
+        matches!(self.setup(), Setup::Secret { token, chosen: false }
             if Sha256::digest(&token) == Sha256::digest(candidate))
     }
 
@@ -167,6 +189,43 @@ impl AppState {
             tracing::warn!(%error, "could not remove the used setup link");
         }
     }
+}
+
+/// How the first account can be created when the server starts with
+/// `users` accounts.
+fn initial_setup(
+    users: i64,
+    require_setup_link: bool,
+    setup_code: Option<String>,
+) -> Result<Setup, Error> {
+    let setup_code = setup_code
+        .map(|code| code.trim().to_owned())
+        .filter(|code| !code.is_empty());
+    if let Some(code) = &setup_code
+        && code.chars().count() < MIN_SETUP_CODE
+    {
+        return Err(Error::internal(format!(
+            "the setup code must have at least {MIN_SETUP_CODE} characters, so nobody can guess it; generate one, for example with `openssl rand -base64 24`"
+        )));
+    }
+    Ok(if users > 0 {
+        Setup::Done
+    } else if let Some(token) = setup_code {
+        if require_setup_link {
+            tracing::info!("a setup code is set, so it is used instead of a setup link");
+        }
+        Setup::Secret {
+            token,
+            chosen: true,
+        }
+    } else if require_setup_link {
+        Setup::Secret {
+            token: auth::random_token()?,
+            chosen: false,
+        }
+    } else {
+        Setup::Open
+    })
 }
 
 /// An opened Sideporch instance.
@@ -243,13 +302,7 @@ impl Sideporch {
             config.allow_private_federation,
         )
         .await?;
-        let setup = if users > 0 {
-            Setup::Done
-        } else if config.require_setup_link {
-            Setup::Link(auth::random_token()?)
-        } else {
-            Setup::Open
-        };
+        let setup = initial_setup(users, config.require_setup_link, config.setup_code)?;
         let state = AppState {
             db,
             hub: Hub::default(),
@@ -301,15 +354,24 @@ impl Sideporch {
     pub fn setup_path(&self) -> Option<String> {
         match self.state.setup() {
             Setup::Done => None,
-            Setup::Open => Some("/setup".to_owned()),
-            Setup::Link(token) => Some(format!("/setup/{token}")),
+            Setup::Open | Setup::Secret { chosen: true, .. } => Some("/setup".to_owned()),
+            Setup::Secret {
+                token,
+                chosen: false,
+            } => Some(format!("/setup/{token}")),
         }
     }
 
     /// Whether the setup path is a secret one-time link.
     #[must_use]
     pub fn setup_is_secret(&self) -> bool {
-        matches!(self.state.setup(), Setup::Link(_))
+        matches!(self.state.setup(), Setup::Secret { chosen: false, .. })
+    }
+
+    /// Whether setup asks for a code the operator chose.
+    #[must_use]
+    pub fn setup_needs_code(&self) -> bool {
+        matches!(self.state.setup(), Setup::Secret { chosen: true, .. })
     }
 
     /// Saves the setup link, built on `base_url`, to a file only the
@@ -321,6 +383,10 @@ impl Sideporch {
     ///
     /// Fails if the file cannot be written.
     pub fn save_setup_link(&self, base_url: &str) -> std::io::Result<Option<PathBuf>> {
+        // A chosen code is already kept wherever the operator keeps secrets.
+        if self.setup_needs_code() {
+            return Ok(None);
+        }
         let Some(path) = self.setup_path() else {
             return Ok(None);
         };

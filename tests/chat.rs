@@ -402,6 +402,7 @@ async fn a_required_setup_link_is_kept_private_and_removed_after_use() {
         data_dir: data.path().to_owned(),
         public_url: None,
         require_setup_link: true,
+        setup_code: None,
         gif_api_base: None,
         allow_insecure_push: true,
         allow_private_link_previews: false,
@@ -436,12 +437,23 @@ async fn a_required_setup_link_is_kept_private_and_removed_after_use() {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
-    // Without the link there is no way in.
+    // Without the link there is no way in: the setup page asks for it.
     let front = client.get(format!("{base}/")).send().await.unwrap();
-    assert_eq!(front.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert!(front.text().await.unwrap().contains("sideporch setup-link"));
+    assert_eq!(front.headers()["location"], "/setup");
     let open = client.get(format!("{base}/setup")).send().await.unwrap();
-    assert_eq!(open.status(), StatusCode::NOT_FOUND);
+    assert!(open.text().await.unwrap().contains("sideporch setup-link"));
+    let guess = client
+        .post(format!("{base}/setup"))
+        .form(&[
+            ("display_name", "Mallory"),
+            ("username", "mallory"),
+            ("password", "correct horse"),
+            ("setup_code", "a-guess"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(guess.status(), StatusCode::FORBIDDEN);
     let response = client
         .post(link.trim())
         .form(&[
@@ -456,6 +468,96 @@ async fn a_required_setup_link_is_kept_private_and_removed_after_use() {
     assert!(!file.exists(), "a used link is deleted");
     assert!(app.setup_is_secret() || app.setup_path().is_none());
     assert!(app.save_setup_link(&base).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_chosen_setup_code_guards_setup_without_a_link() {
+    let code = "porch-light-0123456789";
+    let server = common::start_with(|config| {
+        config.setup_code = Some(code.to_owned());
+        config.client_ip_header = Some("x-forwarded-for".to_owned());
+    })
+    .await;
+    assert!(
+        !server.data_dir().join("setup-link").exists(),
+        "a chosen code stays wherever the operator keeps it"
+    );
+    let visitor = Browser::anonymous(&server).at_address("203.0.113.7");
+    assert_eq!(location(&visitor.get("/").await), "/setup");
+    let page = visitor.page("/setup").await;
+    assert!(page.contains("SIDEPORCH_SETUP_CODE"));
+    assert!(!page.contains("The first person to open this page becomes the admin"));
+    // A chosen code is never a link, so it stays out of browser history.
+    assert_eq!(
+        visitor.get(&format!("/setup/{code}")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let account = |setup_code: &'static str| {
+        [
+            ("display_name", "Ada Admin"),
+            ("username", "ada"),
+            ("password", "correct horse"),
+            ("setup_code", setup_code),
+        ]
+    };
+    let wrong = visitor.post("/setup", &account("not-the-code")).await;
+    assert_eq!(wrong.status(), StatusCode::FORBIDDEN);
+    assert!(
+        wrong
+            .text()
+            .await
+            .unwrap()
+            .contains("That isn't the setup code.")
+    );
+
+    // A right code with a bad account keeps the code in the form.
+    let short = visitor
+        .post(
+            "/setup",
+            &[
+                ("display_name", "Ada Admin"),
+                ("username", "ada"),
+                ("password", "short"),
+                ("setup_code", code),
+            ],
+        )
+        .await;
+    assert_eq!(short.status(), StatusCode::BAD_REQUEST);
+    assert!(short.text().await.unwrap().contains(code));
+
+    // Guessing from one address stops after a few tries, even with the
+    // right code; others can still finish setup.
+    for _ in 0..9 {
+        visitor.post("/setup", &account("still-wrong")).await;
+    }
+    let paused = visitor.post("/setup", &account(code)).await;
+    assert_eq!(paused.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let mut owner = Browser::anonymous(&server).at_address("198.51.100.4");
+    let claimed = owner.submit("/setup", &account(code)).await;
+    assert_eq!(claimed.status(), StatusCode::SEE_OTHER);
+    assert!(home_channel(&owner).await > 0, "the owner is signed in");
+    assert_eq!(location(&visitor.get("/setup").await), "/login");
+    assert_eq!(
+        visitor.post("/setup", &account(code)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn a_short_setup_code_is_refused_at_start() {
+    let data = tempfile::tempdir().unwrap();
+    let opened = sideporch::Sideporch::open(sideporch::Config {
+        setup_code: Some("password".to_owned()),
+        ..common::config(data.path())
+    })
+    .await;
+    let error = opened
+        .err()
+        .expect("a guessable code is refused")
+        .to_string();
+    assert!(error.contains("at least 16 characters"), "{error}");
 }
 
 #[tokio::test]

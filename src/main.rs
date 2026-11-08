@@ -29,6 +29,12 @@ struct Args {
     /// the first account. Without it, the first visitor becomes the admin.
     #[arg(long, env = "SIDEPORCH_REQUIRE_SETUP_LINK")]
     require_setup_link: bool,
+    /// A secret of your choice that the setup page asks for before anyone
+    /// can create the first account, at least 16 characters. Easiest on
+    /// platforms without a shell: set it as a secret, open the site, and
+    /// type it in. Generate one with `openssl rand -base64 24`.
+    #[arg(long, env = "SIDEPORCH_SETUP_CODE", hide_env_values = true)]
+    setup_code: Option<String>,
     /// Ask GitHub for new releases every few hours, so admins hear about
     /// updates. `false` keeps Sideporch from contacting GitHub at all.
     #[arg(long, env = "SIDEPORCH_UPDATE_CHECK", default_value_t = true, action = clap::ArgAction::Set)]
@@ -125,6 +131,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         data_dir: args.data.clone(),
         public_url: args.public_url,
         require_setup_link: args.require_setup_link,
+        setup_code: args.setup_code,
         gif_api_base: None,
         allow_insecure_push: false,
         allow_private_link_previews: false,
@@ -141,7 +148,11 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         None => format!("http://{}", listener.local_addr()?),
     };
     tracing::info!(data = %args.data.display(), "Sideporch is listening on {base}");
-    if let Some(file) = app.save_setup_link(&base)? {
+    if app.setup_needs_code() {
+        tracing::info!(
+            "No account exists yet. Open {base}/setup and enter the setup code to create the admin account"
+        );
+    } else if let Some(file) = app.save_setup_link(&base)? {
         // A one-time link grants the first admin account. Show it on an
         // interactive terminal; keep it out of service and container logs.
         if (!app.setup_is_secret() || std::io::stdout().is_terminal())

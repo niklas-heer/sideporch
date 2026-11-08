@@ -49,6 +49,11 @@ pub const SIGN_IN_PER_ACCOUNT: Limit = Limit {
     max: 20,
     window: Duration::from_mins(15),
 };
+/// Wrong setup codes per address, while no account exists.
+pub const SETUP_CODE: Limit = Limit {
+    max: 10,
+    window: Duration::from_mins(15),
+};
 /// New accounts per address.
 pub const SIGN_UP: Limit = Limit {
     max: 3,
@@ -71,6 +76,7 @@ pub enum Counted {
     FailedSignIn(IpAddr),
     FailedSignInAs(String),
     SignUp(IpAddr),
+    SetupCode(IpAddr),
 }
 
 /// A range of addresses, such as `203.0.113.0/24` or one address.

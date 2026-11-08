@@ -189,16 +189,8 @@ async fn signed_in(state: &AppState, headers: &HeaderMap) -> AppResult<Option<Cu
 async fn index(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
     if signed_in(&state, &headers).await?.is_none() {
         match state.setup() {
-            Setup::Open => return Ok(Redirect::to("/setup").into_response()),
-            Setup::Link(_) => {
-                return Ok((
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    views::error_page(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "This Sideporch isn't set up yet. Get the one-time setup link with `sideporch setup-link` on the server.",
-                    ),
-                )
-                    .into_response());
+            Setup::Open | Setup::Secret { .. } => {
+                return Ok(Redirect::to("/setup").into_response());
             }
             Setup::Done => {}
         }
@@ -425,6 +417,15 @@ struct AccountInput {
     password: String,
 }
 
+/// The setup form: the account, and the setup code when one is needed.
+#[derive(Deserialize)]
+struct SetupInput {
+    #[serde(flatten)]
+    account: AccountInput,
+    #[serde(default)]
+    setup_code: String,
+}
+
 struct ValidAccount {
     display_name: String,
     username: String,
@@ -461,35 +462,80 @@ fn validate_account(input: AccountInput) -> Result<ValidAccount, (&'static str, 
     })
 }
 
-async fn open_setup_form(State(state): State<AppState>) -> AppResult<Response> {
-    match state.setup() {
-        Setup::Open => {
-            Ok(views::setup_page("/setup", true, None, &AccountForm::default()).into_response())
-        }
-        Setup::Done => Ok(Redirect::to("/login").into_response()),
-        Setup::Link(_) => Err(AppError::NotFound),
+/// How `/setup` looks for the current setup mode.
+const fn setup_mode(setup: &Setup) -> Option<views::SetupMode> {
+    match setup {
+        Setup::Done => None,
+        Setup::Open => Some(views::SetupMode::Open),
+        Setup::Secret { chosen, .. } => Some(views::SetupMode::Code { chosen: *chosen }),
     }
+}
+
+async fn open_setup_form(State(state): State<AppState>) -> AppResult<Response> {
+    let Some(mode) = setup_mode(&state.setup()) else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    Ok(views::setup_page("/setup", mode, None, &AccountForm::default(), "").into_response())
 }
 
 async fn open_setup(
     State(state): State<AppState>,
-    Form(input): Form<AccountInput>,
+    ClientIp(address): ClientIp,
+    Form(input): Form<SetupInput>,
 ) -> AppResult<Response> {
-    if state.setup() != Setup::Open {
+    let setup = state.setup();
+    let Some(mode) = setup_mode(&setup) else {
         return Err(AppError::NotFound);
+    };
+    if let Setup::Secret { .. } = setup {
+        let refuse = |status, error: &str, input: SetupInput| {
+            let form = AccountForm {
+                display_name: input.account.display_name.trim().to_owned(),
+                username: input.account.username.trim().to_lowercase(),
+            };
+            (
+                status,
+                views::setup_page("/setup", mode, Some(error), &form, ""),
+            )
+                .into_response()
+        };
+        // Count wrong codes per address before anything costly happens.
+        let counted = address.map(Counted::SetupCode);
+        if let Some(wait) = counted
+            .as_ref()
+            .and_then(|counted| state.access.check(counted, access::SETUP_CODE).err())
+        {
+            let error = format!(
+                "Too many wrong setup codes. Try again in {}.",
+                access::wait_text(wait)
+            );
+            return Ok(refuse(StatusCode::TOO_MANY_REQUESTS, &error, input));
+        }
+        if !state.setup_code_matches(&input.setup_code) {
+            if let Some(counted) = counted {
+                state.access.count(counted);
+            }
+            return Ok(refuse(
+                StatusCode::FORBIDDEN,
+                "That isn't the setup code.",
+                input,
+            ));
+        }
     }
-    create_first_account(&state, "/setup", input).await
+    let code = input.setup_code;
+    create_first_account(&state, "/setup", mode, input.account, &code).await
 }
 
 async fn setup_form(State(state): State<AppState>, Path(token): Path<String>) -> AppResult<Markup> {
-    if !state.setup_token_matches(&token) {
+    if !state.setup_link_matches(&token) {
         return Err(AppError::NotFound);
     }
     Ok(views::setup_page(
         &format!("/setup/{token}"),
-        false,
+        views::SetupMode::Link,
         None,
         &AccountForm::default(),
+        "",
     ))
 }
 
@@ -498,25 +544,36 @@ async fn setup(
     Path(token): Path<String>,
     Form(input): Form<AccountInput>,
 ) -> AppResult<Response> {
-    if !state.setup_token_matches(&token) {
+    if !state.setup_link_matches(&token) {
         return Err(AppError::NotFound);
     }
-    create_first_account(&state, &format!("/setup/{token}"), input).await
+    create_first_account(
+        &state,
+        &format!("/setup/{token}"),
+        views::SetupMode::Link,
+        input,
+        "",
+    )
+    .await
 }
 
 /// Creates the first account, an admin, unless someone was faster.
+///
+/// `code` is the setup code that was already checked, kept in the form so
+/// a mistake in the account doesn't mean typing it again.
 async fn create_first_account(
     state: &AppState,
     action: &str,
+    mode: views::SetupMode,
     input: AccountInput,
+    code: &str,
 ) -> AppResult<Response> {
-    let open = state.setup() == Setup::Open;
     let account = match validate_account(input) {
         Ok(account) => account,
         Err((error, form)) => {
             return Ok((
                 StatusCode::BAD_REQUEST,
-                views::setup_page(action, open, Some(error), &form),
+                views::setup_page(action, mode, Some(error), &form, code),
             )
                 .into_response());
         }

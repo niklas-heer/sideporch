@@ -32,12 +32,13 @@ pub async fn start_with(configure: impl FnOnce(&mut Config)) -> Server {
     start_in(tempfile::tempdir().unwrap(), configure).await
 }
 
-/// Starts a server on a data directory the test prepared.
-pub async fn start_in(data: TempDir, configure: impl FnOnce(&mut Config)) -> Server {
-    let mut config = Config {
-        data_dir: data.path().to_owned(),
+/// The settings tests start servers with, keeping data in `data_dir`.
+pub fn config(data_dir: &std::path::Path) -> Config {
+    Config {
+        data_dir: data_dir.to_owned(),
         public_url: None,
         require_setup_link: false,
+        setup_code: None,
         gif_api_base: None,
         allow_insecure_push: true,
         allow_private_link_previews: false,
@@ -47,7 +48,12 @@ pub async fn start_in(data: TempDir, configure: impl FnOnce(&mut Config)) -> Ser
         update_source: None,
         allow_private_federation: false,
         client_ip_header: None,
-    };
+    }
+}
+
+/// Starts a server on a data directory the test prepared.
+pub async fn start_in(data: TempDir, configure: impl FnOnce(&mut Config)) -> Server {
+    let mut config = config(data.path());
     configure(&mut config);
     let app = Sideporch::open(config).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -72,6 +78,7 @@ pub async fn start_federated() -> Server {
         data_dir: data.path().to_owned(),
         public_url: Some(base.clone()),
         require_setup_link: false,
+        setup_code: None,
         gif_api_base: None,
         allow_insecure_push: true,
         allow_private_link_previews: false,
