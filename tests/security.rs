@@ -560,8 +560,38 @@ async fn a_setup_code_is_checked_before_a_passkey_is_made() {
     assert_eq!(without.status(), StatusCode::FORBIDDEN);
 }
 
+/// Sends a request with `browser`'s session as a browser at localhost
+/// would, but holds back its body until `meanwhile` ran, and returns the
+/// raw answer. Requests are let in before their body arrives.
+async fn hold_open(
+    server: &common::Server,
+    browser: &Browser,
+    path: &str,
+    content_type: &str,
+    body: &str,
+    meanwhile: impl FnOnce(),
+) -> String {
+    let address = server.base.trim_start_matches("http://").to_owned();
+    let port = address.rsplit(':').next().unwrap();
+    let mut stream = tokio::net::TcpStream::connect(&address).await.unwrap();
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {}\r\nContent-Type: {content_type}\r\nx-sideporch-fetch: 1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        browser.cookie,
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    meanwhile();
+    stream.write_all(body.as_bytes()).await.unwrap();
+    let mut answer = String::new();
+    tokio::io::AsyncReadExt::read_to_string(&mut stream, &mut answer)
+        .await
+        .unwrap();
+    answer
+}
+
 #[tokio::test]
-async fn a_request_held_open_across_recovery_adds_no_passkey() {
+async fn requests_held_open_across_recovery_add_no_way_in() {
     let server = start().await;
     let mut ada = admin(&server).await;
     let mut device = Authenticator::new(&server.base);
@@ -570,32 +600,58 @@ async fn a_request_held_open_across_recovery_adds_no_passkey() {
         .json()
         .await
         .unwrap();
-    let body = device.create(&options).to_string();
-
-    // Someone with the session sends the headers, and holds back the body
-    // until the admin has run the recovery command.
-    let address = server.base.trim_start_matches("http://").to_owned();
-    let port = address.rsplit(':').next().unwrap();
-    let mut stream = tokio::net::TcpStream::connect(&address).await.unwrap();
-    let head = format!(
-        "POST /webauthn/register HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {}\r\nContent-Type: application/json\r\nx-sideporch-fetch: 1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        ada.cookie,
-        body.len()
-    );
-    stream.write_all(head.as_bytes()).await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
-    stream.write_all(body.as_bytes()).await.unwrap();
-    let mut answer = String::new();
-    tokio::io::AsyncReadExt::read_to_string(&mut stream, &mut answer)
-        .await
-        .unwrap();
+    let passkey = device.create(&options).to_string();
+    let recover = || {
+        sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
+    };
+    let answer = hold_open(
+        &server,
+        &ada,
+        "/webauthn/register",
+        "application/json",
+        &passkey,
+        recover,
+    )
+    .await;
     assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
     let database = rusqlite::Connection::open(server.data_dir().join("sideporch.db")).unwrap();
     let passkeys: i64 = database
         .query_row("SELECT COUNT(*) FROM passkeys", [], |row| row.get(0))
         .unwrap();
     assert_eq!(passkeys, 0);
+
+    // A password change held open the same way doesn't end the recovery.
+    let server = start().await;
+    let ada = admin(&server).await;
+    let answer = hold_open(
+        &server,
+        &ada,
+        "/settings/account",
+        "application/x-www-form-urlencoded",
+        "current=correct+horse&password=the+thief+chose+this",
+        || {
+            sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
+        },
+    )
+    .await;
+    assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
+    let (_, response) = sign_in(&server, "ada", "the thief chose this").await;
+    assert_ne!(response.status(), StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn an_account_being_recovered_gets_no_session() {
+    let server = start().await;
+    drop(admin(&server).await);
+    // Recovery begun (as the command does) while the password still works:
+    // signing in with it starts no session.
+    let database = rusqlite::Connection::open(server.data_dir().join("sideporch.db")).unwrap();
+    database
+        .execute("UPDATE users SET recovering_since = 1", [])
+        .unwrap();
+    let (_, response) = sign_in(&server, "ada", "correct horse").await;
+    assert_ne!(response.status(), StatusCode::SEE_OTHER);
+    assert!(response.text().await.unwrap().contains("being recovered"));
 }
 
 #[tokio::test]

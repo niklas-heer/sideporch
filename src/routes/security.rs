@@ -451,13 +451,18 @@ async fn confirm_email(
     user: CurrentUser,
     State(state): State<AppState>,
     Path(token): Path<String>,
+    headers: HeaderMap,
 ) -> AppResult<Redirect> {
     let hash = auth::hash_token(&token);
     let (user_id, now) = (user.id, now_ms());
+    let session = auth::request_session(&headers);
     state
         .db
         .call(move |conn| {
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            if !auth::still_signed_in(&tx, session.as_deref(), user_id)? {
+                return Err(AppError::Forbidden);
+            }
             match security::take_link(&tx, &hash, LinkPurpose::ConfirmEmail, now)? {
                 Some((owner, email)) if owner == user_id => {
                     security::set_email(&tx, user_id, Some(&email))?;
