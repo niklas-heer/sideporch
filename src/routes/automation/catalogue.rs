@@ -4,6 +4,7 @@
 use axum::{
     Form, Router,
     extract::State,
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -77,26 +78,72 @@ async fn install(
         }
     };
     let Some(entry) = entries.iter().find(|entry| entry.file == form.file) else {
-        let notice = "Nothing was installed: that automation isn't in the store any more.";
-        return Ok(page(&state, &user, Some(notice)).await?.into_response());
+        return refuse(
+            &state,
+            &user,
+            "Nothing was installed: that automation isn't in the store any more.",
+        )
+        .await;
     };
-    match http::download(
-        settings.allow_private_network,
-        &entry.file,
-        bundle::MAX_BYTES,
-    )
-    .await
-    {
-        Ok(body) => {
-            let text = String::from_utf8_lossy(&body).into_owned();
-            sharing::show_preview(&state, &user, &text, Some(&entry.file)).await
-        }
+    let allow = settings.allow_private_network;
+    let body = match http::download(allow, &entry.file, bundle::MAX_BYTES).await {
+        Ok(body) => body,
         Err(error) => {
             let notice = format!(
                 "Nothing was installed. Couldn't download {}: {error}.",
                 entry.name
             );
-            Ok(page(&state, &user, Some(&notice)).await?.into_response())
+            return refuse(&state, &user, &notice).await;
         }
+    };
+    // The checksum is the store's; a file that doesn't match it is refused.
+    if catalogue::sha256_hex(&body) != entry.sha256 {
+        let notice = format!(
+            "Nothing was installed. The file for {} doesn't match the checksum the store lists for it, so it may have changed on the way.",
+            entry.name
+        );
+        return refuse(&state, &user, &notice).await;
     }
+    let signed = match &entry.signature {
+        None => false,
+        Some(address) => {
+            let signature = match http::download(allow, address, catalogue::MAX_SIGNATURE_BYTES)
+                .await
+            {
+                Ok(signature) => String::from_utf8_lossy(&signature).into_owned(),
+                Err(error) => {
+                    let notice = format!(
+                        "Nothing was installed. Couldn't download the signature for {}: {error}.",
+                        entry.name
+                    );
+                    return refuse(&state, &user, &notice).await;
+                }
+            };
+            if let Err(error) = catalogue::check_signature(
+                state.automations.signing_key(),
+                &body,
+                &entry.sha256,
+                &signature,
+            ) {
+                let notice = format!(
+                    "Nothing was installed. The signature for {} doesn't check out: {error}.",
+                    entry.name
+                );
+                return refuse(&state, &user, &notice).await;
+            }
+            true
+        }
+    };
+    let text = String::from_utf8_lossy(&body).into_owned();
+    let origin = views::automations::Origin {
+        url: &entry.file,
+        signed,
+    };
+    sharing::show_preview(&state, &user, &text, Some(&origin)).await
+}
+
+/// The store page with `notice`, and a 400 status: nothing was installed.
+async fn refuse(state: &AppState, user: &CurrentUser, notice: &str) -> AppResult<Response> {
+    let page = page(state, user, Some(notice)).await?;
+    Ok((StatusCode::BAD_REQUEST, page).into_response())
 }

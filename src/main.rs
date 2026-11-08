@@ -177,6 +177,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         update_check: args.update_check,
         update_source: None,
         allow_private_federation: false,
+        automation_public_key: None,
         client_ip_header: args.client_ip_header,
         cloudflare_access_team: args.cloudflare_access_team,
         cloudflare_access_aud: args.cloudflare_access_aud,

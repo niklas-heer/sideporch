@@ -58,7 +58,11 @@ async fn preview_url(
     match http::download(allow_private, &url, bundle::MAX_BYTES).await {
         Ok(body) => {
             let text = String::from_utf8_lossy(&body).into_owned();
-            show_preview(&state, &user, &text, Some(&url)).await
+            let origin = views::automations::Origin {
+                url: &url,
+                signed: false,
+            };
+            show_preview(&state, &user, &text, Some(&origin)).await
         }
         Err(error) => {
             let page = render_import(
@@ -168,13 +172,13 @@ async fn preview(
     show_preview(&state, &user, &text, None).await
 }
 
-/// Checks `text` as a bundle and renders what importing it would do. `from`
-/// is the web address it was downloaded from, if any.
+/// Checks `text` as a bundle and renders what importing it would do. `origin`
+/// says where it was downloaded from, and whether Sideporch checked it.
 pub async fn show_preview(
     state: &AppState,
     user: &CurrentUser,
     text: &str,
-    from: Option<&str>,
+    origin: Option<&views::automations::Origin<'_>>,
 ) -> AppResult<Response> {
     let bundle = match bundle::parse(text) {
         Ok(bundle) => bundle,
@@ -191,7 +195,7 @@ pub async fn show_preview(
         sidebar: &sidebar,
         current: None,
     };
-    Ok(views::automations::import_preview(&shell, &json, &bundle, &plans, from).into_response())
+    Ok(views::automations::import_preview(&shell, &json, &bundle, &plans, origin).into_response())
 }
 
 /// Imports the items as chosen in the preview, switched off.
@@ -211,6 +215,14 @@ async fn confirm(
                 .unwrap_or(Action::Skip)
         })
         .collect();
+    // A file from the web or the store has to be confirmed when unsigned.
+    if form.get("trust").map(String::as_str) == Some("unsigned")
+        && form.get("confirm_unsigned").is_none()
+    {
+        return Err(AppError::bad_request(
+            "Tick the box to confirm you want to install this unsigned automation. Nothing was added.",
+        ));
+    }
     let imported = import(&state, plans, &actions, user.id, "import")
         .await?
         .map_err(AppError::bad_request)?;

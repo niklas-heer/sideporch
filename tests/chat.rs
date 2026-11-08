@@ -410,6 +410,7 @@ async fn a_required_setup_link_is_kept_private_and_removed_after_use() {
         update_check: false,
         update_source: None,
         allow_private_federation: false,
+        automation_public_key: None,
         client_ip_header: None,
         cloudflare_access_team: None,
         cloudflare_access_aud: None,

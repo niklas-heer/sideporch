@@ -107,6 +107,11 @@ pub struct Config {
     /// on this machine.
     #[doc(hidden)]
     pub allow_private_federation: bool,
+    /// The minisign key automation store files are checked against; tests
+    /// sign files with a key of their own. Defaults to Sideporch's release
+    /// key, which is what the store's signed examples use.
+    #[doc(hidden)]
+    pub automation_public_key: Option<String>,
     /// The header a trusted reverse proxy puts the client's address in,
     /// such as `X-Forwarded-For` or `Fly-Client-IP`. Without it, the
     /// connection's address counts and such headers are ignored.
@@ -372,7 +377,13 @@ impl Sideporch {
                 config.allow_private_link_previews,
             )?),
             data_dir: config.data_dir.clone(),
-            automations: Automations::start(&db_path),
+            automations: Automations::start(
+                &db_path,
+                config
+                    .automation_public_key
+                    .clone()
+                    .unwrap_or_else(|| updates::signature::RELEASE_KEY.to_owned()),
+            ),
             secure_cookies: public_url
                 .as_deref()
                 .is_some_and(|url| url.starts_with("https://")),

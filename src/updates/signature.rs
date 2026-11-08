@@ -9,6 +9,25 @@
 /// The public key that signs releases, as minisign prints it.
 pub const RELEASE_KEY: &str = "RWRtn2cj2SpGnZDtKTNsgnc8mv68NfwlwFgA+hcmOD+cWH8dSQxGkuoo";
 
+/// Checks that `signature` (a `.minisig` file) was made with `public_key`
+/// over `data`, and returns its trusted comment. What the comment says is
+/// the caller's to check: it is signed along with the data, so it can
+/// name the release or file the signature is for.
+///
+/// # Errors
+///
+/// Says why the signature doesn't hold.
+pub fn trusted_comment(public_key: &str, data: &[u8], signature: &str) -> Result<String, String> {
+    let key = minisign_verify::PublicKey::from_base64(public_key.trim())
+        .map_err(|_| "the key isn't valid".to_owned())?;
+    let signature = minisign_verify::Signature::decode(signature)
+        .map_err(|_| "the signature can't be read".to_owned())?;
+    // Prehashed signatures only, as current minisign makes them.
+    key.verify(data, &signature, false)
+        .map_err(|_| "the signature isn't from this key for this data".to_owned())?;
+    Ok(signature.trusted_comment().to_owned())
+}
+
 /// Checks `signature` (a `.minisig` file) over `data` with `public_key`,
 /// and that its trusted comment names `version`, so a signature from
 /// another release can't be passed off for this one.
@@ -17,16 +36,10 @@ pub const RELEASE_KEY: &str = "RWRtn2cj2SpGnZDtKTNsgnc8mv68NfwlwFgA+hcmOD+cWH8dS
 ///
 /// Says why the signature doesn't hold.
 pub fn verify(public_key: &str, data: &[u8], signature: &str, version: &str) -> Result<(), String> {
-    let key = minisign_verify::PublicKey::from_base64(public_key.trim())
-        .map_err(|_| "the release key isn't valid".to_owned())?;
-    let signature = minisign_verify::Signature::decode(signature)
-        .map_err(|_| "the release signature can't be read".to_owned())?;
-    // Prehashed signatures only, as current minisign makes them.
-    key.verify(data, &signature, false).map_err(|_| {
+    let comment = trusted_comment(public_key, data, signature).map_err(|_| {
         "the release checksums aren't signed with Sideporch's release key".to_owned()
     })?;
     let expected = format!("sideporch {version}");
-    let comment = signature.trusted_comment();
     if comment == expected || comment.starts_with(&format!("{expected} ")) {
         Ok(())
     } else {
@@ -74,6 +87,17 @@ mod tests {
             ),
             Ok(())
         );
+    }
+
+    #[test]
+    fn returns_the_trusted_comment_it_verified() {
+        let data = b"abc  sideporch-automation\n";
+        let (key, signature) = sign(7, data, "sideporch-automation abc");
+        assert_eq!(
+            super::trusted_comment(&key, data, &signature),
+            Ok("sideporch-automation abc".to_owned())
+        );
+        assert!(super::trusted_comment(&key, b"other", &signature).is_err());
     }
 
     #[test]

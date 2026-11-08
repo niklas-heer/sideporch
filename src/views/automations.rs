@@ -621,13 +621,20 @@ const fn action_label(action: Action, library: bool) -> &'static str {
     }
 }
 
+/// Where a previewed file was downloaded from, and whether its signature
+/// was checked.
+pub struct Origin<'a> {
+    pub url: &'a str,
+    pub signed: bool,
+}
+
 /// What importing a file would do, with a choice per item.
 pub fn import_preview(
     shell: &Shell<'_>,
     json: &str,
     bundle: &Bundle,
     plans: &[Plan],
-    from: Option<&str>,
+    origin: Option<&Origin<'_>>,
 ) -> Markup {
     let missing: std::collections::BTreeSet<&str> = plans
         .iter()
@@ -644,8 +651,17 @@ pub fn import_preview(
                 @if !bundle.sideporch.is_empty() { ", exported from Sideporch " (bundle.sideporch) } ". "
                 "Read each one before you switch it on: automations can post, react, and call other services."
             }
-            @if let Some(from) = from {
-                p class="mb-2 text-sm" { "Downloaded from " code { (from) } ". Nothing is added until you confirm below." }
+            @if let Some(origin) = origin {
+                p class="mb-2 text-sm" { "Downloaded from " code { (origin.url) } ". Nothing is added until you confirm below." }
+                @if origin.signed {
+                    p class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200" {
+                        "Signed by Sideporch. The file matches its checksum and its signature."
+                    }
+                } @else {
+                    p class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200" {
+                        "Not signed. Nobody checked who made this file, so only install it if you trust who published it."
+                    }
+                }
             }
             @if let Some(description) = &bundle.description {
                 p class="mb-2 text-sm" { (description) }
@@ -661,6 +677,9 @@ pub fn import_preview(
             }
             form method="post" action="/automations/import/confirm" class="space-y-4" {
                 textarea name="bundle" hidden { (json) }
+                @if let Some(origin) = origin {
+                    input type="hidden" name="trust" value=(if origin.signed { "signed" } else { "unsigned" });
+                }
                 ol class="space-y-3" {
                     @for (index, plan) in plans.iter().enumerate() {
                         li class="rounded-xl border border-line p-4 dark:border-night-line" data-import-item {
@@ -720,6 +739,14 @@ pub fn import_preview(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+                @if let Some(origin) = origin {
+                    @if !origin.signed {
+                        label class="flex items-start gap-2 text-sm" {
+                            input type="checkbox" name="confirm_unsigned" value="on" required class="mt-1 h-4 w-4 accent-floor";
+                            span { "I trust who published this unsigned automation, and I've read what it does." }
                         }
                     }
                 }

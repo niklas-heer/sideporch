@@ -15,7 +15,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use super::{Settings, http};
-use crate::AppState;
+use crate::{AppState, updates};
 
 /// What the index says it is.
 pub const FORMAT: &str = "sideporch-catalogue";
@@ -29,6 +29,8 @@ const CACHE_FOR: Duration = Duration::from_mins(10);
 pub const MAX_INDEX_BYTES: usize = 512 * 1024;
 /// The most entries one index may list.
 const MAX_ENTRIES: usize = 500;
+/// The largest signature file Sideporch reads, in bytes.
+pub const MAX_SIGNATURE_BYTES: usize = 16 * 1024;
 
 /// One automation the store lists.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +116,37 @@ fn is_web_address(text: &str) -> bool {
     text.starts_with("https://") || text.starts_with("http://")
 }
 
+/// SHA-256 of `bytes`, in lowercase hex.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            use std::fmt::Write as _;
+            // Writing to a String cannot fail.
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
+}
+
+/// Checks that `signature` was made with Sideporch's key over `file`, and
+/// that it names this file's checksum in its trusted comment, so a signature
+/// for one file, or for a release, can't be passed off for another.
+pub fn check_signature(
+    key: &str,
+    file: &[u8],
+    sha256: &str,
+    signature: &str,
+) -> Result<(), String> {
+    let comment = updates::signature::trusted_comment(key, file, signature)
+        .map_err(|error| format!("the signature doesn't check out ({error})"))?;
+    if comment.starts_with(&format!("sideporch-automation {sha256}")) {
+        Ok(())
+    } else {
+        Err("the signature is for another file".to_owned())
+    }
+}
+
 /// The index as last fetched, reused for a few minutes.
 #[derive(Default)]
 pub struct Cache {
@@ -191,6 +224,14 @@ mod tests {
         assert!(parse(&INDEX.replace("https://example.com/weather", "ftp://x")).is_err());
         assert!(parse(&INDEX.replace("\"sha256\":\"AB12", "\"sha256\":\"short")).is_err());
         assert!(parse(&INDEX.replace("\"name\":\"Weather\"", "\"name\":\"  \"")).is_err());
+    }
+
+    #[test]
+    fn hashes_like_sha256sum() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     /// The example files the website publishes: each one matches its index

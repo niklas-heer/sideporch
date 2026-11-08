@@ -47,7 +47,7 @@ Press **Import**. The Automations page says how many were added.
 
 ### From a web address
 
-Under the file box, paste the address of a `.sideporch.json` file and press **Fetch and preview**. The server downloads it and shows the same preview. Only admins can do this, and the server refuses addresses on private or loopback networks unless the Automations settings allow them (the same setting that lets `sideporch.http` reach internal services). Downloads stop at 2 MB and a minute.
+Under the file box, paste the address of a `.sideporch.json` file and press **Fetch and preview**. The server downloads it and shows the same preview. Only admins can do this, and the server refuses addresses on private or loopback networks unless the Automations settings allow them (the same setting that lets `sideporch.http` reach internal services). Downloads stop at 2 MB and a minute. The preview says whether the file is **Signed by Sideporch** or **Not signed**; a file that isn't signed can only be imported after you tick a box confirming you trust whoever published it. The [automation store](@/docs/integrations/automations/store.md) checks files against their listed checksums and signatures the same way.
 
 ## After importing
 

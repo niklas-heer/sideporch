@@ -165,6 +165,8 @@ struct Inner {
     actions: async_mpsc::UnboundedSender<Action>,
     receiver: Mutex<Option<async_mpsc::UnboundedReceiver<Action>>>,
     catalogue: catalogue::Cache,
+    /// The minisign key store files are checked against.
+    signing_key: String,
 }
 
 /// Runs the enabled automations and routes events to them.
@@ -174,7 +176,7 @@ pub struct Automations {
 }
 
 impl Automations {
-    pub fn start(db_path: &Path) -> Self {
+    pub fn start(db_path: &Path, signing_key: String) -> Self {
         let (actions, receiver) = async_mpsc::unbounded_channel();
         Self {
             inner: Arc::new(Inner {
@@ -183,6 +185,7 @@ impl Automations {
                 actions,
                 receiver: Mutex::new(Some(receiver)),
                 catalogue: catalogue::Cache::default(),
+                signing_key,
             }),
         }
     }
@@ -190,6 +193,11 @@ impl Automations {
     /// The automation store's index, as last fetched.
     pub fn catalogue_cache(&self) -> &catalogue::Cache {
         &self.inner.catalogue
+    }
+
+    /// The minisign key store files are checked against.
+    pub fn signing_key(&self) -> &str {
+        &self.inner.signing_key
     }
 
     /// Carries out what scripts ask for. Call once, after startup.
