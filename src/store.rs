@@ -1705,6 +1705,25 @@ pub fn mark_thread_read(conn: &Connection, user_id: i64, root_id: i64) -> AppRes
     Ok(())
 }
 
+/// Marks a thread read for someone who has it open, if `root_id` really
+/// starts a thread in `channel_id`. The caller has checked they can read it.
+pub fn mark_thread_read_in(
+    conn: &Connection,
+    user_id: i64,
+    channel_id: i64,
+    root_id: i64,
+) -> AppResult<()> {
+    let is_root: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM messages WHERE id = ?1 AND channel_id = ?2 AND parent_id IS NULL)",
+        params![root_id, channel_id],
+        |row| row.get(0),
+    )?;
+    if is_root {
+        mark_thread_read(conn, user_id, root_id)?;
+    }
+    Ok(())
+}
+
 /// Records a reply `user_id` just posted: they have read the thread up to
 /// it, and an explicit unfollow ends, because replying is a way back in.
 pub fn thread_replied(
@@ -3119,6 +3138,17 @@ pub fn recipients(
     } else {
         Vec::new()
     };
+    // Everyone in a direct conversation hears about it, except replies in a
+    // thread they unfollowed. Being mentioned still reaches them, below.
+    if direct && let Some(parent) = message.parent_id {
+        let mut statement = conn.prepare(
+            "SELECT user_id FROM thread_follows WHERE root_message_id = ?1 AND following = 0",
+        )?;
+        let unfollowed = statement
+            .query_map([parent], |row| row.get::<_, i64>(0))?
+            .collect::<Result<std::collections::HashSet<i64>, _>>()?;
+        notify.retain(|id| !unfollowed.contains(id));
+    }
     notify.extend(&thread);
     notify.extend(&mentioned);
     keep(&mut notify);
@@ -3740,6 +3770,34 @@ pub fn use_api_token(
 #[cfg(test)]
 mod tests {
     use super::{direct_key, join_names, mentioned_names, mentions};
+
+    #[test]
+    fn unfollowing_a_thread_in_a_conversation_stops_its_notices() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sideporch.db");
+        crate::db::create_at_version(&path, crate::db::schema_version()).unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "INSERT INTO users (id, username, display_name, password_hash, is_admin, created_at) VALUES
+               (1, 'ada', 'Ada', 'x', 1, 0), (2, 'bea', 'Bea', 'x', 0, 0), (3, 'cy', 'Cy', 'x', 0, 0);
+             INSERT INTO channels (id, kind, dm_key, created_at) VALUES (1, 'dm', '1:2:3', 0);
+             INSERT INTO channel_members (channel_id, user_id) VALUES (1, 1), (1, 2), (1, 3);
+             INSERT INTO messages (id, channel_id, parent_id, user_id, body, created_at) VALUES
+               (1, 1, NULL, 1, 'plan', 0),
+               (2, 1, 1, 1, 'first reply', 0),
+               (3, 1, 1, 1, 'over to @bea', 0),
+               (4, 1, NULL, 1, 'new topic', 0);
+             INSERT INTO thread_follows (user_id, root_message_id, following, updated_at) VALUES (2, 1, 0, 0);",
+        )
+        .unwrap();
+        let notified = |id: i64| {
+            let message = super::message(&conn, id).unwrap().unwrap();
+            super::recipients(&conn, &message, Some(1)).unwrap().notify
+        };
+        assert_eq!(notified(2), [3], "Bea unfollowed this thread");
+        assert_eq!(notified(3), [2, 3], "a mention still reaches her");
+        assert_eq!(notified(4), [2, 3], "the rest of the conversation does too");
+    }
 
     #[test]
     fn a_conversation_is_keyed_by_its_sorted_people() {

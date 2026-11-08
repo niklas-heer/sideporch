@@ -219,6 +219,9 @@ enum ClientMessage {
     Read {
         channel_id: i64,
         message_id: i64,
+        /// The thread open on the page, when the reader sees its replies.
+        #[serde(default)]
+        thread_id: Option<i64>,
     },
     Visibility {
         visible: bool,
@@ -314,9 +317,9 @@ async fn serve(socket: WebSocket, state: AppState, user_id: i64) {
             },
             incoming = stream.next() => match incoming {
                 Some(Ok(WsMessage::Text(text))) => match serde_json::from_str(&text) {
-                    Ok(ClientMessage::Read { channel_id, message_id }) => {
+                    Ok(ClientMessage::Read { channel_id, message_id, thread_id }) => {
                         viewer.notified.remove(&channel_id);
-                        mark_read(&state, user_id, channel_id, message_id).await;
+                        mark_read(&state, user_id, channel_id, message_id, thread_id).await;
                     }
                     Ok(ClientMessage::View { channel_id }) => {
                         if let Some(channel_id) = channel_id {
@@ -417,12 +420,21 @@ async fn save_timezone(state: &AppState, user_id: i64, name: String) {
     }
 }
 
-async fn mark_read(state: &AppState, user_id: i64, channel_id: i64, message_id: i64) {
+async fn mark_read(
+    state: &AppState,
+    user_id: i64,
+    channel_id: i64,
+    message_id: i64,
+    thread_id: Option<i64>,
+) {
     let result = state
         .db
         .call(move |conn| {
             if store::channel_for(conn, channel_id, user_id)?.is_some() {
                 store::mark_read(conn, user_id, channel_id, message_id)?;
+                if let Some(root) = thread_id {
+                    store::mark_thread_read_in(conn, user_id, channel_id, root)?;
+                }
             }
             Ok(())
         })

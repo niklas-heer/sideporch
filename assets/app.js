@@ -532,7 +532,9 @@
       updateReplyCount(event.parent_id, event.reply_count);
     }
     if (document.visibilityState === "visible" && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "read", channel_id: event.channel_id, message_id: event.id }));
+      // A reply shown in the open thread counts as read in that thread too.
+      const thread = event.parent_id !== null && app.dataset.thread === String(event.parent_id) ? event.parent_id : undefined;
+      socket.send(JSON.stringify({ type: "read", channel_id: event.channel_id, message_id: event.id, thread_id: thread }));
     }
   }
 
@@ -678,7 +680,7 @@
       showReconnecting(false);
       const last = newest(list);
       if (last && document.visibilityState === "visible") {
-        liveSocket.send(JSON.stringify({ type: "read", channel_id: Number(channel), message_id: last }));
+        liveSocket.send(JSON.stringify({ type: "read", channel_id: Number(channel), message_id: last, thread_id: threadOpen ? Number(thread) : undefined }));
       }
     }
   }
@@ -687,6 +689,16 @@
   // leaving the rest alone, so focus and typing in it survive.
   function patchSidebar(html) {
     const fresh = new DOMParser().parseFromString(html, "text/html");
+    // A conversation started while away has no link here to mark: take the
+    // fresh list whole, since only the server knows where it belongs.
+    const nav = 'nav[aria-label="Channels"]';
+    const currentNav = document.querySelector(nav);
+    const freshNav = fresh.querySelector(nav);
+    const isMissing = (link) => !currentNav?.querySelector(`[data-channel-link="${link.dataset.channelLink}"]`);
+    if (currentNav && freshNav && [...freshNav.querySelectorAll("[data-channel-link]")].some(isMissing)) {
+      currentNav.innerHTML = freshNav.innerHTML;
+      return;
+    }
     const copyMarks = (next, current) => {
       if (!current) return;
       for (const name of ["data-unread", "data-muted"]) {
@@ -1015,8 +1027,9 @@
       error.classList.add("hidden");
       // A message keeps one id until it is answered, so a retry the server
       // already stored is not stored twice. A new id starts when the text or
-      // files change. Slash commands act when run, so they are not retried.
-      const retried = !textarea.value.trim().startsWith("/");
+      // files change. Slash commands act when run, so they are not retried;
+      // nor are scheduled sends, which keep no id to recognise a repeat by.
+      const retried = !textarea.value.trim().startsWith("/") && !form.elements.send_at;
       const signature = JSON.stringify([textarea.value, hasFiles ? [...fileInput.files].map((file) => [file.name, file.size, file.lastModified]) : []]);
       if (pendingSend?.signature !== signature) pendingSend = { id: newSendId(), signature };
       const body = hasFiles ? new FormData(form) : new URLSearchParams(new FormData(form));

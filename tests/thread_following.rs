@@ -285,6 +285,61 @@ async fn opening_a_thread_marks_it_read() {
 }
 
 #[tokio::test]
+async fn a_reply_read_live_in_the_open_thread_counts_as_read() {
+    let server = start().await;
+    let ada = admin(&server).await;
+    let channel = home_channel(&ada).await;
+    let cy = invite(&server, &ada, "Cy", "cy").await;
+    let root = post_root(&ada, channel, "Plan A?").await;
+    follow(&cy, channel, root).await;
+    let thread = format!("/c/{channel}/t/{root}");
+    cy.page(&thread).await;
+    assert_eq!(
+        ada.send(channel, "Friday works", Some(root)).await,
+        StatusCode::NO_CONTENT
+    );
+    assert!(cy.page("/activity").await.contains("New replies"));
+
+    let reply = last_reply_id(&ada.page(&thread).await);
+    let mut live = cy.live().await;
+    live.send(&serde_json::json!({
+        "type": "read", "channel_id": channel, "message_id": reply, "thread_id": root,
+    }))
+    .await;
+    let mut cleared = false;
+    for _ in 0..50 {
+        if !cy.page("/activity").await.contains("New replies") {
+            cleared = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(cleared, "reading it live marks the thread read");
+}
+
+#[tokio::test]
+async fn a_read_notice_cannot_mark_a_thread_in_another_channel() {
+    let server = start().await;
+    let ada = admin(&server).await;
+    let channel = home_channel(&ada).await;
+    let other = create_channel(&ada, "elsewhere", false).await;
+    let cy = invite(&server, &ada, "Cy", "cy").await;
+    let root = post_root(&ada, channel, "Plan A?").await;
+    follow(&cy, channel, root).await;
+    assert_eq!(
+        ada.send(channel, "Friday works", Some(root)).await,
+        StatusCode::NO_CONTENT
+    );
+    let mut live = cy.live().await;
+    live.send(&serde_json::json!({
+        "type": "read", "channel_id": other, "message_id": root, "thread_id": root,
+    }))
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(cy.page("/activity").await.contains("New replies"));
+}
+
+#[tokio::test]
 async fn unfollowed_threads_leave_the_list_and_started_ones_join_it() {
     let server = start().await;
     let ada = admin(&server).await;
