@@ -35,6 +35,9 @@
             # The end-to-end tests start real servers on 127.0.0.1.
             __darwinAllowLocalNetworking = true;
             doCheck = true;
+            # Every test file links the whole program. Built with the release
+            # profile, the test binaries alone outgrew CI's one-hour limit.
+            checkType = "debug";
             doInstallCheck = true;
             installCheckPhase = ''
               runHook preInstallCheck
