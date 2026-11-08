@@ -22,6 +22,7 @@ use super::{
     events::{CommandCall, Event, WebhookRequest},
     http::Http,
     sandbox::{self, Action, Environment, Identity, Outcome, Script, Sink, Storage, Triggers},
+    settings,
 };
 use crate::{
     db,
@@ -116,11 +117,18 @@ fn run(
         failing: automation.last_error.is_some(),
         secrets: Arc::clone(&shared.secrets),
     };
+    // The values an admin set; a settings change restarts the worker.
+    let saved = conn
+        .lock()
+        .ok()
+        .and_then(|guard| store::automation_setting_values(&guard, automation.id).ok())
+        .unwrap_or_default();
     let environment = Environment {
         identity: Identity {
             id: automation.id,
             name: automation.name.clone(),
         },
+        settings: Arc::new(settings::resolve(&automation.settings, &saved)),
         storage: Storage::Live(conn),
         sink: Sink::Live(shared.actions.clone()),
         libraries: Arc::clone(&shared.libraries),

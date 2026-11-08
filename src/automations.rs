@@ -19,6 +19,7 @@ pub mod cron;
 pub mod events;
 pub mod http;
 pub mod sandbox;
+pub mod settings;
 pub mod tooling;
 pub mod worker;
 

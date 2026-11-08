@@ -322,6 +322,7 @@ pub async fn import(
         } else {
             plan.item.name.clone()
         };
+        let declarations = plan.item.settings.clone();
         let change = Change {
             id: if action == Action::Replace {
                 plan.existing
@@ -336,12 +337,19 @@ pub async fn import(
             saved_with: saved_with.to_owned(),
         };
         match save_change(state, change).await? {
-            Ok(id) => imported.push(Imported {
-                id,
-                name,
-                kind: plan.item.kind,
-                action,
-            }),
+            Ok(id) => {
+                // The file's settings replace the ones this automation had.
+                state
+                    .db
+                    .call(move |conn| store::set_automation_declarations(conn, id, &declarations))
+                    .await?;
+                imported.push(Imported {
+                    id,
+                    name,
+                    kind: plan.item.kind,
+                    action,
+                });
+            }
             Err(error) => {
                 state.automations.reload(state).await?;
                 return Ok(Err(error));

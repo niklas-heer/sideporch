@@ -814,6 +814,19 @@ ALTER TABLE automations ADD COLUMN origin_version TEXT;
 ALTER TABLE automations ADD COLUMN origin_sha256 TEXT;
 ",
     ),
+    Migration::Sql(
+        r"
+-- The settings an automation declares in its file (a JSON list), and the
+-- values an admin set for them.
+ALTER TABLE automations ADD COLUMN settings TEXT;
+CREATE TABLE automation_settings (
+    automation_id INTEGER NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (automation_id, name)
+);
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

@@ -8,6 +8,8 @@ use super::{
 };
 use std::collections::HashMap;
 
+use crate::automations::settings::{self, Declaration};
+
 use crate::{
     automations::{
         KIND_LIBRARY, Triggers, api,
@@ -176,6 +178,14 @@ pub struct Editor<'a> {
     pub library: bool,
     /// What the running script listens to.
     pub triggers: Option<&'a Triggers>,
+    /// The settings the automation declares, and the values set for them.
+    pub settings: Option<SettingsView<'a>>,
+}
+
+/// The settings an automation declares, with the values an admin set.
+pub struct SettingsView<'a> {
+    pub declared: &'a [Declaration],
+    pub saved: &'a HashMap<String, String>,
 }
 
 pub fn editor_page(shell: &Shell<'_>, editor: &Editor<'_>) -> Markup {
@@ -221,6 +231,9 @@ pub fn editor_page(shell: &Shell<'_>, editor: &Editor<'_>) -> Markup {
             }
             @if let (Some(id), Some(url), false) = (editor.id, editor.hook_url, editor.library) {
                 (webhook_section(id, url))
+            }
+            @if let (Some(id), Some(view)) = (editor.id, &editor.settings) {
+                (settings_section(id, view))
             }
             @if editor.id.is_some() {
                 div class="max-w-3xl" {
@@ -307,6 +320,58 @@ fn script_form(editor: &Editor<'_>, action: &str) -> Markup {
         @if let Some(id) = editor.id {
             form method="post" action={ "/automations/" (id) "/delete" } class="mb-10 mt-8" {
                 button type="submit" class="btn-quiet text-sm" { (icon(icons::TRASH, "h-4 w-4")) "Delete automation" }
+            }
+        }
+    }
+}
+
+/// The settings a script declares, as a form. Values stay on this server.
+fn settings_section(id: i64, view: &SettingsView<'_>) -> Markup {
+    if view.declared.is_empty() {
+        return html! {};
+    }
+    html! {
+        div id="settings" class="mt-10 max-w-3xl" {
+            (section("Settings", "What the script reads with sideporch.setting. Values stay on this server. A required setting must have a value before the automation can be switched on.", &html! {
+                form method="post" action={ "/automations/" (id) "/settings" } class="max-w-lg space-y-4" {
+                    @for declaration in view.declared {
+                        (setting_field(declaration, view.saved))
+                    }
+                    button type="submit" class="btn-quiet text-sm" { "Save settings" }
+                }
+            }))
+        }
+    }
+}
+
+/// One setting's field: a text box, a number, or a checkbox for a boolean.
+fn setting_field(declaration: &Declaration, saved: &HashMap<String, String>) -> Markup {
+    let current = saved
+        .get(&declaration.name)
+        .cloned()
+        .or_else(|| settings::default_text(declaration))
+        .unwrap_or_default();
+    let field = format!("setting_{}", declaration.name);
+    let label_text = settings::label(declaration);
+    let required = if declaration.required {
+        " (required)"
+    } else {
+        ""
+    };
+    html! {
+        div {
+            @if declaration.kind == "boolean" {
+                label class="flex items-start gap-2" {
+                    input type="checkbox" name=(field) value="on" checked[current == "true"] class="mt-1 h-4 w-4 accent-floor";
+                    span { (label_text) (required) }
+                }
+            } @else {
+                label for=(field) class="field-label" { (label_text) (required) }
+                input id=(field) name=(field) type=(if declaration.kind == "number" { "number" } else { "text" })
+                    step="any" value=(current) class="field max-w-sm font-mono text-sm";
+                @if declaration.kind == "channel" {
+                    p class="mt-1 text-xs text-muted dark:text-haint" { "The name of a public channel, such as general." }
+                }
             }
         }
     }

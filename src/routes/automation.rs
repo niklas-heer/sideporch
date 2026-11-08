@@ -17,7 +17,7 @@ use super::{base_url, shell_data};
 use crate::{
     AppState, ai,
     auth::CurrentUser,
-    automations::{self, TestTrigger, WebhookRequest, tooling},
+    automations::{self, TestTrigger, WebhookRequest, settings, tooling},
     error::{AppError, AppResult},
     now_ms,
     store::{self, AutomationEdit},
@@ -40,6 +40,7 @@ pub fn router() -> Router<AppState> {
         .route("/automations/ai", post(write_with_ai))
         .route("/automations/{automation_id}", get(edit).post(update))
         .route("/automations/{automation_id}/delete", post(delete))
+        .route("/automations/{automation_id}/settings", post(save_settings))
         .route(
             "/automations/{automation_id}/webhook-token",
             post(new_hook_token),
@@ -160,7 +161,7 @@ async fn edit(
     headers: HeaderMap,
 ) -> AppResult<Markup> {
     require_admin(&user)?;
-    let (automation, runs, versions, ai_ready) = state
+    let (automation, runs, versions, ai_ready, saved) = state
         .db
         .call(move |conn| {
             let automation = store::automation(conn, automation_id)?.ok_or(AppError::NotFound)?;
@@ -169,6 +170,7 @@ async fn edit(
                 store::automation_runs(conn, automation_id, SHOWN_RUNS)?,
                 store::automation_versions(conn, automation_id)?,
                 ai::configured(conn)?,
+                store::automation_setting_values(conn, automation_id)?,
             ))
         })
         .await?;
@@ -191,6 +193,10 @@ async fn edit(
         ai_ready,
         library: automation.kind == automations::KIND_LIBRARY,
         triggers: triggers.as_ref(),
+        settings: Some(views::automations::SettingsView {
+            declared: &automation.settings,
+            saved: &saved,
+        }),
     };
     render_editor(&state, &user, &editor).await
 }
@@ -240,16 +246,36 @@ async fn save_change(state: &AppState, change: Change) -> AppResult<Result<i64, 
     state
         .db
         .call(move |conn| {
-            let (kind, enabled) = match change.id {
+            let (kind, enabled, declared) = match change.id {
                 Some(id) => {
                     let current = store::automation(conn, id)?.ok_or(AppError::NotFound)?;
-                    (current.kind, change.enabled.unwrap_or(current.enabled))
+                    (
+                        current.kind,
+                        change.enabled.unwrap_or(current.enabled),
+                        current.settings,
+                    )
                 }
                 None if change.kind == automations::KIND_LIBRARY => {
-                    (change.kind, false)
+                    (change.kind, false, Vec::new())
                 }
-                None => (automations::KIND_AUTOMATION.to_owned(), change.enabled.unwrap_or(false)),
+                None => (
+                    automations::KIND_AUTOMATION.to_owned(),
+                    change.enabled.unwrap_or(false),
+                    Vec::new(),
+                ),
             };
+            // A switched-on automation needs the settings it requires.
+            if enabled
+                && kind == automations::KIND_AUTOMATION
+                && let Some(id) = change.id
+                && let Some(missing) =
+                    settings::missing_required(&declared, &store::automation_setting_values(conn, id)?)
+                        .first()
+            {
+                return Ok(Err(format!(
+                    "{name} needs a value for {missing} before it can be switched on. Set it on the automation's page."
+                )));
+            }
             if kind == automations::KIND_LIBRARY {
                 if !automations::valid_library_name(&name) {
                     return Ok(Err(
@@ -341,6 +367,75 @@ async fn update(
     Form(form): Form<AutomationForm>,
 ) -> AppResult<Response> {
     save(&state, &user, Some(automation_id), form).await
+}
+
+/// Saves the values of an automation's declared settings from its page.
+/// A switched-on automation can't be left without one it requires.
+async fn save_settings(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Path(automation_id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    require_admin(&user)?;
+    let saved = state
+        .db
+        .call(move |conn| {
+            let automation = store::automation(conn, automation_id)?.ok_or(AppError::NotFound)?;
+            let mut saved = store::automation_setting_values(conn, automation_id)?;
+            let mut changes = Vec::new();
+            for declaration in &automation.settings {
+                let field = format!("setting_{}", declaration.name);
+                let value = if declaration.kind == "boolean" {
+                    let flag = if form.contains_key(&field) {
+                        "true"
+                    } else {
+                        "false"
+                    };
+                    Some(flag.to_owned())
+                } else {
+                    let text = form.get(&field).map_or("", |value| value.trim());
+                    if text.is_empty() {
+                        None
+                    } else {
+                        match settings::check_value(declaration, text) {
+                            Ok(value) => Some(value),
+                            Err(error) => return Ok(Err(error)),
+                        }
+                    }
+                };
+                if let Some(channel) = value.as_deref().filter(|_| declaration.kind == "channel")
+                    && store::public_channel_id(conn, channel)?.is_none()
+                {
+                    return Ok(Err(format!(
+                        "#{channel} isn't a public channel. A channel setting can only name a public channel."
+                    )));
+                }
+                match &value {
+                    Some(value) => saved.insert(declaration.name.clone(), value.clone()),
+                    None => saved.remove(&declaration.name),
+                };
+                changes.push((declaration.name.clone(), value));
+            }
+            if automation.enabled
+                && let Some(missing) = settings::missing_required(&automation.settings, &saved).first()
+            {
+                return Ok(Err(format!(
+                    "{missing} is required while {} is switched on. Switch the automation off before clearing it.",
+                    automation.name
+                )));
+            }
+            store::save_automation_settings(conn, automation_id, &changes)?;
+            Ok(Ok(()))
+        })
+        .await?;
+    match saved {
+        Ok(()) => {
+            state.automations.reload(&state).await?;
+            Ok(Redirect::to(&format!("/automations/{automation_id}")).into_response())
+        }
+        Err(error) => Err(AppError::bad_request(error)),
+    }
 }
 
 async fn delete(

@@ -244,6 +244,13 @@ pub const FUNCTIONS: &[Function] = &[
         must_use: true,
     },
     Function {
+        name: "sideporch.setting",
+        args: &[arg("name", Kind::String)],
+        snippet: "setting(\"$0\")",
+        doc: "Returns the value an admin set for the setting `name` under this automation's settings, or its declared default: a string, a number or a boolean as declared (a channel's value is its name). Returns `nil` when neither is set. Settings come with imported automations and change on the automation's page, without editing the script; the automation reads new values as soon as they are saved.",
+        must_use: true,
+    },
+    Function {
         name: "require",
         args: &[arg("name", Kind::String)],
         snippet: "require(\"$0\")",

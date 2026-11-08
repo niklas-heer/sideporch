@@ -27,6 +27,7 @@ use super::{
         WebhookRequest, valid_command_name,
     },
     http::{self, Http},
+    settings::SettingValue,
 };
 use crate::store;
 
@@ -239,6 +240,8 @@ pub struct Environment {
     /// Library sources by name, for `require`.
     pub libraries: Arc<HashMap<String, String>>,
     pub secrets: Arc<BTreeMap<String, String>>,
+    /// The automation's settings, as `sideporch.setting` reads them.
+    pub settings: Arc<BTreeMap<String, SettingValue>>,
     /// `None` switches `sideporch.http` off.
     pub http: Option<Arc<Http>>,
     /// The default time zone for `sideporch.cron`.
@@ -800,6 +803,18 @@ fn sandbox(environment: &Environment) -> mlua::Result<Lua> {
     api.set(
         "secret",
         lua.create_function(move |_, name: String| Ok(secrets.get(&name).cloned()))?,
+    )?;
+    let settings = Arc::clone(&environment.settings);
+    api.set(
+        "setting",
+        lua.create_function(move |lua, name: String| {
+            Ok(match settings.get(&name) {
+                None => mlua::Value::Nil,
+                Some(SettingValue::Text(text)) => mlua::Value::String(lua.create_string(text)?),
+                Some(SettingValue::Number(number)) => mlua::Value::Number(*number),
+                Some(SettingValue::Boolean(value)) => mlua::Value::Boolean(*value),
+            })
+        })?,
     )?;
     api.set(
         "now",
@@ -1601,6 +1616,7 @@ pub fn dry_environment(
         sink: Sink::Dry(Arc::default()),
         libraries,
         secrets,
+        settings: Arc::new(BTreeMap::new()),
         http,
         timezone,
     }
@@ -1626,6 +1642,7 @@ mod tests {
                     .collect(),
             ),
             secrets: Arc::new(BTreeMap::from([("TOKEN".to_owned(), "s3cret".to_owned())])),
+            settings: Arc::new(BTreeMap::new()),
             http: None,
             timezone: TimeZone::UTC,
         };

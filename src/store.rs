@@ -3317,12 +3317,15 @@ pub struct Automation {
     pub hook_token: String,
     /// `automation`, or `library` for code other scripts `require`.
     pub kind: String,
+    /// The settings the automation's file declares.
+    pub settings: Vec<crate::automations::settings::Declaration>,
 }
 
-const AUTOMATION_COLUMNS: &str =
-    "id, name, source, enabled, last_error, updated_at, COALESCE(hook_token, ''), kind";
+const AUTOMATION_COLUMNS: &str = "id, name, source, enabled, last_error, updated_at, COALESCE(hook_token, ''), kind, COALESCE(settings, '[]')";
 
 fn automation_from_row(row: &Row<'_>) -> rusqlite::Result<Automation> {
+    // A list that no longer reads as declarations is treated as none.
+    let settings: String = row.get(8)?;
     Ok(Automation {
         id: row.get(0)?,
         name: row.get(1)?,
@@ -3332,6 +3335,7 @@ fn automation_from_row(row: &Row<'_>) -> rusqlite::Result<Automation> {
         updated_at: row.get(5)?,
         hook_token: row.get(6)?,
         kind: row.get(7)?,
+        settings: serde_json::from_str(&settings).unwrap_or_default(),
     })
 }
 
@@ -3574,6 +3578,52 @@ pub fn set_automation_origin(
         "UPDATE automations SET origin_url = ?1, origin_version = ?2, origin_sha256 = ?3 WHERE id = ?4",
         params![origin.url, origin.version, origin.sha256, id],
     )?;
+    Ok(())
+}
+
+/// The settings an automation's file declares, replacing those it had.
+pub fn set_automation_declarations(
+    conn: &Connection,
+    id: i64,
+    declarations: &[crate::automations::settings::Declaration],
+) -> AppResult<()> {
+    let json = serde_json::to_string(declarations).map_err(crate::error::AppError::internal)?;
+    conn.execute(
+        "UPDATE automations SET settings = ?1 WHERE id = ?2",
+        params![json, id],
+    )?;
+    Ok(())
+}
+
+/// The values an admin set for an automation's settings, by name.
+pub fn automation_setting_values(conn: &Connection, id: i64) -> AppResult<HashMap<String, String>> {
+    let mut statement =
+        conn.prepare("SELECT name, value FROM automation_settings WHERE automation_id = ?1")?;
+    let values = statement.query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(values.collect::<Result<_, _>>()?)
+}
+
+/// Sets, or with `None` clears, several settings of an automation at once.
+pub fn save_automation_settings(
+    conn: &mut Connection,
+    id: i64,
+    changes: &[(String, Option<String>)],
+) -> AppResult<()> {
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for (name, value) in changes {
+        match value {
+            Some(value) => tx.execute(
+                "INSERT INTO automation_settings (automation_id, name, value) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (automation_id, name) DO UPDATE SET value = excluded.value",
+                params![id, name, value],
+            )?,
+            None => tx.execute(
+                "DELETE FROM automation_settings WHERE automation_id = ?1 AND name = ?2",
+                params![id, name],
+            )?,
+        };
+    }
+    tx.commit()?;
     Ok(())
 }
 

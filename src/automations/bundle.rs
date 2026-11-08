@@ -11,7 +11,10 @@ use std::collections::{BTreeSet, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::{KIND_AUTOMATION, KIND_LIBRARY, MAX_SOURCE_BYTES, tooling, valid_library_name};
+use super::{
+    KIND_AUTOMATION, KIND_LIBRARY, MAX_SOURCE_BYTES, settings, settings::Declaration, tooling,
+    valid_library_name,
+};
 use crate::store::Automation;
 
 pub const FORMAT: &str = "sideporch-automations";
@@ -54,6 +57,10 @@ pub struct Item {
     /// Libraries the script loads with `require`.
     #[serde(default)]
     pub requires: Vec<String>,
+    /// Settings an admin fills in on the automation's page, read with
+    /// `sideporch.setting`. Older readers ignore them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<Declaration>,
 }
 
 impl Item {
@@ -65,6 +72,7 @@ impl Item {
             source: automation.source.clone(),
             secrets: secrets_used(&automation.source),
             requires: libraries_required(&automation.source),
+            settings: automation.settings.clone(),
         }
     }
 
@@ -212,6 +220,9 @@ pub fn parse(text: &str) -> Result<Bundle, String> {
             if !libraries.insert(item.name.clone()) {
                 return Err(format!("The library {} is in the file twice.", item.name));
             }
+        }
+        if let Err(error) = settings::validate(&item.settings) {
+            return Err(format!("{}: {error}.", item.name));
         }
         // What a script needs is read from the script, not taken on trust.
         item.secrets = secrets_used(&item.source);
@@ -389,6 +400,7 @@ mod tests {
             updated_at: 0,
             hook_token: "secret-token".to_owned(),
             kind: kind.to_owned(),
+            settings: Vec::new(),
         }
     }
 
@@ -450,6 +462,39 @@ mod tests {
         );
         assert!(parse("{}").is_err());
         assert!(parse(r#"{"format":"sideporch-automations","version":1,"items":[{"kind":"library","name":"Bad Name","source":""}]}"#).is_err());
+    }
+
+    #[test]
+    fn declared_settings_are_read_checked_and_exported() {
+        // Files from before settings existed have none, and still read.
+        let older = r#"{"format":"sideporch-automations","version":1,"items":[{"kind":"automation","name":"A","source":"print(1)"}]}"#;
+        let bundle = parse(older).unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            bundle
+                .items
+                .first()
+                .is_some_and(|item| item.settings.is_empty())
+        );
+        let declared = r#"{"format":"sideporch-automations","version":1,"items":[{"kind":"automation","name":"A","source":"","settings":[{"name":"x","type":"string","default":"y"}]}]}"#;
+        let bundle = parse(declared).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            bundle.items.first().map(|item| item.settings.len()),
+            Some(1)
+        );
+        let unknown = r#"{"format":"sideporch-automations","version":1,"items":[{"kind":"automation","name":"A","source":"","settings":[{"name":"x","type":"date"}]}]}"#;
+        assert!(
+            parse(unknown).is_err_and(|error| error.contains("type this Sideporch doesn't know"))
+        );
+
+        let mut with_settings = automation(1, KIND_AUTOMATION, "A", "print(1)");
+        with_settings.settings = bundle
+            .items
+            .first()
+            .map_or_else(Vec::new, |item| item.settings.clone());
+        let exported = export(&[with_settings], &[]);
+        let text = serde_json::to_string(&exported).unwrap_or_default();
+        assert!(text.contains("\"settings\""), "{text}");
+        assert!(!text.contains("secret-token"));
     }
 
     #[test]

@@ -501,3 +501,150 @@ async fn an_installed_automation_is_offered_its_newer_version_and_keeps_its_hist
         "{editor}"
     );
 }
+
+/// An automation that declares settings and answers its webhook with them.
+fn greeter_bundle() -> String {
+    let source = "sideporch.on_webhook(function(request)\n  return { status = 200, body = table.concat({ tostring(sideporch.setting(\"greeting\")), tostring(sideporch.setting(\"room\")), tostring(sideporch.setting(\"loud\")), tostring(sideporch.setting(\"limit\")) }, \"|\") }\nend)\n";
+    json!({
+        "format": "sideporch-automations",
+        "version": 1,
+        "items": [{
+            "kind": "automation",
+            "name": "Greeter",
+            "source": source,
+            "settings": [
+                { "name": "greeting", "label": "Greeting", "type": "string", "default": "hello" },
+                { "name": "room", "label": "Room", "type": "channel", "required": true },
+                { "name": "loud", "type": "boolean", "default": false },
+                { "name": "limit", "type": "number" }
+            ]
+        }]
+    })
+    .to_string()
+}
+
+/// The script's webhook token, from its editor page.
+fn hook_token(page: &str) -> String {
+    page.split("/hooks/automations/")
+        .nth(1)
+        .unwrap_or_default()
+        .chars()
+        .take_while(char::is_ascii_hexdigit)
+        .collect()
+}
+
+#[tokio::test]
+async fn settings_are_declared_checked_and_read_by_the_script_without_a_restart() {
+    let server = start().await;
+    let admin = admin(&server).await;
+    let bundle = greeter_bundle();
+    let confirm = admin
+        .post(
+            "/automations/import/confirm",
+            &[("bundle", &bundle), ("action_0", "import")],
+        )
+        .await;
+    assert!(confirm.status().is_redirection(), "{}", confirm.status());
+
+    // The page shows a form for what the file declares.
+    let page = admin.page("/automations/1").await;
+    assert!(page.contains("name=\"setting_greeting\""), "{page}");
+    assert!(page.contains("Room (required)"), "{page}");
+    let source = serde_json::from_str::<serde_json::Value>(&bundle).unwrap()["items"][0]["source"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Switching on needs the required channel.
+    let refused = admin
+        .post(
+            "/automations/1",
+            &[("name", "Greeter"), ("source", &source), ("enabled", "on")],
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let page = refused.text().await.unwrap();
+    assert!(page.contains("needs a value for Room"), "{page}");
+
+    // A channel setting names only a public channel.
+    let private = admin
+        .post(
+            "/automations/1/settings",
+            &[("setting_room", "nowhere-to-be-found")],
+        )
+        .await;
+    assert_eq!(private.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        private
+            .text()
+            .await
+            .unwrap()
+            .contains("isn't a public channel")
+    );
+
+    let saved = admin
+        .post(
+            "/automations/1/settings",
+            &[
+                ("setting_greeting", "hi there"),
+                ("setting_room", "#general"),
+                ("setting_limit", "2.5"),
+            ],
+        )
+        .await;
+    assert!(saved.status().is_redirection(), "{}", saved.status());
+    let on = admin
+        .post(
+            "/automations/1",
+            &[("name", "Greeter"), ("source", &source), ("enabled", "on")],
+        )
+        .await;
+    assert!(on.status().is_redirection(), "{}", on.status());
+
+    let page = admin.page("/automations/1").await;
+    let token = hook_token(&page);
+    let answer = |admin: &Browser| {
+        let url = admin.url(&format!("/hooks/automations/{token}"));
+        let client = admin.client.clone();
+        async move {
+            client
+                .post(url)
+                .body("{}")
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        }
+    };
+    // Booleans not ticked are false; the number arrives as a number.
+    assert_eq!(answer(&admin).await, "hi there|general|false|2.5");
+
+    // A new value reaches the running script without restarting the server.
+    let changed = admin
+        .post(
+            "/automations/1/settings",
+            &[
+                ("setting_greeting", "hello"),
+                ("setting_loud", "on"),
+                ("setting_room", "general"),
+            ],
+        )
+        .await;
+    assert!(changed.status().is_redirection(), "{}", changed.status());
+    assert_eq!(answer(&admin).await, "hello|general|true|nil");
+
+    // A switched-on automation can't be left without its required channel.
+    let cleared = admin
+        .post("/automations/1/settings", &[("setting_room", "")])
+        .await;
+    assert_eq!(cleared.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        cleared
+            .text()
+            .await
+            .unwrap()
+            .contains("is required while Greeter is switched on")
+    );
+}

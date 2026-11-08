@@ -49,6 +49,25 @@ Press **Import**. The Automations page says how many were added.
 
 Under the file box, paste the address of a `.sideporch.json` file and press **Fetch and preview**. The server downloads it and shows the same preview. Only admins can do this, and the server refuses addresses on private or loopback networks unless the Automations settings allow them (the same setting that lets `sideporch.http` reach internal services). Downloads stop at 2 MB and a minute. The preview says whether the file is **Signed by Sideporch** or **Not signed**; a file that isn't signed can only be imported after you tick a box confirming you trust whoever published it. The [automation store](@/docs/integrations/automations/store.md) checks files against their listed checksums and signatures the same way.
 
+## Settings
+
+An automation can declare settings instead of asking people to edit its script. Each one in the item's `settings` list has a `name` (what the script passes to `sideporch.setting`), a `type`, and optionally a `label`, a `default` of that type, and `required`:
+
+```json
+"settings": [
+  { "name": "greeting", "label": "Greeting", "type": "string", "default": "hello" },
+  { "name": "room", "label": "Room", "type": "channel", "required": true },
+  { "name": "loud", "type": "boolean", "default": false },
+  { "name": "limit", "type": "number" }
+]
+```
+
+- `string` is text, `number` is a number, `boolean` is true or false, and `channel` is the name of a **public** channel, which the server checks when the value is saved.
+- The automation's page shows a form for these. Values are saved on this server, not in the file, and they take effect as soon as they're saved, without a restart.
+- A required setting with no value and no default keeps the automation from switching on, and a switched-on automation can't have its required setting cleared.
+
+The script reads a value with [`sideporch.setting("greeting")`](@/docs/integrations/automations/api.md), which returns `nil` when nothing is set.
+
 ## After importing
 
 Imported automations are switched off, because they can post, react and call other services with this server's secrets. For each one:
@@ -95,5 +114,6 @@ The file is JSON, readable in any text editor:
 - `kind` is `automation` or `library`.
 - `secrets` and `requires` are informational: on import, Sideporch reads them from the script again rather than trusting the file.
 - Optional `description`, `author`, `license` and `homepage` fields, on the file or on an item, describe what's shared. Sideporch shows descriptions in the preview.
+- Optional `settings` on an item declare values an admin fills in on the automation's page (see [settings](#settings)). Older servers ignore them.
 
 Servers ignore fields they don't know, so files can carry more without breaking older servers. A file holds at most 100 scripts and 2 MB.
