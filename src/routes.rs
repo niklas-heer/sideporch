@@ -421,8 +421,9 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<
     if let Some(token) = auth::session_token(&headers) {
         auth::end_session(&state, token).await?;
     }
-    // Cloudflare Access would sign them right back in otherwise.
-    let to = if state.cloudflare.is_some() {
+    // Cloudflare Access would sign them right back in otherwise. Reached
+    // directly, not through Access, there's no Access to sign out of.
+    let to = if state.cloudflare.is_some() && headers.contains_key(crate::cloudflare::HEADER) {
         crate::cloudflare::LOGOUT
     } else {
         "/login"

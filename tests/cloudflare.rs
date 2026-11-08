@@ -460,6 +460,42 @@ async fn access_is_only_the_first_step() {
 }
 
 #[tokio::test]
+async fn access_does_not_get_around_requiring_passkeys() {
+    let (server, _) = server(false).await;
+    let ada = set_up(&server, "ada@example.com").await;
+    // Admins must meet the policy before choosing it; a stored passkey does.
+    let database = rusqlite::Connection::open(server.data_dir().join("sideporch.db")).unwrap();
+    database
+        .execute(
+            "INSERT INTO passkeys (user_id, credential_id, public_key, algorithm, name, created_at)
+             SELECT id, x'01', x'02', -7, 'Laptop', 0 FROM users WHERE username = 'ada'",
+            [],
+        )
+        .unwrap();
+    let saved = ada.post("/admin/sign-in", &[("require", "passkeys")]).await;
+    assert_eq!(saved.status(), StatusCode::OK);
+    let response = through_access(&server, &assertion("ada@example.com"))
+        .get("/login")
+        .await;
+    assert_eq!(session_cookie(&response), None, "a passkey is required");
+}
+
+#[tokio::test]
+async fn signing_out_without_access_stays_on_this_server() {
+    let (server, _) = server(false).await;
+    set_up(&server, "ada@example.com").await;
+    let mut direct = Browser::anonymous(&server);
+    let response = direct
+        .submit(
+            "/login",
+            &[("username", "ada"), ("password", "correct horse")],
+        )
+        .await;
+    assert_eq!(location(&response), "/");
+    assert_eq!(location(&direct.post("/logout", &[]).await), "/login");
+}
+
+#[tokio::test]
 async fn required_access_closes_pages_but_not_webhooks_or_health_checks() {
     let (server, _) = server(true).await;
     set_up(&server, "ada@example.com").await;

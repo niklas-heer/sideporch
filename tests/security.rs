@@ -527,6 +527,14 @@ async fn a_setup_code_is_checked_before_a_passkey_is_made() {
             .unwrap()
             .contains("That isn't the setup code.")
     );
+    // A made-up setup link doesn't get around the code either.
+    let linked = post_json(
+        &mut visitor,
+        "/webauthn/create/options",
+        &json!({ "form": "/setup/porch-light-0123456789", "display_name": "Ada", "username": "ada" }),
+    )
+    .await;
+    assert_eq!(linked.status(), StatusCode::BAD_REQUEST);
     let options: Value = post_json(
         &mut visitor,
         "/webauthn/create/options",

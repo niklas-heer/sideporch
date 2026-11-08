@@ -41,3 +41,4 @@ Not chosen:
 - Without a Cloudflare Tunnel or the required mode, the origin may still be reachable directly, where the normal sign-in form applies. `SIDEPORCH_CLIENT_IP_HEADER=CF-Connecting-IP` is only safe when every request comes through Cloudflare.
 - In required mode, a Cloudflare outage before the first key fetch closes pages until keys arrive; keys fetched earlier keep working.
 - The setup page gained a Cloudflare Access mode, and the first-account code takes the Access address; a future rework of account creation must keep passing it on.
+- Linking the Access address to an account (`/settings/cloudflare-access`) only needs a signed-in session, and replaces the account's confirmed email. Someone with a stolen session could link their own Access identity; a second step still applies where the account has one. Revisit together with re-authentication for sensitive changes, as noted for passkeys.

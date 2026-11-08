@@ -130,7 +130,11 @@ pub async fn prepare(
 /// Behind Cloudflare Access, setup also needs a person Access let in.
 async fn form_open(state: &AppState, headers: &HeaderMap, form: &str) -> AppResult<bool> {
     if form == "/setup" || form.starts_with("/setup/") {
+        let link_fits = form
+            .strip_prefix("/setup/")
+            .is_none_or(|token| state.setup_link_matches(token));
         return Ok(state.setup() != Setup::Done
+            && link_fits
             && crate::cloudflare::setup_gate(state, headers).await.is_ok());
     }
     if form == "/signup" {

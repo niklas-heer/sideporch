@@ -99,7 +99,7 @@ Four commands besides running the server:
 
 ## Put it behind HTTPS
 
-Browsers only send push notifications, install Sideporch as an app and use passkeys over HTTPS, so put a reverse proxy in front of it. Live updates use a WebSocket at `/ws`, which the proxy has to pass on.
+Browsers only send push notifications, install Sideporch as an app and use passkeys over HTTPS, so put a reverse proxy in front of it. Choose the name people will keep using before they make passkeys: a passkey belongs to its name, so moving to another one means signing in another way and adding new ones (an admin who has no other way in can use `sideporch reset-link --reset-sign-in`). Live updates use a WebSocket at `/ws`, which the proxy has to pass on.
 
 With [Caddy](https://caddyserver.com), which gets certificates by itself, this is the whole configuration:
 
