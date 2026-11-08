@@ -53,7 +53,7 @@ docker exec sideporch /sideporch reset-link ada            # with Docker
 fly machine exec MACHINE_ID "/sideporch reset-link ada"    # on Fly.io
 ```
 
-When their passkey or authenticator app is what's lost, add `--reset-sign-in`: it removes those, signs the account out everywhere and clears its password, so whoever has the lost device can't get in, and the link is the only way back. Until a new password is set through a reset link, neither email links nor [Cloudflare Access](#cloudflare-access) sign the account in, even after the link expires; run the command again for a new one. If the lost device was signed in elsewhere too, such as to the mailbox or Cloudflare Access, end those sessions there, and replace any [MCP tokens](@/docs/integrations/automations/ai-and-mcp.md) it kept. They add a new passkey afterwards.
+When their passkey or authenticator app is what's lost, add `--reset-sign-in`: it removes those and the account's MCP tokens, signs the account out everywhere and clears its password, so whoever has the lost device can't get in, and the link is the only way back. Until a new password is set through a reset link, neither email links nor [Cloudflare Access](#cloudflare-access) sign the account in, even after the link expires; run the command again for a new one. Its [MCP tokens](@/docs/integrations/automations/ai-and-mcp.md) are removed too; make new ones afterwards. If the lost device was signed in elsewhere, such as to the mailbox or Cloudflare Access, end those sessions there, and look over invites and who is an admin, in case someone used the account meanwhile. They add a new passkey afterwards.
 
 ```sh
 sideporch reset-link ada --reset-sign-in --data /var/lib/sideporch

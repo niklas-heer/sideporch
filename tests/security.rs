@@ -620,6 +620,34 @@ async fn requests_held_open_across_recovery_add_no_way_in() {
         .unwrap();
     assert_eq!(passkeys, 0);
 
+    // Nor does an MCP token, a way in that outlasts sessions; tokens made
+    // before are removed.
+    let server = start().await;
+    let ada = admin(&server).await;
+    assert_eq!(
+        ada.post("/settings/mcp/tokens", &[("name", "before")])
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let answer = hold_open(
+        &server,
+        &ada,
+        "/settings/mcp/tokens",
+        "application/x-www-form-urlencoded",
+        "name=kept",
+        || {
+            sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
+        },
+    )
+    .await;
+    assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
+    let database = rusqlite::Connection::open(server.data_dir().join("sideporch.db")).unwrap();
+    let tokens: i64 = database
+        .query_row("SELECT COUNT(*) FROM api_tokens", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(tokens, 0);
+
     // A password change held open the same way doesn't end the recovery.
     let server = start().await;
     let ada = admin(&server).await;

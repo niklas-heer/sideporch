@@ -364,9 +364,19 @@ async fn create_token(
     let token_hash = auth::hash_token(&token);
     let user_id = user.id;
     let now = now_ms();
+    // A token is a way in too: check the session again where it's written.
+    let session = auth::request_session(&headers);
     state
         .db
-        .call(move |conn| store::create_api_token(conn, user_id, &name, &token_hash, now))
+        .call(move |conn| {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            if !auth::still_signed_in(&tx, session.as_deref(), user_id)? {
+                return Err(AppError::Forbidden);
+            }
+            store::create_api_token(&tx, user_id, &name, &token_hash, now)?;
+            tx.commit()?;
+            Ok(())
+        })
         .await?;
     render_mcp(&state, &user, &headers, Some(&token)).await
 }

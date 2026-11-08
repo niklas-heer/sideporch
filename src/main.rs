@@ -312,7 +312,7 @@ fn print_reset_link(
     eprintln!("It works once, for 24 hours.");
     if reset_sign_in {
         eprintln!(
-            "Their passkeys and authenticator app are removed, and nothing else signs them in until they choose a new password; they can add a new passkey afterwards. If the link expires, run this again."
+            "Their passkeys, authenticator app and MCP tokens are removed, and nothing else signs them in until they choose a new password; they can add a new passkey afterwards. If the link expires, run this again."
         );
     } else if link.second_step {
         eprintln!(
