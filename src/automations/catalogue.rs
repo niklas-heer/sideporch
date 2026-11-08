@@ -26,6 +26,9 @@ pub const VERSION: u32 = 1;
 pub const DEFAULT_URL: &str = "https://sideporch.app/automations/index.json";
 /// How long a fetched index is reused before it is read again.
 const CACHE_FOR: Duration = Duration::from_mins(10);
+/// How long a failure is remembered, so an unreachable store is tried
+/// again soon but doesn't slow every page in the meantime.
+const CACHE_FAILURE_FOR: Duration = Duration::from_secs(30);
 /// The largest index Sideporch reads, in bytes.
 pub const MAX_INDEX_BYTES: usize = 512 * 1024;
 /// The most entries one index may list.
@@ -189,7 +192,9 @@ pub fn newer_versions(
         .collect()
 }
 
-/// The index as last fetched, reused for a few minutes.
+/// The index as last fetched, reused for a few minutes. A failure is kept
+/// for a moment too, so an unreachable store doesn't slow every page that
+/// asks about it.
 #[derive(Default)]
 pub struct Cache {
     fetched: Mutex<Option<Fetched>>,
@@ -198,26 +203,33 @@ pub struct Cache {
 struct Fetched {
     url: String,
     at: Instant,
-    entries: Vec<Entry>,
+    outcome: Result<Vec<Entry>, String>,
 }
 
 impl Cache {
-    /// The entries fetched from `url` a moment ago, if still fresh.
-    pub fn get(&self, url: &str) -> Option<Vec<Entry>> {
+    /// What fetching `url` gave a moment ago, if still fresh.
+    pub fn get(&self, url: &str) -> Option<Result<Vec<Entry>, String>> {
         self.fetched.lock().ok().and_then(|guard| {
             guard
                 .as_ref()
-                .filter(|fetched| fetched.url == url && fetched.at.elapsed() < CACHE_FOR)
-                .map(|fetched| fetched.entries.clone())
+                .filter(|fetched| {
+                    let fresh_for = if fetched.outcome.is_ok() {
+                        CACHE_FOR
+                    } else {
+                        CACHE_FAILURE_FOR
+                    };
+                    fetched.url == url && fetched.at.elapsed() < fresh_for
+                })
+                .map(|fetched| fetched.outcome.clone())
         })
     }
 
-    pub fn put(&self, url: &str, entries: Vec<Entry>) {
+    pub fn put(&self, url: &str, outcome: Result<Vec<Entry>, String>) {
         if let Ok(mut guard) = self.fetched.lock() {
             *guard = Some(Fetched {
                 url: url.to_owned(),
                 at: Instant::now(),
-                entries,
+                outcome,
             });
         }
     }
@@ -227,19 +239,23 @@ impl Cache {
 /// through the guarded client. Errors say what couldn't be reached or read.
 pub async fn index(state: &AppState, settings: &Settings) -> Result<Vec<Entry>, String> {
     let url = settings.catalogue().to_owned();
-    if let Some(entries) = state.automations.catalogue_cache().get(&url) {
-        return Ok(entries);
+    if let Some(outcome) = state.automations.catalogue_cache().get(&url) {
+        return outcome;
     }
-    let body = http::download(settings.allow_private_network, &url, MAX_INDEX_BYTES)
-        .await
-        .map_err(|error| format!("The store at {url} can't be reached: {error}."))?;
-    let entries = parse(&String::from_utf8_lossy(&body))
-        .map_err(|error| format!("The store at {url} can't be read: {error}."))?;
+    let outcome = fetch_index(settings, &url).await;
     state
         .automations
         .catalogue_cache()
-        .put(&url, entries.clone());
-    Ok(entries)
+        .put(&url, outcome.clone());
+    outcome
+}
+
+async fn fetch_index(settings: &Settings, url: &str) -> Result<Vec<Entry>, String> {
+    let body = http::download(settings.allow_private_network, url, MAX_INDEX_BYTES)
+        .await
+        .map_err(|error| format!("The store at {url} can't be reached: {error}."))?;
+    parse(&String::from_utf8_lossy(&body))
+        .map_err(|error| format!("The store at {url} can't be read: {error}."))
 }
 
 #[cfg(test)]
