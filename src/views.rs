@@ -27,6 +27,7 @@ pub mod federation;
 pub mod gifs;
 pub mod later;
 pub mod messages;
+pub mod notifications;
 pub mod profile;
 pub mod search;
 pub mod security;
@@ -567,7 +568,13 @@ fn account_menu(shell: &Shell<'_>) -> Markup {
                 div class="scale-90" { (avatar(&author, &Context::default())) }
                 span class="min-w-0 flex-1" {
                     span class="block truncate font-semibold text-white" { (user.display_name) }
-                    span class="block truncate text-xs text-haint" { "Account and settings" }
+                    span class="block truncate text-xs text-haint" {
+                        @if let Some(label) = &shell.sidebar.paused {
+                            span class="font-semibold text-white" { (label) }
+                        } @else {
+                            "Account and settings"
+                        }
+                    }
                 }
                 (icon(icons::CARET_UP_DOWN, "h-4 w-4 shrink-0 opacity-70"))
             }
@@ -575,6 +582,7 @@ fn account_menu(shell: &Shell<'_>) -> Markup {
                 (menu_link(&format!("/people/{}", user.id), icons::USER_CIRCLE, "Your profile"))
                 (menu_link("/settings/profile", icons::PENCIL_SIMPLE, "Edit profile"))
                 (menu_link("/settings/appearance", icons::PALETTE, "Appearance"))
+                (menu_link("/settings/notifications", icons::MOON, "Pauses and quiet hours"))
                 (menu_link("/settings/security", icons::KEY, "Sign-in and security"))
                 (menu_link("/emoji", icons::SMILEY, "Custom emoji"))
                 (menu_link("/gifs/library", icons::GIF, "GIF library"))

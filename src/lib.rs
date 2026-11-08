@@ -27,6 +27,7 @@ mod markdown;
 mod markup;
 mod mcp;
 mod messages;
+mod notifications;
 mod outgoing;
 mod passkeys;
 mod polls;

@@ -30,4 +30,4 @@ The clock next to **Send** schedules a message for later instead of sending it n
 
 ## Notifications
 
-Push notifications cover direct messages, mentions and replies in your threads, and skip the conversation you're looking at. See [Phones and notifications](@/docs/using/phones.md) to turn them on. Mute noisy channels from their menu: they stay in your sidebar without notifying you.
+Push notifications cover direct messages, mentions and replies in your threads, and skip the conversation you're looking at. See [Phones and notifications](@/docs/using/phones.md) to turn them on. Mute noisy channels from their menu: they stay in your sidebar without notifying you. To stop notifications for a while, or every night, use [pauses and quiet hours](@/docs/using/phones.md#pauses-and-quiet-hours).

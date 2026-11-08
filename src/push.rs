@@ -202,6 +202,15 @@ async fn deliver(state: &AppState, targets: Vec<i64>, payload: &Payload) -> AppR
     let (subscriptions, unread) = state
         .db
         .call(move |conn| {
+            // Pauses and quiet hours drop the push itself; nothing is queued.
+            let now = crate::now_ms();
+            let mut awake = Vec::with_capacity(targets.len());
+            for user in targets {
+                if !crate::notifications::silenced(conn, user, now)? {
+                    awake.push(user);
+                }
+            }
+            let targets = awake;
             let subscriptions = store::push_subscriptions(conn, &targets)?;
             let unread = targets
                 .iter()

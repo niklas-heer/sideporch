@@ -22,4 +22,13 @@ Each device turns notifications on separately.
 
 Direct messages, mentions and replies in your threads, but not the conversation you're looking at. [Mute a channel](@/docs/using/keeping-up.md#notifications) to keep it quiet.
 
+## Pauses and quiet hours
+
+Account menu → **Pauses and quiet hours** (under your name, in the sidebar) holds two controls. Both only stop push notifications on your devices. Mentions still appear in **Activity**, unread markers still update, and nothing is held back to send later.
+
+- **Pause** stops notifications for an hour, for eight hours, or until 08:00 tomorrow, in your time zone. While it runs, the account menu says **Paused until 14:30** (or a later day and time). **Resume** ends it early.
+- **Quiet hours** repeat every week: pick a start and end time and the days. They run on your own clock, in the time zone your browser reports. A window that crosses midnight counts for the day it starts on, so Friday 22:00 to 07:00 covers Friday night and the early hours of Saturday, but not Saturday night.
+
+Each device still needs notifications turned on, and pauses and quiet hours apply to all of them.
+
 Sideporch sends notifications itself, through the browsers' push services, so no app store account is involved and your messages never pass through a third-party notification service in readable form: push messages are encrypted for your device. Your server only needs to reach the internet.

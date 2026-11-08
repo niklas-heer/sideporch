@@ -684,6 +684,19 @@ ALTER TABLE channels ADD COLUMN kept INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN recovering_since INTEGER;
 ",
     ),
+    Migration::Sql(
+        r"
+-- Notification controls: a pause that ends at `notifications_paused_until`
+-- (milliseconds), and quiet hours that repeat weekly on the person's own
+-- clock. Times are minutes after midnight; days are a bitmask with Monday
+-- as bit 0 and Sunday as bit 6.
+ALTER TABLE users ADD COLUMN notifications_paused_until INTEGER;
+ALTER TABLE users ADD COLUMN quiet_hours_enabled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN quiet_hours_start INTEGER NOT NULL DEFAULT 1320;
+ALTER TABLE users ADD COLUMN quiet_hours_end INTEGER NOT NULL DEFAULT 420;
+ALTER TABLE users ADD COLUMN quiet_hours_days INTEGER NOT NULL DEFAULT 127;
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix

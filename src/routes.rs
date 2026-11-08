@@ -39,6 +39,7 @@ pub mod federation;
 mod gifs;
 mod later;
 mod message;
+mod notifications;
 mod profile;
 mod security;
 mod settings;
@@ -109,6 +110,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .merge(automation::router())
         .merge(settings::router())
+        .merge(notifications::router())
         .merge(profile::router())
         .merge(admin::router())
         .merge(account::router())
@@ -236,6 +238,7 @@ pub fn sidebar_with_update(
         [user_id],
         |row| row.get(0),
     )?;
+    sidebar.paused = crate::notifications::paused_label(conn, user_id, crate::now_ms())?;
     if is_admin {
         sidebar.update = updates.notice(conn, user_id, crate::now_ms())?;
     }

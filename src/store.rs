@@ -146,6 +146,8 @@ pub struct Sidebar {
     pub level_up: Option<(u8, Vec<&'static str>)>,
     /// On a demo server: when it starts over.
     pub demo: Option<String>,
+    /// "Paused until 14:30" while the person has paused notifications.
+    pub paused: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1187,6 +1189,7 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
         update: None,
         level_up: None,
         demo: None,
+        paused: None,
     })
 }
 
@@ -2000,6 +2003,56 @@ pub fn set_user_timezone(conn: &Connection, user_id: i64, name: &str) -> AppResu
     conn.execute(
         "UPDATE users SET timezone = ?1 WHERE id = ?2 AND timezone != ?1",
         params![name, user_id],
+    )?;
+    Ok(())
+}
+
+/// A person's notification pause and quiet hours.
+pub fn notification_schedule(
+    conn: &Connection,
+    user_id: i64,
+) -> AppResult<crate::notifications::Schedule> {
+    Ok(conn.query_row(
+        "SELECT notifications_paused_until, quiet_hours_enabled, quiet_hours_start,
+                quiet_hours_end, quiet_hours_days
+         FROM users WHERE id = ?1",
+        [user_id],
+        |row| {
+            Ok(crate::notifications::Schedule {
+                paused_until: row.get(0)?,
+                quiet: crate::notifications::QuietHours {
+                    enabled: row.get(1)?,
+                    start: row.get(2)?,
+                    end: row.get(3)?,
+                    days: row.get(4)?,
+                },
+            })
+        },
+    )?)
+}
+
+pub fn set_notifications_paused_until(
+    conn: &Connection,
+    user_id: i64,
+    until: Option<i64>,
+) -> AppResult<()> {
+    conn.execute(
+        "UPDATE users SET notifications_paused_until = ?1 WHERE id = ?2",
+        params![until, user_id],
+    )?;
+    Ok(())
+}
+
+pub fn set_quiet_hours(
+    conn: &Connection,
+    user_id: i64,
+    quiet: crate::notifications::QuietHours,
+) -> AppResult<()> {
+    conn.execute(
+        "UPDATE users SET quiet_hours_enabled = ?1, quiet_hours_start = ?2,
+                quiet_hours_end = ?3, quiet_hours_days = ?4
+         WHERE id = ?5",
+        params![quiet.enabled, quiet.start, quiet.end, quiet.days, user_id],
     )?;
     Ok(())
 }
