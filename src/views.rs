@@ -113,6 +113,9 @@ fn document(title: &str, body_class: &str, choice: &Choice, content: &Markup) ->
                 link rel="icon" href="/assets/icons/icon-192.png" type="image/png" sizes="192x192";
                 link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png";
                 link rel="manifest" href="/manifest.webmanifest";
+                // The font is only found once the stylesheet is read; asking
+                // for it now saves a round trip and a reflow on first visits.
+                link rel="preload" href="/assets/fonts/normal-latin.woff2" as="font" type="font/woff2" crossorigin;
                 link rel="stylesheet" href={ "/assets/themes.css?v=" (crate::themes::VERSION.as_str()) };
                 link rel="stylesheet" href={ "/assets/app.css?v=" (ASSET_VERSION) };
                 script src={ "/assets/app.js?v=" (ASSET_VERSION) } defer {}
