@@ -561,6 +561,44 @@ async fn a_setup_code_is_checked_before_a_passkey_is_made() {
 }
 
 #[tokio::test]
+async fn a_request_held_open_across_recovery_adds_no_passkey() {
+    let server = start().await;
+    let mut ada = admin(&server).await;
+    let mut device = Authenticator::new(&server.base);
+    let options: Value = post_json(&mut ada, "/webauthn/register/options", &json!({}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let body = device.create(&options).to_string();
+
+    // Someone with the session sends the headers, and holds back the body
+    // until the admin has run the recovery command.
+    let address = server.base.trim_start_matches("http://").to_owned();
+    let port = address.rsplit(':').next().unwrap();
+    let mut stream = tokio::net::TcpStream::connect(&address).await.unwrap();
+    let head = format!(
+        "POST /webauthn/register HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {}\r\nContent-Type: application/json\r\nx-sideporch-fetch: 1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        ada.cookie,
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    sideporch::reset_link(server.data_dir(), "ada", true).unwrap();
+    stream.write_all(body.as_bytes()).await.unwrap();
+    let mut answer = String::new();
+    tokio::io::AsyncReadExt::read_to_string(&mut stream, &mut answer)
+        .await
+        .unwrap();
+    assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
+    let database = rusqlite::Connection::open(server.data_dir().join("sideporch.db")).unwrap();
+    let passkeys: i64 = database
+        .query_row("SELECT COUNT(*) FROM passkeys", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(passkeys, 0);
+}
+
+#[tokio::test]
 async fn reset_links_from_the_command_line_let_admins_back_in() {
     let server = start().await;
     drop(admin(&server).await);

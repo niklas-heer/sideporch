@@ -733,9 +733,18 @@ async fn link(
         _ => return Ok((StatusCode::CONFLICT, link_view(&linking)).into_response()),
     };
     let user_id = user.id;
+    let session = crate::auth::request_session(&headers);
     state
         .db
-        .call(move |conn| security::set_email(conn, user_id, Some(&email)))
+        .call(move |conn| {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            if !crate::auth::still_signed_in(&tx, session.as_deref(), user_id)? {
+                return Err(AppError::Forbidden);
+            }
+            security::set_email(&tx, user_id, Some(&email))?;
+            tx.commit()?;
+            Ok(())
+        })
         .await?;
     Ok(Redirect::to("/settings/security?notice=email").into_response())
 }

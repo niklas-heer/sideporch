@@ -76,6 +76,32 @@ pub async fn verify_password(password: String, hash: String) -> AppResult<bool> 
     .map_err(AppError::internal)?
 }
 
+/// The stored hash of the session a request was made with, if any.
+pub fn request_session(headers: &HeaderMap) -> Option<Vec<u8>> {
+    session_token(headers).map(|token| hash_token(&token))
+}
+
+/// For a write that adds a way into an account, inside its transaction:
+/// whether the session the request was made with (`request_session`) still
+/// exists and the account isn't being recovered. A request can wait a long
+/// while after it was let in, such as for its body, and `sideporch
+/// reset-link --reset-sign-in` may have ended that session meanwhile.
+pub fn still_signed_in(
+    conn: &rusqlite::Connection,
+    session: Option<&[u8]>,
+    user_id: i64,
+) -> AppResult<bool> {
+    let Some(session) = session else {
+        return Ok(false);
+    };
+    let alive: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sessions WHERE token_hash = ?1 AND user_id = ?2 AND expires_at > ?3)",
+        params![session, user_id, now_ms()],
+        |row| row.get(0),
+    )?;
+    Ok(alive && !crate::security::recovering(conn, user_id)?)
+}
+
 /// Creates a session and returns the `Set-Cookie` value for it.
 pub async fn start_session(state: &AppState, user_id: i64) -> AppResult<String> {
     let token = random_token()?;

@@ -280,6 +280,7 @@ struct TotpForm {
 async fn totp_confirm(
     user: CurrentUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Form(form): Form<TotpForm>,
 ) -> AppResult<Response> {
     let encoded = state.vault.open_text(&totp_name(user.id), &form.secret)?;
@@ -311,14 +312,20 @@ async fn totp_confirm(
     let codes = totp::recovery_codes()?;
     let stored = codes.clone();
     let sealed = form.secret;
+    let session = auth::request_session(&headers);
     let had_codes = state
         .db
         .call(move |conn| {
-            security::set_totp(conn, user_id, Some(&sealed), step)?;
-            let had = security::factors(conn, user_id)?.recovery_codes > 0;
-            if !had {
-                security::replace_recovery_codes(conn, user_id, &stored)?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            if !auth::still_signed_in(&tx, session.as_deref(), user_id)? {
+                return Err(AppError::Forbidden);
             }
+            security::set_totp(&tx, user_id, Some(&sealed), step)?;
+            let had = security::factors(&tx, user_id)?.recovery_codes > 0;
+            if !had {
+                security::replace_recovery_codes(&tx, user_id, &stored)?;
+            }
+            tx.commit()?;
             Ok(had)
         })
         .await?;
@@ -542,10 +549,22 @@ async fn register(
         name
     };
     let user_id = user.id;
-    state
+    let session = auth::request_session(&headers);
+    let added = state
         .db
-        .call(move |conn| security::add_passkey(conn, user_id, &passkey, &name, now))
+        .call(move |conn| {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            if !auth::still_signed_in(&tx, session.as_deref(), user_id)? {
+                return Ok(false);
+            }
+            security::add_passkey(&tx, user_id, &passkey, &name, now)?;
+            tx.commit()?;
+            Ok(true)
+        })
         .await?;
+    if !added {
+        return Err(AppError::Forbidden);
+    }
     Ok(Json(
         json!({ "redirect": "/settings/security?notice=passkey" }),
     ))
