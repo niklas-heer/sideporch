@@ -5,7 +5,10 @@ use std::{collections::HashMap, fmt::Write as _};
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use crate::{error::AppResult, webhook::Attachment};
+use crate::{
+    error::{AppError, AppResult},
+    webhook::Attachment,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelKind {
@@ -20,6 +23,8 @@ pub struct Channel {
     pub id: i64,
     pub kind: ChannelKind,
     pub name: String,
+    /// How many people are in a direct conversation, the reader included.
+    pub people: i64,
     pub topic: String,
     /// The reader left this public channel, so it is not in their sidebar.
     pub left: bool,
@@ -67,6 +72,11 @@ pub struct Posting {
 }
 
 impl Channel {
+    /// A direct conversation with more than two people.
+    pub fn is_group(&self) -> bool {
+        self.kind == ChannelKind::Direct && self.people > 2
+    }
+
     const fn allows(&self, policy: Policy) -> bool {
         matches!(policy, Policy::Everyone) || self.manager
     }
@@ -119,6 +129,8 @@ pub enum SidebarLook {
     /// Only managers start new posts.
     Announcement,
     Direct,
+    /// A direct conversation with more than two people.
+    Group,
 }
 
 #[derive(Debug, Clone)]
@@ -744,13 +756,11 @@ pub fn set_topic(conn: &Connection, channel_id: i64, topic: &str) -> AppResult<(
 /// Returns the channel if `user_id` may read it. Private channels and
 /// direct conversations are visible to their members only.
 pub fn channel_for(conn: &Connection, channel_id: i64, user_id: i64) -> AppResult<Option<Channel>> {
-    Ok(conn
+    let channel = conn
         .query_row(
             &format!(
                 "SELECT c.id, c.kind, c.name, c.topic,
-                    (SELECT u.display_name FROM channel_members m JOIN users u ON u.id = m.user_id
-                     WHERE m.channel_id = c.id AND m.user_id != ?2),
-                    (SELECT u.display_name FROM users u WHERE u.id = ?2),
+                    (SELECT COUNT(*) FROM channel_members g WHERE g.channel_id = c.id),
                     c.private, COALESCE(p.hidden, 0), COALESCE(p.muted, 0), c.created_by,
                     c.post_policy, c.reply_policy, c.react_policy,
                     COALESCE((SELECT is_admin FROM users WHERE id = ?2), 0)
@@ -764,13 +774,11 @@ pub fn channel_for(conn: &Connection, channel_id: i64, user_id: i64) -> AppResul
             |row| {
                 let kind: String = row.get(1)?;
                 let name: Option<String> = row.get(2)?;
-                let other: Option<String> = row.get(4)?;
-                let me: Option<String> = row.get(5)?;
-                let private: bool = row.get(6)?;
+                let people: i64 = row.get(4)?;
+                let private: bool = row.get(5)?;
+                // A direct conversation's label is worked out from its members below.
                 let (kind, name) = if kind == "dm" {
-                    let label =
-                        other.unwrap_or_else(|| format!("{} (you)", me.unwrap_or_default()));
-                    (ChannelKind::Direct, label)
+                    (ChannelKind::Direct, String::new())
                 } else if private {
                     (ChannelKind::Private, name.unwrap_or_default())
                 } else {
@@ -780,25 +788,80 @@ pub fn channel_for(conn: &Connection, channel_id: i64, user_id: i64) -> AppResul
                     id: row.get(0)?,
                     kind,
                     name,
+                    people,
                     topic: row.get(3)?,
-                    left: row.get(7)?,
-                    muted: row.get(8)?,
-                    created_by: row.get(9)?,
+                    left: row.get(6)?,
+                    muted: row.get(7)?,
+                    created_by: row.get(8)?,
                     // Direct conversations have no rules.
                     posting: if kind == ChannelKind::Direct {
                         Posting::default()
                     } else {
                         Posting {
-                            post: Policy::parse(&row.get::<_, String>(10)?).unwrap_or_default(),
-                            reply: Policy::parse(&row.get::<_, String>(11)?).unwrap_or_default(),
-                            react: Policy::parse(&row.get::<_, String>(12)?).unwrap_or_default(),
+                            post: Policy::parse(&row.get::<_, String>(9)?).unwrap_or_default(),
+                            reply: Policy::parse(&row.get::<_, String>(10)?).unwrap_or_default(),
+                            react: Policy::parse(&row.get::<_, String>(11)?).unwrap_or_default(),
                         }
                     },
-                    manager: row.get(13)?,
+                    manager: row.get(12)?,
                 })
             },
         )
-        .optional()?)
+        .optional()?;
+    match channel {
+        Some(mut channel) => {
+            if channel.kind == ChannelKind::Direct {
+                channel.name = direct_label(conn, channel_id, user_id)?;
+            }
+            Ok(Some(channel))
+        }
+        None => Ok(None),
+    }
+}
+
+/// The people in a direct conversation other than `user_id`, by name.
+pub fn direct_names(conn: &Connection, channel_id: i64, user_id: i64) -> AppResult<Vec<String>> {
+    let mut statement = conn.prepare(
+        "SELECT u.display_name FROM channel_members m JOIN users u ON u.id = m.user_id
+         WHERE m.channel_id = ?1 AND m.user_id != ?2
+         ORDER BY u.display_name COLLATE NOCASE",
+    )?;
+    let names = statement
+        .query_map(params![channel_id, user_id], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    Ok(names)
+}
+
+/// What a direct conversation is called to `user_id`: the other people's
+/// names, or the person's own name with "(you)" for notes to self.
+pub fn direct_label(conn: &Connection, channel_id: i64, user_id: i64) -> AppResult<String> {
+    let names = direct_names(conn, channel_id, user_id)?;
+    if names.is_empty() {
+        let me: String = conn.query_row(
+            "SELECT display_name FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )?;
+        return Ok(format!("{me} (you)"));
+    }
+    Ok(join_names(&names))
+}
+
+/// Names as a sentence: "Ada", "Ada and Grace", "Ada, Grace and Linus". Past
+/// three, the rest become a count, so a long group stays short in the
+/// sidebar.
+pub fn join_names(names: &[String]) -> String {
+    const SHOWN: usize = 3;
+    let rest = names.len().saturating_sub(SHOWN);
+    let mut shown: Vec<&str> = names.iter().take(SHOWN).map(String::as_str).collect();
+    if rest > 0 {
+        return format!("{} and {rest} more", shown.join(", "));
+    }
+    match shown.pop() {
+        None => String::new(),
+        Some(last) if shown.is_empty() => last.to_owned(),
+        Some(last) => format!("{} and {last}", shown.join(", ")),
+    }
 }
 
 pub fn set_posting(conn: &Connection, channel_id: i64, posting: Posting) -> AppResult<()> {
@@ -950,19 +1013,88 @@ pub fn channel_directory(conn: &Connection, user_id: i64) -> AppResult<Vec<Direc
     Ok(entries.collect::<Result<_, _>>()?)
 }
 
-/// Finds or creates the direct conversation between two users.
-/// Whether two people already have a conversation.
-pub fn direct_channel_exists(conn: &Connection, user: i64, other: i64) -> AppResult<bool> {
-    let key = format!("{}:{}", user.min(other), user.max(other));
+/// Most people in one direct conversation, its creator included.
+pub const MAX_DIRECT_MEMBERS: usize = 9;
+
+/// The key that names a direct conversation: its members' ids, sorted and
+/// without repeats, joined by `:`. So the same people always find the same
+/// conversation. Notes to self keep the `id:id` form that two-person keys
+/// have always used.
+pub fn direct_key(members: &[i64]) -> String {
+    let mut ids = members.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    if let [only] = ids.as_slice() {
+        return format!("{only}:{only}");
+    }
+    ids.iter().map(i64::to_string).collect::<Vec<_>>().join(":")
+}
+
+/// Whether a conversation already exists between exactly these people.
+pub fn direct_channel_exists(conn: &Connection, members: &[i64]) -> AppResult<bool> {
     Ok(conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM channels WHERE dm_key = ?1)",
-        [&key],
+        [direct_key(members)],
         |row| row.get(0),
     )?)
 }
 
+/// Finds or creates the direct conversation between two users.
 pub fn direct_channel(conn: &mut Connection, user: i64, other: i64, now: i64) -> AppResult<i64> {
-    let key = format!("{}:{}", user.min(other), user.max(other));
+    open_direct(conn, user, &[user, other], now)
+}
+
+/// Finds or creates a direct conversation with `creator` and `others`, who
+/// must all be accounts on this server that can sign in. Membership is fixed
+/// from here on.
+pub fn group_direct_channel(
+    conn: &mut Connection,
+    creator: i64,
+    others: &[i64],
+    now: i64,
+) -> AppResult<i64> {
+    let mut members: Vec<i64> = others.to_vec();
+    members.push(creator);
+    members.sort_unstable();
+    members.dedup();
+    if members.len() < 2 {
+        return Err(AppError::bad_request("Choose at least one other person."));
+    }
+    if members.len() > MAX_DIRECT_MEMBERS {
+        return Err(AppError::bad_request(format!(
+            "A conversation can have up to {MAX_DIRECT_MEMBERS} people, you included."
+        )));
+    }
+    for member in members.iter().copied().filter(|id| *id != creator) {
+        let row: Option<(Option<i64>, Option<i64>)> = conn
+            .query_row(
+                "SELECT instance_id, deactivated_at FROM users WHERE id = ?1",
+                [member],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match row {
+            None => return Err(AppError::NotFound),
+            Some((Some(_), _)) => {
+                return Err(AppError::bad_request(
+                    "People from other servers can't join a group conversation yet.",
+                ));
+            }
+            Some((None, Some(_))) => {
+                return Err(AppError::bad_request(
+                    "Deactivated accounts can't join a conversation.",
+                ));
+            }
+            Some((None, None)) => {}
+        }
+    }
+    open_direct(conn, creator, &members, now)
+}
+
+/// Returns the conversation for `members`, creating it on first use.
+/// `members` includes `creator` and holds distinct, checked people.
+fn open_direct(conn: &mut Connection, creator: i64, members: &[i64], now: i64) -> AppResult<i64> {
+    let key = direct_key(members);
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing: Option<i64> = tx
         .query_row("SELECT id FROM channels WHERE dm_key = ?1", [&key], |row| {
@@ -974,10 +1106,10 @@ pub fn direct_channel(conn: &mut Connection, user: i64, other: i64, now: i64) ->
     } else {
         tx.execute(
             "INSERT INTO channels (kind, dm_key, created_by, created_at) VALUES ('dm', ?1, ?2, ?3)",
-            params![key, user, now],
+            params![key, creator, now],
         )?;
         let id = tx.last_insert_rowid();
-        for member in [user, other] {
+        for member in members {
             tx.execute(
                 "INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?1, ?2)",
                 params![id, member],
@@ -1019,26 +1151,29 @@ pub fn sidebar(conn: &Connection, user_id: i64) -> AppResult<Sidebar> {
         })?
         .collect::<Result<_, _>>()?;
     let mut statement = conn.prepare(&format!(
-        "SELECT c.id,
-                COALESCE((SELECT u.display_name FROM channel_members o JOIN users u ON u.id = o.user_id
-                          WHERE o.channel_id = c.id AND o.user_id != ?1),
-                         (SELECT display_name || ' (you)' FROM users WHERE id = ?1)),
-                {unread}
+        "SELECT c.id, {unread},
+                (SELECT COUNT(*) FROM channel_members g WHERE g.channel_id = c.id) > 2
          FROM channels c JOIN channel_members me ON me.channel_id = c.id AND me.user_id = ?1
          WHERE c.kind = 'dm'
          ORDER BY COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.channel_id = c.id), 0) DESC"
     ))?;
-    let direct = statement
-        .query_map([user_id], |row| {
-            Ok(SidebarItem {
-                channel_id: row.get(0)?,
-                label: row.get(1)?,
-                unread: row.get(2)?,
-                muted: false,
-                look: SidebarLook::Direct,
-            })
-        })?
+    let rows: Vec<(i64, bool, bool)> = statement
+        .query_map([user_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<Result<_, _>>()?;
+    let mut direct = Vec::with_capacity(rows.len());
+    for (channel_id, unread, group) in rows {
+        direct.push(SidebarItem {
+            channel_id,
+            label: direct_label(conn, channel_id, user_id)?,
+            unread,
+            muted: false,
+            look: if group {
+                SidebarLook::Group
+            } else {
+                SidebarLook::Direct
+            },
+        });
+    }
     let activity = conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM activity a JOIN users u ON u.id = a.user_id
          WHERE a.user_id = ?1 AND a.message_id > u.activity_seen_id)",
@@ -3271,7 +3406,38 @@ pub fn use_api_token(
 
 #[cfg(test)]
 mod tests {
-    use super::{mentioned_names, mentions};
+    use super::{direct_key, join_names, mentioned_names, mentions};
+
+    #[test]
+    fn a_conversation_is_keyed_by_its_sorted_people() {
+        assert_eq!(direct_key(&[9, 2]), "2:9");
+        assert_eq!(direct_key(&[2, 9]), "2:9");
+        assert_eq!(direct_key(&[5, 2, 9]), "2:5:9");
+        assert_eq!(direct_key(&[9, 5, 2]), "2:5:9");
+        // Notes to self keep the two-person form they always had.
+        assert_eq!(direct_key(&[4, 4]), "4:4");
+        assert_eq!(direct_key(&[7]), "7:7");
+    }
+
+    #[test]
+    fn names_read_as_a_sentence_and_stop_short() {
+        let names = |list: &[&str]| {
+            list.iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(join_names(&[]), "");
+        assert_eq!(join_names(&names(&["Ada"])), "Ada");
+        assert_eq!(join_names(&names(&["Ada", "Grace"])), "Ada and Grace");
+        assert_eq!(
+            join_names(&names(&["Ada", "Grace", "Linus"])),
+            "Ada, Grace and Linus"
+        );
+        assert_eq!(
+            join_names(&names(&["Ada", "Grace", "Linus", "Bea", "Cat"])),
+            "Ada, Grace, Linus and 2 more"
+        );
+    }
 
     #[test]
     fn names_people_from_other_servers_with_their_server() {

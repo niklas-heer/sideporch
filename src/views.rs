@@ -398,6 +398,7 @@ fn sidebar_link(item: &SidebarItem, current: Option<i64>, svg: &str) -> Markup {
     let svg = match item.look {
         crate::store::SidebarLook::Private => icons::LOCK_SIMPLE,
         crate::store::SidebarLook::Announcement => icons::MEGAPHONE_SIMPLE,
+        crate::store::SidebarLook::Group => icons::USERS,
         crate::store::SidebarLook::Channel | crate::store::SidebarLook::Direct => svg,
     };
     html! {
@@ -650,6 +651,7 @@ fn channel_label(channel: &Channel) -> Markup {
         }
         ChannelKind::Public => icons::HASH,
         ChannelKind::Private => icons::LOCK_SIMPLE,
+        ChannelKind::Direct if channel.is_group() => icons::USERS,
         ChannelKind::Direct => icons::CHAT_CIRCLE_TEXT,
     };
     html! {
@@ -788,6 +790,7 @@ fn empty_channel(channel: &Channel) -> Markup {
                 @match channel.kind {
                     ChannelKind::Public => { "This is the start of #" (channel.name) "." }
                     ChannelKind::Private => { "This is the start of the private channel #" (channel.name) "." }
+                    ChannelKind::Direct if channel.is_group() => { "This is the start of your group conversation with " (channel.name) "." }
                     ChannelKind::Direct => { "This is the start of your conversation with " (channel.name) "." }
                 }
             }
@@ -796,6 +799,11 @@ fn empty_channel(channel: &Channel) -> Markup {
                     "Only its members see it. "
                     a href={ "/c/" (channel.id) "/settings" } class="underline underline-offset-2" { "Add people" }
                     " in the channel settings."
+                }
+            }
+            @if channel.kind == ChannelKind::Direct && channel.is_group() {
+                p class="mt-1 text-muted dark:text-haint" {
+                    "Only its members see it, and its members stay the same. To add someone, start a new conversation."
                 }
             }
             @if channel.kind == ChannelKind::Public && !channel.may_write(false) {
@@ -1811,6 +1819,50 @@ pub fn section(title: &str, intro: &str, content: &Markup) -> Markup {
     }
 }
 
+/// Everyone on the porch, each with a box to tick for a group conversation.
+fn everyone_here(shell: &Shell<'_>, users: &[User], may_start: bool) -> Markup {
+    html! {
+                (section("Everyone here", "Start a direct conversation with anyone on this porch.", &html! {
+                    form method="post" action="/dm" {
+                    ul {
+                        @for user in users.iter().filter(|user| !user.deactivated) {
+                            li class="flex items-center gap-3 border-b border-line py-3 last:border-b-0 dark:border-night-line" {
+                                @if may_start && user.id != shell.user.id {
+                                    input type="checkbox" name={ "person_" (user.id) } aria-label={ "Add " (user.display_name) " to a group" } class="h-4 w-4 shrink-0";
+                                }
+                                (avatar(&user_author(user), &Context::default()))
+                                div class="min-w-0 flex-1" {
+                                    p class="truncate font-semibold" {
+                                        (user.display_name)
+                                        @if user.is_admin {
+                                            span class="ml-2 rounded bg-haint-2 px-1.5 text-xs font-semibold text-floor dark:bg-floor-2 dark:text-haint-2" { "Admin" }
+                                        }
+                                    }
+                                    p class="truncate text-sm text-muted dark:text-haint" { "@" (user.username) }
+                                }
+                                a href={ "/people/" (user.id) } class="btn-quiet text-sm" { "Profile" }
+                                a href={ "/dm/" (user.id) } class="btn-quiet text-sm" {
+                                    (icon(icons::CHAT_CIRCLE_TEXT, "h-4 w-4"))
+                                    @if user.id == shell.user.id { "Notes to self" } @else { "Message" }
+                                }
+                            }
+                        }
+                    }
+                    @if may_start {
+                        div class="mt-4 flex flex-wrap items-center justify-between gap-3" {
+                            p class="min-w-0 text-sm text-muted dark:text-haint" {
+                                "Tick people, then start one conversation with them. A group holds up to nine people, you included, and its members stay the same: to add someone later, start a new one."
+                            }
+                            button type="submit" class="btn-quiet shrink-0 text-sm" {
+                                (icon(icons::USERS, "h-4 w-4")) "Start a group"
+                            }
+                        }
+                    }
+                    }
+                }))
+    }
+}
+
 pub fn people_page(
     shell: &Shell<'_>,
     users: &[User],
@@ -1818,34 +1870,15 @@ pub fn people_page(
     base_url: &str,
     servers: &[String],
 ) -> Markup {
+    let may_start = shell
+        .user
+        .may(crate::community::Permission::StartDirectMessages);
     panel_page(
         "People",
         shell,
         &html! { "People" },
         &html! {
-            (section("Everyone here", "Start a direct conversation with anyone on this porch.", &html! {
-                ul {
-                    @for user in users.iter().filter(|user| !user.deactivated) {
-                        li class="flex items-center gap-3 border-b border-line py-3 last:border-b-0 dark:border-night-line" {
-                            (avatar(&user_author(user), &Context::default()))
-                            div class="min-w-0 flex-1" {
-                                p class="truncate font-semibold" {
-                                    (user.display_name)
-                                    @if user.is_admin {
-                                        span class="ml-2 rounded bg-haint-2 px-1.5 text-xs font-semibold text-floor dark:bg-floor-2 dark:text-haint-2" { "Admin" }
-                                    }
-                                }
-                                p class="truncate text-sm text-muted dark:text-haint" { "@" (user.username) }
-                            }
-                            a href={ "/people/" (user.id) } class="btn-quiet text-sm" { "Profile" }
-                            a href={ "/dm/" (user.id) } class="btn-quiet text-sm" {
-                                (icon(icons::CHAT_CIRCLE_TEXT, "h-4 w-4"))
-                                @if user.id == shell.user.id { "Notes to self" } @else { "Message" }
-                            }
-                        }
-                    }
-                }
-            }))
+            (everyone_here(shell, users, may_start))
             @if !servers.is_empty() {
                 (section("On other servers", "This server is connected with other Sideporch servers. You can write to people there too.", &html! {
                     div class="flex flex-wrap items-center gap-3" {

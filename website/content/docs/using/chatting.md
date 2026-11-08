@@ -12,7 +12,7 @@ Sideporch works the way people know from Slack: conversations happen in channels
 
 - **Public channels** are open to everyone. Find them under **Browse channels** and join the ones you care about; leave the ones you don't.
 - **Private channels** are for the people added to them. Only their members see them, or can find their messages in search.
-- **Direct messages** are between you and one other person. For a group, make a private channel.
+- **Direct messages** are between you and one other person. For several people at once, open **People**, tick them and start a **group conversation**. It holds up to nine people, you included, and everyone in it sees the same messages, with the names of the others in the sidebar. Members can't change once it starts: to add someone, start a new group. Starting the same group again with the same people opens the existing one.
 - **Threads** keep side conversations out of the channel: reply to any message to start one. You follow the threads you've written in, and their replies show up in [Activity](@/docs/using/keeping-up.md).
 
 Messages arrive live. The sidebar marks channels with unread messages, and **someone is typing…** shows with moving dots under the box while someone writes; it clears as soon as they empty the box. When someone writes to you in a direct message, the dots show on that conversation in the sidebar too, wherever you are.

@@ -117,7 +117,9 @@ fn find_channel(conn: &Connection, user_id: i64, name: &str) -> Option<i64> {
                  JOIN channel_members a ON a.channel_id = c.id AND a.user_id = ?1
                  JOIN channel_members b ON b.channel_id = c.id
                  JOIN users u ON u.id = b.user_id AND u.username = ?2
-                 WHERE c.kind = 'dm' LIMIT 1",
+                 WHERE c.kind = 'dm'
+                   AND (SELECT COUNT(*) FROM channel_members g WHERE g.channel_id = c.id) <= 2
+                 LIMIT 1",
                 rusqlite::params![user_id, username],
                 |row| row.get(0),
             )
@@ -302,9 +304,7 @@ fn messages(
         store::MESSAGE_SELECT.replace(
             "FROM messages m LEFT JOIN",
             &format!(
-                ", {snippet}, c.kind,
-                 COALESCE(c.name, (SELECT u2.display_name FROM channel_members o JOIN users u2 ON u2.id = o.user_id
-                                   WHERE o.channel_id = c.id AND o.user_id != ?1), 'yourself')
+                ", {snippet}, c.kind, COALESCE(c.name, 'yourself')
                  FROM messages m LEFT JOIN"
             ),
         ),
@@ -323,6 +323,15 @@ fn messages(
         })
     })?;
     let mut hits: Vec<Hit> = hits.collect::<Result<_, _>>()?;
+    // A conversation is named for the people in it, as the sidebar names it.
+    for hit in &mut hits {
+        if hit.is_direct {
+            let names = store::direct_names(conn, hit.message.channel_id, user_id)?;
+            if !names.is_empty() {
+                hit.channel = store::join_names(&names);
+            }
+        }
+    }
     let mut loaded: Vec<Message> = hits.iter().map(|hit| hit.message.clone()).collect();
     store::hydrate(conn, &mut loaded)?;
     for (hit, message) in hits.iter_mut().zip(loaded) {

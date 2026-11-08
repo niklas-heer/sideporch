@@ -369,7 +369,7 @@ impl Importer<'_> {
             [one, two] => (*one, *two),
             _ => return Ok(None),
         };
-        let key = format!("{}:{}", first.min(second), first.max(second));
+        let key = crate::store::direct_key(&[first, second]);
         let existing: Option<i64> = self
             .conn
             .query_row("SELECT id FROM channels WHERE dm_key = ?1", [&key], |row| {

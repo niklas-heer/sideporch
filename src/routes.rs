@@ -1,4 +1,4 @@
-use std::fmt::Write as _;
+use std::{collections::HashMap, fmt::Write as _};
 
 use axum::{
     Form, Router,
@@ -100,6 +100,7 @@ pub fn router(state: AppState) -> Router {
             post(delete_webhook),
         )
         .route("/dm/{user_id}", get(direct_message))
+        .route("/dm", post(group_direct_message))
         .route("/people", get(people))
         .route("/invites", post(create_invite))
         .route("/invites/{token}/revoke", post(revoke_invite))
@@ -1707,13 +1708,44 @@ async fn direct_message(
             // write notes to themselves.
             if !may_start
                 && other != user_id
-                && !store::direct_channel_exists(conn, user_id, other)?
+                && !store::direct_channel_exists(conn, &[user_id, other])?
             {
                 return Err(AppError::bad_request(crate::community::refusal(
                     crate::community::Permission::StartDirectMessages,
                 )));
             }
             store::direct_channel(conn, user_id, other, now)
+        })
+        .await?;
+    Ok(Redirect::to(&format!("/c/{channel_id}")).into_response())
+}
+
+/// Opens a conversation with several people, ticked on the People page.
+async fn group_direct_message(
+    user: CurrentUser,
+    State(state): State<AppState>,
+    Form(form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
+    let user_id = user.id;
+    let now = now_ms();
+    let may_start = user.may(crate::community::Permission::StartDirectMessages);
+    let others: Vec<i64> = form
+        .keys()
+        .filter_map(|key| key.strip_prefix("person_")?.parse().ok())
+        .collect();
+    let channel_id = state
+        .db
+        .call(move |conn| {
+            let mut members = others.clone();
+            members.push(user_id);
+            // Anyone may answer a conversation that already exists, as with
+            // two people.
+            if !may_start && !store::direct_channel_exists(conn, &members)? {
+                return Err(AppError::bad_request(crate::community::refusal(
+                    crate::community::Permission::StartDirectMessages,
+                )));
+            }
+            store::group_direct_channel(conn, user_id, &others, now)
         })
         .await?;
     Ok(Redirect::to(&format!("/c/{channel_id}")).into_response())
