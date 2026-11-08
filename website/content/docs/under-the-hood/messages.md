@@ -37,7 +37,7 @@ sequenceDiagram
 
 ## Typing and reading
 
-Typing indicators and read positions travel over the same WebSocket in the other direction. Typing is sent at most every few seconds, only to the people looking at that channel, and to the few people of a direct message wherever they are. Read positions decide which channels show as unread.
+Typing indicators and read positions travel over the same WebSocket in the other direction. Typing is sent at most every few seconds, only to the people looking at that channel, and to the few people of a direct message wherever they are. In a channel shared with other servers, typing also goes to those servers, as a signed notice that is never queued or stored. Read positions decide which channels show as unread.
 
 ## Sending again safely
 

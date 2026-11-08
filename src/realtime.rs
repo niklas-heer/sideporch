@@ -386,11 +386,21 @@ async fn announce_typing(
         name,
         stopped,
     };
+    publish_typing(
+        &state.hub,
+        channel.kind == store::ChannelKind::Direct,
+        audience,
+        &event,
+    );
+    crate::federation::typing::announce(state, channel_id, user_id, parent_id, stopped).await;
+}
+
+/// Sends a typing event to whoever may see it: a direct conversation's
+/// people wherever they are, otherwise the people looking at the channel.
+pub fn publish_typing(hub: &Hub, direct: bool, audience: Option<Vec<i64>>, event: &Event) {
     match audience {
-        Some(members) if channel.kind == store::ChannelKind::Direct => {
-            state.hub.publish_everywhere(members, &event);
-        }
-        audience => state.hub.publish(audience, &event),
+        Some(members) if direct => hub.publish_everywhere(members, event),
+        audience => hub.publish(audience, event),
     }
 }
 

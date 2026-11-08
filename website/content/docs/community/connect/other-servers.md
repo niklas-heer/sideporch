@@ -27,7 +27,7 @@ If both admins ask each other at the same time, the servers connect at once.
 
 An admin opens a channel's **Settings** and chooses a connected server under **Other servers**. The other server's admin finds the offer under **Admin → Connections** and selects **Take it**. That makes a copy of the channel on their server, with the latest 50 conversations and their threads.
 
-From then on, messages, replies, edits, deletions, reactions and files travel between the two copies. People are shown with the server they're from, such as `@bea@chat.example.org`. Mentions work across servers, and people get notified on their own server.
+From then on, messages, replies, edits, deletions, reactions and files travel between the two copies. People are shown with the server they're from, such as `@bea@chat.example.org`. Mentions work across servers, and people get notified on their own server. When someone writes in a shared channel, **someone is typing…** shows on the other servers too.
 
 A server can share a channel with several servers. The server that shared it is the channel's **host**: it passes everything on to the others.
 
@@ -54,6 +54,7 @@ Admins decide per connected server whether people there may start direct convers
 - Servers connect only when both admins agree, and each pins the other's key when they connect.
 - Every request between servers is signed with the server's **Ed25519** key and carries the time and a one-time value, so it can't be forged, changed, or replayed. Unsigned requests, and requests from servers that aren't connected, are refused.
 - A server only speaks for its own people. The host passes on messages from the others, but never on behalf of the server it sends them to.
+- Typing notices are signed the same way, but they are never stored, and they reach only people who could see the typing on their own server, for a channel the two servers share. A typing notice from a server that doesn't share the channel, or for someone it doesn't speak for, is refused without saying why.
 - The server's private key is encrypted with the same secret key as [automation secrets](@/docs/community/server/backups.md), so [keep that key in your backups](@/docs/community/server/backups.md).
 
-When the other server is unreachable, Sideporch keeps what's waiting and tries again, at most every hour, until it gets through. **Admin → Connections** shows how much is waiting and why.
+When the other server is unreachable, Sideporch keeps what's waiting and tries again, at most every hour, until it gets through. **Admin → Connections** shows how much is waiting and why. Typing is the exception: it isn't kept. If the other server is slow or down, the dots just don't show there.

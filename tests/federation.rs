@@ -13,9 +13,14 @@
 
 mod common;
 
+use base64ct::Encoding as _;
 use reqwest::StatusCode;
+use ring::signature::KeyPair as _;
+use sha2::Digest as _;
 
-use common::{Browser, Server, admin, between, start_federated};
+use std::time::Duration;
+
+use common::{Browser, Live, Server, admin, between, start_federated};
 
 /// The part of a server's address people's names carry: `127.0.0.1:1234`.
 fn handle(server: &Server) -> String {
@@ -450,4 +455,390 @@ async fn nobody_signs_in_as_someone_from_another_server() {
         )
         .await;
     assert_ne!(login.status(), StatusCode::SEE_OTHER);
+}
+
+// Typing notices: best effort, signed like other requests, never stored.
+
+/// The next typing event on `live`, or none within `wait`.
+async fn typing_within(live: &mut Live, wait: Duration) -> Option<serde_json::Value> {
+    let deadline = tokio::time::Instant::now() + wait;
+    while let Some(event) = live
+        .next_event(deadline.saturating_duration_since(tokio::time::Instant::now()))
+        .await
+    {
+        if event["type"] == "typing" {
+            return Some(event);
+        }
+    }
+    None
+}
+
+/// The database file a server keeps, opened to seed or inspect it.
+fn database(server: &Server) -> rusqlite::Connection {
+    rusqlite::Connection::open(server.data_dir().join("sideporch.db")).unwrap()
+}
+
+/// Makes `server` know the one at `url` as connected, as if they had
+/// connected. Returns the id it has for them.
+fn connected_peer(server: &Server, handle: &str, url: &str, key: Option<&[u8]>) -> i64 {
+    let conn = database(server);
+    conn.execute(
+        "INSERT INTO instances (url, handle, name, public_key, status, note, allow_direct, created_at, updated_at)
+         VALUES (?1, ?2, ?2, ?3, 'connected', '', 1, 0, 0)",
+        rusqlite::params![url, handle, key],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
+/// Shares `channel` with `peer`, as `role` (`host` means the peer hosts it).
+fn share_with_peer(server: &Server, channel: i64, peer: i64, role: &str, remote: Option<i64>) {
+    database(server)
+        .execute(
+            "INSERT INTO shared_channels (channel_id, instance_id, role, remote_channel_id, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'active', 0)",
+            rusqlite::params![channel, peer, role, remote],
+        )
+        .unwrap();
+}
+
+/// How many rows a server's outbox holds.
+fn outbox_len(server: &Server) -> i64 {
+    database(server)
+        .query_row("SELECT COUNT(*) FROM federation_outbox", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
+/// Waits until a server's outbox is empty, so later counts are its own.
+async fn outbox_drained(server: &Server) {
+    for _ in 0..100 {
+        if outbox_len(server) == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the outbox never emptied");
+}
+
+/// How many accounts stand in for people from other servers on `server`.
+fn stand_ins(server: &Server) -> i64 {
+    database(server)
+        .query_row(
+            "SELECT COUNT(*) FROM users WHERE instance_id IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// A typing notice body for `person` (a name on `server`) in `channel`.
+fn notice(channel: i64, parent: Option<&str>, server: &str, name: &str) -> Vec<u8> {
+    serde_json::json!({
+        "channel": channel,
+        "parent": parent,
+        "person": {
+            "server": server,
+            "url": format!("https://{server}"),
+            "id": 7,
+            "username": "rob",
+            "display_name": name,
+        },
+        "stopped": false,
+    })
+    .to_string()
+    .into_bytes()
+}
+
+/// The headers a server sends with a signed `POST` of `body` to `path` on
+/// `target`, as `sender`, with `signer`'s key.
+fn sign(
+    signer: &ring::signature::Ed25519KeyPair,
+    sender: &str,
+    target: &str,
+    path: &str,
+    body: &[u8],
+    nonce: &str,
+) -> Vec<(&'static str, String)> {
+    let date = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        .to_string();
+    let hash = sha2::Sha256::digest(body)
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            use std::fmt::Write as _;
+            // Writing to a String cannot fail.
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+    let input =
+        format!("sideporch-request-v1\nPOST\n{path}\n{target}\n{sender}\n{date}\n{nonce}\n{hash}");
+    vec![
+        ("sideporch-server", sender.to_owned()),
+        ("sideporch-date", date),
+        ("sideporch-nonce", nonce.to_owned()),
+        (
+            "sideporch-signature",
+            base64ct::Base64::encode_string(signer.sign(input.as_bytes()).as_ref()),
+        ),
+    ]
+}
+
+/// A new signing key, as a server that connected to `b` would have.
+fn new_key() -> ring::signature::Ed25519KeyPair {
+    let pkcs8 =
+        ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new()).unwrap();
+    ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap()
+}
+
+/// Posts a typing notice to `server` with `headers`, and returns its answer.
+async fn deliver(server: &Server, headers: &[(&str, String)], body: Vec<u8>) -> StatusCode {
+    let mut request = reqwest::Client::new()
+        .post(format!("{}/federation/typing", server.base))
+        .body(body);
+    for (name, value) in headers {
+        request = request.header(*name, value);
+    }
+    request.send().await.unwrap().status()
+}
+
+#[tokio::test]
+async fn typing_crosses_to_the_servers_a_channel_is_shared_with() {
+    let (a, b) = (start_federated().await, start_federated().await);
+    let (ada, bo) = (admin(&a).await, admin(&b).await);
+    connect(&ada, &bo, &b).await;
+
+    let garden = channel(&ada, "garden", false).await;
+    ada.send(garden, "Welcome to the garden", None).await;
+    let hello = common::last_message_id(&ada.page(&format!("/c/{garden}")).await);
+    let copy = share(&ada, &bo, garden).await;
+    bo.wait_for(&format!("/c/{copy}"), "Welcome to the garden")
+        .await;
+    let bo_hello = common::last_message_id(&bo.page(&format!("/c/{copy}")).await);
+    outbox_drained(&a).await;
+    let stand_ins_before = stand_ins(&b);
+
+    // Someone on B is looking at the copy, and Ada types on A.
+    let mut watching = bo.live_in(copy).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut ada_typing = ada.live_in(garden).await;
+    ada_typing
+        .send(&serde_json::json!({
+            "type": "typing", "channel_id": garden, "parent_id": null, "stopped": false
+        }))
+        .await;
+    let seen = typing_within(&mut watching, Duration::from_secs(5))
+        .await
+        .expect("typing on B");
+    assert_eq!(seen["channel_id"], copy);
+    assert_eq!(seen["name"], "Ada Admin");
+    assert_eq!(seen["parent_id"], serde_json::Value::Null);
+
+    // In a thread: named by its first message, on each side.
+    let mut ada_in_thread = ada.live_in(garden).await;
+    ada_in_thread
+        .send(&serde_json::json!({
+            "type": "typing", "channel_id": garden, "parent_id": hello, "stopped": false
+        }))
+        .await;
+    let thread = typing_within(&mut watching, Duration::from_secs(5))
+        .await
+        .expect("typing in the thread on B");
+    assert_eq!(thread["channel_id"], copy);
+    assert_eq!(thread["parent_id"], bo_hello);
+
+    // Typing is never queued, and makes no account here.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(outbox_len(&a), 0, "typing went into the outbox");
+    assert_eq!(stand_ins(&b), stand_ins_before, "typing made an account");
+}
+
+#[tokio::test]
+async fn typing_is_shown_only_for_people_the_sender_may_speak_for() {
+    let b = start_federated().await;
+    let bo = admin(&b).await;
+    let mallory_url = "http://mallory.test";
+    let key = new_key();
+    let peer = connected_peer(
+        &b,
+        "mallory.test",
+        mallory_url,
+        Some(key.public_key().as_ref()),
+    );
+    let target = b.base.as_str();
+    let path = "/federation/typing";
+    let garden = channel(&bo, "garden", false).await;
+    let hosted = channel(&bo, "hosted", false).await;
+    let plans = channel(&bo, "plans", true).await;
+    let secret = channel(&bo, "secret", true).await;
+    // Mallory hosts a copy of `garden` and `plans`; `hosted` is B's own,
+    // which Mallory keeps a copy of.
+    share_with_peer(&b, garden, peer, "guest", Some(55));
+    share_with_peer(&b, plans, peer, "guest", Some(56));
+    share_with_peer(&b, hosted, peer, "host", None);
+    let mut watch_garden = bo.live_in(garden).await;
+    let mut watch_hosted = bo.live_in(hosted).await;
+    let mut watch_plans = bo.live_in(plans).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let quiet = Duration::from_millis(500);
+
+    // Mallory's own person, in a channel it hosts: shown.
+    let accepted = notice(55, None, "mallory.test", "Rob Rogue");
+    let headers = sign(&key, mallory_url, target, path, &accepted, "one");
+    assert_eq!(
+        deliver(&b, &headers, accepted.clone()).await,
+        StatusCode::NO_CONTENT
+    );
+    let seen = typing_within(&mut watch_garden, Duration::from_secs(5))
+        .await
+        .expect("typing shown");
+    assert_eq!(seen["channel_id"], garden);
+    assert_eq!(seen["name"], "Rob Rogue");
+    assert_eq!(seen["stopped"], false);
+    // Showing it made no account for Rob here.
+    let rob: i64 = database(&b)
+        .query_row(
+            "SELECT COUNT(*) FROM users WHERE username = 'rob@mallory.test'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rob, 0);
+
+    // Replaying the same request is refused.
+    assert_eq!(
+        deliver(&b, &headers, accepted).await,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Mallory is a guest of `hosted`, so it may speak only for its own
+    // people there: not for someone elsewhere, nor for someone on B.
+    let elsewhere = notice(hosted, None, "other.test", "Olive Other");
+    let headers = sign(&key, mallory_url, target, path, &elsewhere, "two");
+    assert_eq!(
+        deliver(&b, &headers, elsewhere).await,
+        StatusCode::FORBIDDEN
+    );
+    let here = notice(hosted, None, &handle(&b), "Bo Admin");
+    let headers = sign(&key, mallory_url, target, path, &here, "three");
+    assert_eq!(deliver(&b, &headers, here).await, StatusCode::FORBIDDEN);
+    assert!(typing_within(&mut watch_hosted, quiet).await.is_none());
+    // Its own person in `hosted` is shown.
+    let own = notice(hosted, None, "mallory.test", "Rob Rogue");
+    let headers = sign(&key, mallory_url, target, path, &own, "four");
+    assert_eq!(deliver(&b, &headers, own).await, StatusCode::NO_CONTENT);
+    assert!(
+        typing_within(&mut watch_hosted, Duration::from_secs(5))
+            .await
+            .is_some()
+    );
+
+    // A channel that isn't shared with Mallory, shared or not: refused.
+    let unshared = notice(secret, None, "mallory.test", "Rob Rogue");
+    let headers = sign(&key, mallory_url, target, path, &unshared, "five");
+    assert_eq!(deliver(&b, &headers, unshared).await, StatusCode::FORBIDDEN);
+
+    // A private channel: only its members, and Rob isn't one.
+    let private = notice(56, None, "mallory.test", "Rob Rogue");
+    let headers = sign(&key, mallory_url, target, path, &private, "six");
+    assert_eq!(deliver(&b, &headers, private).await, StatusCode::FORBIDDEN);
+    assert!(typing_within(&mut watch_plans, quiet).await.is_none());
+
+    // Signed with another key: refused.
+    let forged_key = new_key();
+    let forged = notice(55, None, "mallory.test", "Rob Rogue");
+    let headers = sign(&forged_key, mallory_url, target, path, &forged, "seven");
+    assert_eq!(
+        deliver(&b, &headers, forged).await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(typing_within(&mut watch_garden, quiet).await.is_none());
+}
+
+#[tokio::test]
+async fn typing_in_a_private_shared_channel_reaches_its_members_only() {
+    let (a, b) = (start_federated().await, start_federated().await);
+    let (ada, bo) = (admin(&a).await, admin(&b).await);
+    connect(&ada, &bo, &b).await;
+    let bea = common::invite(&b, &bo, "Bea", "bea").await;
+    let cy = common::invite(&b, &bo, "Cy", "cy").await;
+
+    let plans = channel(&ada, "offsite-plans", true).await;
+    let copy = share(&ada, &bo, plans).await;
+    let bea_id = bea.user_id().await.to_string();
+    bo.post(
+        &format!("/c/{copy}/members"),
+        &[("user_id", bea_id.as_str())],
+    )
+    .await;
+    let mut bea_live = bea.live_in(copy).await;
+    let mut cy_live = cy.live_in(copy).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let mut ada_typing = ada.live_in(plans).await;
+    ada_typing
+        .send(&serde_json::json!({
+            "type": "typing", "channel_id": plans, "parent_id": null, "stopped": false
+        }))
+        .await;
+    let seen = typing_within(&mut bea_live, Duration::from_secs(5))
+        .await
+        .expect("typing for a member");
+    assert_eq!(seen["channel_id"], copy);
+    assert_eq!(seen["name"], "Ada Admin");
+    // Cy isn't in the channel, so the notice doesn't reach him.
+    assert!(
+        typing_within(&mut cy_live, Duration::from_millis(500))
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_slow_or_down_peer_does_not_hold_back_the_sender() {
+    let a = start_federated().await;
+    let ada = admin(&a).await;
+    let garden = channel(&ada, "garden", false).await;
+    // One peer accepts connections and never answers.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let silent_address = silent.local_addr().unwrap().to_string();
+    let silent_peer = connected_peer(
+        &a,
+        &silent_address,
+        &format!("http://{silent_address}"),
+        None,
+    );
+    share_with_peer(&a, garden, silent_peer, "host", None);
+    // Another is down: nothing listens there.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let closed_address = closed.local_addr().unwrap().to_string();
+    drop(closed);
+    let down_peer = connected_peer(
+        &a,
+        &closed_address,
+        &format!("http://{closed_address}"),
+        None,
+    );
+    share_with_peer(&a, garden, down_peer, "host", None);
+
+    let mut watching = ada.live_in(garden).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let started = tokio::time::Instant::now();
+    watching
+        .send(&serde_json::json!({
+            "type": "typing", "channel_id": garden, "parent_id": null, "stopped": false
+        }))
+        .await;
+    assert!(
+        typing_within(&mut watching, Duration::from_secs(1))
+            .await
+            .is_some(),
+        "the sender's own typing shows at once"
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(outbox_len(&a), 0, "typing went into the outbox");
+    drop(silent);
 }

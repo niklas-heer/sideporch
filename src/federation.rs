@@ -19,6 +19,7 @@ pub mod inbound;
 pub mod keys;
 pub mod outbound;
 pub mod outbox;
+pub mod typing;
 
 use std::sync::Arc;
 
@@ -87,6 +88,8 @@ pub struct Federation {
     http: Http,
     /// Wakes the outbox when there's something to send.
     pub wake: tokio::sync::Notify,
+    /// Remembers typing notices, in memory only.
+    typing: std::sync::Mutex<typing::Gate>,
 }
 
 impl std::fmt::Debug for Federation {
@@ -123,6 +126,7 @@ impl Federation {
                 url,
                 http: Http::new(allow_private)?,
                 wake: tokio::sync::Notify::new(),
+                typing: std::sync::Mutex::default(),
             },
             new,
         ))
@@ -219,6 +223,13 @@ impl Federation {
             .await
     }
 
+    /// What this server remembers about typing notices; see [`typing`].
+    pub fn typing_gate(&self) -> std::sync::MutexGuard<'_, typing::Gate> {
+        self.typing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Checks a request another server signed, and returns that server if
     /// it is one we know in one of `statuses` and the request holds.
     pub fn verify(
@@ -230,6 +241,26 @@ impl Federation {
         body: &[u8],
         statuses: &[data::Status],
     ) -> Result<data::Instance, String> {
+        let (instance, signed) = self.check(conn, headers, method, path, body, statuses)?;
+        if !data::remember_nonce(conn, instance.id, &signed.nonce, now_ms())
+            .map_err(|error| error.to_string())?
+        {
+            return Err("the request was sent before".to_owned());
+        }
+        Ok(instance)
+    }
+
+    /// As [`Self::verify`], but records nothing, so it writes nothing. The
+    /// caller keeps the nonce if it needs to refuse replays.
+    pub fn check(
+        &self,
+        conn: &Connection,
+        headers: &axum::http::HeaderMap,
+        method: &str,
+        path: &str,
+        body: &[u8],
+        statuses: &[data::Status],
+    ) -> Result<(data::Instance, keys::Signed), String> {
         let signed =
             keys::Signed::read(|name| headers.get(name).and_then(|value| value.to_str().ok()))?;
         let instance = data::instance_by_url(conn, &signed.server)
@@ -242,12 +273,7 @@ impl Federation {
             .ok_or("this server has no key for the one sending the request")?;
         let target = self.url.as_deref().ok_or("this server has no public URL")?;
         signed.check(key, method, path, target, body, now_ms())?;
-        if !data::remember_nonce(conn, instance.id, &signed.nonce, now_ms())
-            .map_err(|error| error.to_string())?
-        {
-            return Err("the request was sent before".to_owned());
-        }
-        Ok(instance)
+        Ok((instance, signed))
     }
 
     /// Checks a request signed with `public_key`, for a server we don't

@@ -10,13 +10,13 @@ use rusqlite::{Connection, OptionalExtension as _};
 use super::{
     data::{self, Instance, Own, Role, Share, ShareStatus},
     events::{Batch, Event, FileRef, Person, localize},
-    outbound,
+    outbound, typing,
 };
 use crate::{
     AppState,
     error::{AppError, AppResult},
     messages::{self, Change, Draft, Origin, Sender},
-    now_ms, store,
+    now_ms, realtime, store,
 };
 
 /// Applies a batch from `from` in order. Returns what went wrong with each
@@ -667,5 +667,66 @@ async fn membership(
     if let Some((local, account)) = found {
         outbound::membership(state, local, account, joined, Some(from.id)).await;
     }
+    Ok(())
+}
+
+/// Shows a typing notice from `from` to the people looking at the channel
+/// here, and passes it on the way messages are passed on. Nothing is stored
+/// and no account is made.
+pub async fn typing(
+    state: &AppState,
+    from: &Instance,
+    notice: typing::Notice,
+) -> Result<(), String> {
+    let here = here(state)?;
+    let checked = {
+        let (from, here, notice) = (from.clone(), here.clone(), notice.clone());
+        state
+            .db
+            .call(move |conn| {
+                let Some((local, role)) = local_channel(conn, &from, notice.channel)? else {
+                    return Ok(Err("the channel isn't shared with this server"));
+                };
+                if !may_speak_for(role, &from, &here, &notice.person) {
+                    return Ok(Err("the server may not speak for that person"));
+                }
+                let parent = match &notice.parent {
+                    Some(uid) => match outbound::resolve(conn, &here.own(), local, uid)? {
+                        Some(id) => Some(id),
+                        None => return Ok(Err("the thread isn't here")),
+                    },
+                    None => None,
+                };
+                let audience = store::audience(conn, local)?;
+                if let Some(members) = &audience {
+                    // Only members of a private channel may be seen typing in it.
+                    let member = typing::existing_account(conn, &notice.person)?
+                        .is_some_and(|account| members.contains(&account));
+                    if !member {
+                        return Ok(Err("that person isn't in the channel"));
+                    }
+                }
+                let direct: bool = conn.query_row(
+                    "SELECT kind = 'dm' FROM channels WHERE id = ?1",
+                    [local],
+                    |row| row.get(0),
+                )?;
+                Ok(Ok((local, parent, audience, direct)))
+            })
+            .await
+            .map_err(failed)?
+    };
+    let (local, parent, audience, direct) = checked?;
+    let event = typing::event(local, parent, &notice.person, notice.stopped);
+    realtime::publish_typing(&state.hub, direct, audience, &event);
+    typing::relay(
+        state,
+        local,
+        Some(from.id),
+        notice.person,
+        notice.parent,
+        notice.stopped,
+    )
+    .await;
     Ok(())
 }

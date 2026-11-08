@@ -36,6 +36,7 @@ pub fn router() -> Router<AppState> {
         .route("/federation/decline", post(receive_decline))
         .route("/federation/disconnect", post(receive_disconnect))
         .route("/federation/inbox", post(inbox))
+        .route(federation::typing::PATH, post(typing_notice))
         .route("/federation/files/{file_id}", get(serve_file))
         .route("/federation/people", get(directory))
         .route("/c/{channel_id}/share", post(share_channel))
@@ -309,6 +310,74 @@ async fn inbox(
     // Events that don't apply are dropped; sending them again wouldn't help.
     let problems = federation::inbound::receive(&state, &instance, batch).await;
     Ok(Json(serde_json::json!({ "problems": problems })).into_response())
+}
+
+/// A typing notice from a connected server. Nothing is stored, and refusals
+/// say nothing about the channel, so a server learns nothing it doesn't
+/// already share.
+async fn typing_notice(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> AppResult<Response> {
+    if body.len() > federation::typing::MAX_BYTES {
+        return Ok(StatusCode::PAYLOAD_TOO_LARGE.into_response());
+    }
+    let path = uri
+        .path_and_query()
+        .map_or_else(String::new, |path| path.as_str().to_owned());
+    let federation = Arc::clone(&state.federation);
+    let signed_body = body.clone();
+    let checked = state
+        .db
+        .call(move |conn| {
+            Ok(federation
+                .check(
+                    conn,
+                    &headers,
+                    "POST",
+                    &path,
+                    &signed_body,
+                    &[Status::Connected],
+                )
+                .map_err(|reason| refused(StatusCode::UNAUTHORIZED, reason)))
+        })
+        .await?;
+    let (instance, signed) = match checked {
+        Ok(found) => found,
+        Err(refusal) => return Ok(refusal),
+    };
+    let admitted =
+        state
+            .federation
+            .typing_gate()
+            .admit(instance.id, &signed.nonce, std::time::Instant::now());
+    match admitted {
+        Ok(()) => {}
+        Err(federation::typing::Refused::Busy) => {
+            return Ok(refused(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many typing notices",
+            ));
+        }
+        Err(federation::typing::Refused::Replayed) => {
+            return Ok(refused(
+                StatusCode::UNAUTHORIZED,
+                "the request was sent before",
+            ));
+        }
+    }
+    let Ok(notice) = serde_json::from_slice::<federation::typing::Notice>(&body) else {
+        return Ok(refused(StatusCode::BAD_REQUEST, "not a typing notice"));
+    };
+    match federation::inbound::typing(&state, &instance, notice).await {
+        Ok(()) => Ok(StatusCode::NO_CONTENT.into_response()),
+        Err(reason) => {
+            tracing::debug!(server = %instance.handle, %reason, "refused a typing notice");
+            Ok(StatusCode::FORBIDDEN.into_response())
+        }
+    }
 }
 
 /// A file attached to a message in a channel shared with the asking server.
