@@ -1550,6 +1550,42 @@ pub fn delete_unattached_files(conn: &Connection, file_ids: &[i64]) -> AppResult
     Ok(())
 }
 
+/// Up to `limit` messages after `after` in a channel's list (`parent_id`
+/// None) or in one thread, oldest first.
+pub fn messages_after(
+    conn: &Connection,
+    channel_id: i64,
+    parent_id: Option<i64>,
+    after: i64,
+    limit: u32,
+) -> AppResult<Vec<Message>> {
+    let mut statement = conn.prepare(&format!(
+        "{MESSAGE_SELECT} WHERE m.channel_id = ?1 AND m.parent_id IS ?2 AND m.id > ?3 ORDER BY m.id LIMIT ?4"
+    ))?;
+    let mut messages = statement
+        .query_map(
+            params![channel_id, parent_id, after, limit],
+            message_from_row,
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    hydrate(conn, &mut messages)?;
+    Ok(messages)
+}
+
+/// The messages among `ids` that are in `channel_id`, oldest first. Ids
+/// that are gone, or elsewhere, are left out.
+pub fn messages_in(conn: &Connection, channel_id: i64, ids: &[i64]) -> AppResult<Vec<Message>> {
+    let ids = serde_json::to_string(ids).map_err(crate::error::AppError::internal)?;
+    let mut statement = conn.prepare(&format!(
+        "{MESSAGE_SELECT} WHERE m.channel_id = ?1 AND m.id IN (SELECT value FROM json_each(?2)) ORDER BY m.id"
+    ))?;
+    let mut messages = statement
+        .query_map(params![channel_id, ids], message_from_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    hydrate(conn, &mut messages)?;
+    Ok(messages)
+}
+
 pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64> {
     let attachments = if new.attachments.is_empty() {
         None

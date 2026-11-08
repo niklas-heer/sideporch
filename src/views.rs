@@ -450,6 +450,12 @@ fn nav_link(href: &str, svg: &str, label: &str, badge: bool) -> Markup {
     }
 }
 
+/// The channel list on its own, for app.js to copy unread marks from after
+/// a reconnect.
+pub fn sidebar_fragment(shell: &Shell<'_>) -> Markup {
+    sidebar(shell, false)
+}
+
 fn sidebar(shell: &Shell<'_>, full_width: bool) -> Markup {
     let width = if full_width {
         "flex w-full md:w-72"

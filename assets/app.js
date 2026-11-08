@@ -224,26 +224,40 @@
     }
   }
 
-  // Appends a server-rendered message, grouping it under the previous one
-  // when the same author wrote both within a few minutes.
+  // Groups consecutive messages by author, as the server does when it renders a list.
+  function regroup(list) {
+    let previous = null;
+    for (const item of list.children) {
+      const grouped =
+        previous !== null &&
+        previous.dataset.author === item.dataset.author &&
+        Number(item.dataset.created) - Number(previous.dataset.created) < GROUP_WINDOW_MS;
+      if (grouped) item.dataset.compact = "";
+      else delete item.dataset.compact;
+      previous = item;
+    }
+  }
+
+  // Places a server-rendered message in id order. A message already on the
+  // page is left alone, so one that arrives both live and in a catch-up
+  // appears once.
   function appendMessage(list, html, scroller) {
     const template = document.createElement("template");
     template.innerHTML = html.trim();
     const item = template.content.firstElementChild;
     if (!item || document.getElementById(item.id)) return;
-    const previous = list.lastElementChild;
-    if (
-      previous &&
-      previous.dataset.author === item.dataset.author &&
-      Number(item.dataset.created) - Number(previous.dataset.created) < GROUP_WINDOW_MS
-    ) {
-      item.dataset.compact = "";
-    }
     const follow = nearEnd(scroller);
     localizeTimes(item);
     markOwnReactions(item);
     drawDiagrams(item);
-    list.append(item);
+    // New messages come last; a catch-up can add one older than a live one.
+    let before = list.lastElementChild;
+    while (before && Number(before.dataset.messageId) > Number(item.dataset.messageId)) {
+      before = before.previousElementSibling;
+    }
+    if (before) before.after(item);
+    else list.prepend(item);
+    regroup(list);
     if (follow) scrollToEnd(scroller);
   }
 
@@ -492,6 +506,11 @@
     }
     if (event.type !== "message") return;
     const here = app && app.dataset.channel === String(event.channel_id);
+    // A notice with no markup for the open channel: fetch what it missed instead.
+    if (here && event.html === undefined) {
+      catchUp();
+      return;
+    }
     if (here) stopTyping(event.author, event.parent_id);
     else if (String(event.author).startsWith("u:")) markSidebarTyping(event.channel_id, event.author.slice(2), true);
     if (!here) {
@@ -517,28 +536,45 @@
     }
   }
 
-  // Live updates. After a dropped connection the page reloads to catch up
-  // on anything it missed; drafts survive in session storage.
+  // Live updates. A dropped connection is retried with exponential backoff
+  // and jitter while "Reconnecting…" shows. When it returns, the page
+  // catches up in place (see catchUp) rather than reloading.
   let liveSocket = null;
-  function connect(attempt = 0) {
+  let liveAttempts = 0;
+  let missedSince = false;
+  let reconnecting = null;
+  function showReconnecting(shown) {
+    if (!shown) {
+      reconnecting?.remove();
+      reconnecting = null;
+      return;
+    }
+    if (reconnecting) return;
+    reconnecting = document.createElement("p");
+    reconnecting.setAttribute("role", "status");
+    reconnecting.className = "fixed bottom-4 left-4 z-50 rounded-full bg-floor px-3 py-1 text-xs text-haint-2";
+    reconnecting.textContent = "Reconnecting…";
+    document.body.append(reconnecting);
+  }
+
+  function connect() {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(`${protocol}//${location.host}/ws`);
     liveSocket = socket;
-    let opened = false;
     const sendVisibility = () => {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "visibility", visible: document.visibilityState === "visible" }));
       }
     };
     socket.addEventListener("open", () => {
-      opened = true;
-      if (attempt > 0) location.reload();
       sendVisibility();
       // Only the channel on screen needs messages in full.
       socket.send(JSON.stringify({ type: "view", channel_id: app?.dataset.channel ? Number(app.dataset.channel) : null }));
       // Reminders and scheduled messages read times in this zone.
       const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (zone) socket.send(JSON.stringify({ type: "timezone", name: zone }));
+      if (!missedSince) liveAttempts = 0;
+      else catchUp();
     });
     document.addEventListener("visibilitychange", sendVisibility);
     socket.addEventListener("message", (message) => {
@@ -550,9 +586,120 @@
     });
     socket.addEventListener("close", () => {
       document.removeEventListener("visibilitychange", sendVisibility);
-      const delay = Math.min(30000, 1000 * 2 ** Math.min(attempt, 5));
-      setTimeout(() => connect(opened ? 1 : attempt + 1), delay);
+      missedSince = true;
+      showReconnecting(true);
+      setTimeout(connect, backoff(liveAttempts, 30000));
+      liveAttempts += 1;
     });
+  }
+
+  // Catching up runs one at a time; a request that comes meanwhile runs after.
+  let catchingUp = null;
+  let catchUpAgain = false;
+  function catchUp() {
+    if (catchingUp) {
+      catchUpAgain = true;
+      return;
+    }
+    catchingUp = runCatchUp()
+      .catch(() => {
+        // Try the connection again; its next open catches up again.
+        if (liveSocket?.readyState === WebSocket.OPEN) liveSocket.close();
+      })
+      .finally(() => {
+        catchingUp = null;
+        if (catchUpAgain) {
+          catchUpAgain = false;
+          catchUp();
+        }
+      });
+  }
+
+  // After a dropped connection: fetches the messages a channel or open
+  // thread gained, refreshes the ones on screen (edits, deletions, reactions,
+  // reply counts), and patches the sidebar's unread marks. The page reloads
+  // only when it can't get everything, or isn't showing a channel.
+  async function runCatchUp() {
+    const channel = app?.dataset.channel;
+    const list = document.getElementById("messages");
+    if (!channel || !list) {
+      location.reload();
+      return;
+    }
+    const thread = app.dataset.thread;
+    const replies = document.getElementById("replies");
+    const threadOpen = Boolean(thread) && Boolean(replies);
+    const newest = (root) => Math.max(0, ...[...root.children].map((item) => Number(item.dataset.messageId) || 0));
+    const json = (response) => {
+      if (!response.ok) throw new Error(`catch-up failed with ${response.status}`);
+      return response.json();
+    };
+    const since = (after, threadId) => {
+      const query = new URLSearchParams({ after: String(after) });
+      if (threadId) query.set("thread", threadId);
+      return fetch(`/c/${channel}/since?${query}`, { cache: "no-store" }).then(json);
+    };
+    const loaded = [...new Set([...list.children, ...(threadOpen ? replies.children : [])].map((item) => Number(item.dataset.messageId)).filter(Boolean))];
+    const refresh = loaded.length
+      ? fetch(`/c/${channel}/messages/refresh`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-sideporch-fetch": "1" },
+          body: JSON.stringify({ ids: loaded }),
+        }).then(json)
+      : Promise.resolve({ messages: [], gone: [] });
+    const sidebar = fetch(`/sidebar?channel=${channel}`, { cache: "no-store" }).then((response) => (response.ok ? response.text() : null));
+    const [main, inThread, refreshed, sidebarHtml] = await Promise.all([
+      since(newest(list), null),
+      threadOpen ? since(newest(replies), thread) : null,
+      refresh,
+      sidebar,
+    ]);
+    // Too many to fetch in one go: the page reloads to show them all.
+    if (!main.complete || (inThread && !inThread.complete)) {
+      location.reload();
+      return;
+    }
+
+    for (const message of refreshed.messages) replaceMessage(message.id, message.html);
+    for (const id of refreshed.gone) removeMessage({ id, channel_id: Number(channel), parent_id: null, reply_count: null });
+    const scroller = document.getElementById("scroller");
+    for (const message of main.messages) appendMessage(list, message.html, scroller);
+    regroup(list);
+    if (threadOpen) {
+      for (const message of inThread.messages) appendMessage(replies, message.html, document.getElementById("thread-scroller"));
+      regroup(replies);
+      // The thread page shows every reply, so its count is what is listed.
+      updateReplyCount(Number(thread), [...replies.children].filter((item) => item.dataset.messageId).length);
+    }
+    if (sidebarHtml) patchSidebar(sidebarHtml);
+    liveAttempts = 0;
+    if (liveSocket?.readyState === WebSocket.OPEN) {
+      missedSince = false;
+      showReconnecting(false);
+      const last = newest(list);
+      if (last && document.visibilityState === "visible") {
+        liveSocket.send(JSON.stringify({ type: "read", channel_id: Number(channel), message_id: last }));
+      }
+    }
+  }
+
+  // Copies unread and muted marks from a fresh sidebar onto this page's,
+  // leaving the rest alone, so focus and typing in it survive.
+  function patchSidebar(html) {
+    const fresh = new DOMParser().parseFromString(html, "text/html");
+    const copyMarks = (next, current) => {
+      if (!current) return;
+      for (const name of ["data-unread", "data-muted"]) {
+        if (next.hasAttribute(name)) current.setAttribute(name, "");
+        else current.removeAttribute(name);
+      }
+    };
+    for (const next of fresh.querySelectorAll("[data-channel-link]")) {
+      copyMarks(next, document.querySelector(`[data-channel-link="${next.dataset.channelLink}"]`));
+    }
+    for (const next of fresh.querySelectorAll("[data-nav-link]")) {
+      copyMarks(next, document.querySelector(`a[data-nav-link][href="${next.getAttribute("href")}"]`));
+    }
   }
 
   // Suggests slash commands while the message is just `/name`.

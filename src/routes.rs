@@ -32,6 +32,7 @@ mod admin;
 mod automation;
 mod backups;
 mod bans;
+mod catch_up;
 mod channels;
 mod community;
 mod credentials;
@@ -117,6 +118,7 @@ pub fn router(state: AppState) -> Router {
         .merge(account::router())
         .merge(gifs::router())
         .merge(message::router())
+        .merge(catch_up::router())
         .merge(channels::router())
         .merge(later::router())
         .merge(backups::router())
