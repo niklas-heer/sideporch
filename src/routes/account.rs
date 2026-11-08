@@ -118,13 +118,29 @@ async fn change_password(
     }
     let hash = auth::hash_password(form.password).await?;
     let keep = auth::session_token(&headers).map(|token| auth::hash_token(&token));
-    state
+    let saved = state
         .db
         .call(move |conn| {
-            store::set_password(conn, user_id, &hash)?;
-            store::end_sessions(conn, user_id, keep.as_deref())
+            // Hashing took a moment: this session may have been ended since,
+            // such as by `sideporch reset-link --reset-sign-in`.
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let session_lives: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM sessions WHERE token_hash = ?1 AND user_id = ?2)",
+                rusqlite::params![keep, user_id],
+                |row| row.get(0),
+            )?;
+            if !session_lives || crate::security::recovering(&tx, user_id)? {
+                return Ok(false);
+            }
+            store::set_password(&tx, user_id, &hash)?;
+            store::end_sessions(&tx, user_id, keep.as_deref())?;
+            tx.commit()?;
+            Ok(true)
         })
         .await?;
+    if !saved {
+        return Err(AppError::Forbidden);
+    }
     Ok(render_account(&state, &user, None, true)
         .await?
         .into_response())
