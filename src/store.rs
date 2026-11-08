@@ -3625,12 +3625,21 @@ pub fn set_automation_declarations(
     // A value the new declaration wouldn't accept falls back to its default,
     // and counts as missing if the setting is required.
     for (name, text) in automation_setting_values(conn, id)? {
-        let fits = declarations
+        let declared = declarations
             .iter()
-            .find(|declaration| declaration.name == name)
-            .is_none_or(|declaration| {
-                crate::automations::settings::check_value(declaration, &text).is_ok()
-            });
+            .find(|declaration| declaration.name == name);
+        let fits = match declared {
+            None => true,
+            Some(declaration) => {
+                match crate::automations::settings::check_value(declaration, &text) {
+                    Err(_) => false,
+                    // A channel setting can only name a public channel.
+                    Ok(value) => {
+                        declaration.kind != "channel" || public_channel_id(conn, &value)?.is_some()
+                    }
+                }
+            }
+        };
         if !fits {
             conn.execute(
                 "DELETE FROM automation_settings WHERE automation_id = ?1 AND name = ?2",
@@ -3795,20 +3804,23 @@ mod tests {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
             "INSERT INTO automations (id, name, source, created_at, updated_at) VALUES (1, 'a', '', 0, 0);
+             INSERT INTO channels (id, kind, name, created_at) VALUES (1, 'public', 'general', 0);
              INSERT INTO automation_settings (automation_id, name, value) VALUES
-               (1, 'count', 'many'), (1, 'room', 'general');",
+               (1, 'count', 'many'), (1, 'room', 'general'), (1, 'alerts', 'nowhere');",
         )
         .unwrap();
         let declarations: Vec<crate::automations::settings::Declaration> =
             serde_json::from_value(serde_json::json!([
                 { "name": "count", "type": "number", "required": true },
-                { "name": "room", "type": "string" },
+                { "name": "room", "type": "channel" },
+                { "name": "alerts", "type": "channel" },
             ]))
             .unwrap();
         super::set_automation_declarations(&conn, 1, &declarations).unwrap();
         let saved = super::automation_setting_values(&conn, 1).unwrap();
         assert_eq!(saved.get("count"), None, "no longer a valid number");
         assert_eq!(saved.get("room").map(String::as_str), Some("general"));
+        assert_eq!(saved.get("alerts"), None, "no public channel has that name");
         assert_eq!(
             crate::automations::settings::missing_required(&declarations, &saved),
             ["count"]

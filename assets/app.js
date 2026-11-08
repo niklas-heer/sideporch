@@ -567,9 +567,11 @@
     const channel = app?.dataset.channel;
     const list = document.getElementById("messages");
     if (!channel || !list) return;
-    const last = newest(list);
+    const replies = app.dataset.thread ? document.getElementById("replies") : null;
+    // A reply can be the channel's newest message.
+    const last = Math.max(newest(list), replies ? newest(replies) : 0);
     if (!last) return;
-    const thread = app.dataset.thread && document.getElementById("replies") ? Number(app.dataset.thread) : undefined;
+    const thread = replies ? Number(app.dataset.thread) : undefined;
     socket.send(JSON.stringify({ type: "read", channel_id: Number(channel), message_id: last, thread_id: thread }));
   }
 
@@ -700,10 +702,7 @@
     if (liveSocket?.readyState === WebSocket.OPEN) {
       missedSince = false;
       showReconnecting(false);
-      const last = newest(list);
-      if (last && document.visibilityState === "visible") {
-        liveSocket.send(JSON.stringify({ type: "read", channel_id: Number(channel), message_id: last, thread_id: threadOpen ? Number(thread) : undefined }));
-      }
+      if (document.visibilityState === "visible") sendRead(liveSocket);
     }
   }
 

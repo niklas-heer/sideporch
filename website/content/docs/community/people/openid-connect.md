@@ -27,7 +27,7 @@ Go to **Admin → Sign-in**, and fill in **Single sign-on**:
 - **Only this email domain** (optional): only people whose verified email address is in this domain can sign in with the provider.
 - **Create an account on a first sign-in**: off by default. When on, a first sign-in makes a new account, but only while [sign-up is open](@/docs/community/people/sign-up-and-trust.md) and the server has no rules to agree to, because the sign-up form is where people agree to them. Otherwise a first sign-in is refused, and the person has to ask to join or be invited first.
 
-A new account's username comes from the provider's `preferred_username` (an address keeps the part before the `@`), with `-2`, `-3` and so on added if it's taken. Its display name comes from `name`.
+A new account's username comes from the provider's `preferred_username`, or from the email address when that is missing or unusable (an address keeps the part before the `@`), with `-2`, `-3` and so on added if it's taken. Its display name comes from `name`.
 
 ## Link an account
 

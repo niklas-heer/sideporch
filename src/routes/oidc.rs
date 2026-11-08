@@ -377,14 +377,10 @@ async fn sign_in_identity(
     next: &str,
 ) -> AppResult<Response> {
     let (issuer, subject) = (provider.issuer.clone(), identity.subject.clone());
-    let (create, preferred, name) = (
+    let (create, preferred, email, name) = (
         provider.create_accounts,
-        // Only suggests a name: some providers, like Google, send no
-        // preferred_username. The account is still bound by subject.
-        identity
-            .preferred_username
-            .clone()
-            .or_else(|| identity.email.clone()),
+        identity.preferred_username.clone(),
+        identity.email.clone(),
         identity.name.clone(),
     );
     let now = now_ms();
@@ -411,9 +407,13 @@ async fn sign_in_identity(
                             "Lots of people signed up in the last hour. Try again a little later.",
                         ));
                     }
+                    // The email only suggests a name, for providers like
+                    // Google that send no usable preferred_username. The
+                    // account is still bound by issuer and subject.
                     let base = preferred
                         .as_deref()
                         .and_then(oidc::username_from)
+                        .or_else(|| email.as_deref().and_then(oidc::username_from))
                         .ok_or_else(|| AppError::bad_request(NO_USERNAME))?;
                     let username = oidc::free_username(&base, |candidate| {
                         community::username_taken(&tx, candidate).unwrap_or(true)
