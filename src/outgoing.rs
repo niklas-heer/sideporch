@@ -200,6 +200,7 @@ async fn answer(
             gif: None,
             poll: None,
             buttons: Vec::new(),
+            client_nonce: None,
         },
     )
     .await

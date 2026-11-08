@@ -991,6 +991,14 @@ async fn post_message(
         .call(move |conn| store::channel_for(conn, channel_id, user_id))
         .await?
         .ok_or(AppError::NotFound)?;
+    // A retry of a send that was stored: answer as the first did. Checked
+    // before uploads, GIF lookups and command or spam checks run again.
+    if let Some(nonce) = &input.client_nonce
+        && let Some(earlier) =
+            messages::earlier_send(&state, user_id, channel_id, nonce.clone()).await?
+    {
+        return Ok(sent_response(&headers, &earlier));
+    }
     let refusal = (!channel.may_write(input.parent_id.is_some()))
         .then(|| AppError::bad_request(channel.write_refusal(input.parent_id.is_some())));
     if let Some(send_at) = &input.send_at {
@@ -1061,17 +1069,25 @@ async fn post_message(
             gif,
             poll: None,
             buttons: Vec::new(),
+            client_nonce: input.client_nonce,
         },
     )
     .await?;
-    if wants_no_content(&headers) {
-        return Ok(StatusCode::NO_CONTENT.into_response());
+    Ok(sent_response(&headers, &message))
+}
+
+/// What a sent message answers with: `204` for app.js, otherwise a redirect
+/// to the thread or channel it went to. A retried send gets the same answer.
+fn sent_response(headers: &HeaderMap, message: &store::Message) -> Response {
+    if wants_no_content(headers) {
+        return StatusCode::NO_CONTENT.into_response();
     }
+    let channel_id = message.channel_id;
     let target = message.parent_id.map_or_else(
         || format!("/c/{channel_id}"),
         |parent| format!("/c/{channel_id}/t/{parent}"),
     );
-    Ok(Redirect::to(&target).into_response())
+    Redirect::to(&target).into_response()
 }
 
 /// Checks that `user` may post this now: see [`crate::community::check_message`].
@@ -1130,6 +1146,7 @@ async fn post_poll(
             gif: None,
             poll: Some(spec),
             buttons: Vec::new(),
+            client_nonce: None,
         },
     )
     .await?;
@@ -1195,6 +1212,7 @@ async fn create_poll(
             gif: None,
             poll: Some(spec),
             buttons: Vec::new(),
+            client_nonce: None,
         },
     )
     .await?;
@@ -1693,6 +1711,7 @@ async fn incoming_webhook(
         gif: None,
         poll: None,
         buttons: Vec::new(),
+        client_nonce: None,
     };
     match messages::post(&state, draft).await {
         Ok(_) => (StatusCode::OK, "ok").into_response(),

@@ -41,6 +41,10 @@ Typing indicators and read positions travel over the same WebSocket in the other
 
 If a browser falls behind, for example after a laptop wakes up, it reloads the page to catch up, so nothing is ever missing.
 
+## Sending again safely
+
+Each send carries an id that the browser makes, and Sideporch keeps it with the message. When a send gets no answer, because the connection dropped or the server failed, the browser sends it again with the same id, a few times with growing waits. The message is stored once per id: a repeat returns the message stored the first time, and nothing is shown, pushed, sent to webhooks or passed to connected servers a second time. Text and files stay in the box until the server answers, and a message is only sent again when its text and files haven't changed. Slash commands are never sent again, because they act when they run.
+
 ## Messages from other places
 
 - **Webhooks** (Slack-compatible) and **automations** post through the same pipeline, under their own name and picture.

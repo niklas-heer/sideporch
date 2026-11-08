@@ -666,6 +666,7 @@ async fn share(
             gif: None,
             poll: None,
             buttons: Vec::new(),
+            client_nonce: None,
         },
     )
     .await?;

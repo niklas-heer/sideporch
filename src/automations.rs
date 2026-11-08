@@ -517,6 +517,7 @@ async fn post(
             gif: None,
             poll: None,
             buttons,
+            client_nonce: None,
         },
     )
     .await

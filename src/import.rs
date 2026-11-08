@@ -456,6 +456,7 @@ impl Importer<'_> {
                 gif: None,
                 poll: None,
                 buttons: &[],
+                client_nonce: None,
                 created_at: millis(&message.ts),
             },
         )?;

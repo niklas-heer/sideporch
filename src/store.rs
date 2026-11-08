@@ -493,6 +493,8 @@ pub struct NewMessage<'a> {
     pub poll: Option<&'a crate::polls::Spec>,
     pub buttons: &'a [Button],
     pub created_at: i64,
+    /// The browser's id for the send, kept so a retry is stored once.
+    pub client_nonce: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -1521,6 +1523,33 @@ pub fn replies(conn: &Connection, parent_id: i64) -> AppResult<Vec<Message>> {
     Ok(replies)
 }
 
+/// The message `user_id` stored with this client nonce, if any.
+pub fn message_id_by_client_nonce(
+    conn: &Connection,
+    user_id: i64,
+    nonce: &str,
+) -> AppResult<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT id FROM messages WHERE user_id = ?1 AND client_nonce = ?2",
+            params![user_id, nonce],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Deletes uploads no message uses yet, such as the files of a send that
+/// turned out to be a retry of one already stored.
+pub fn delete_unattached_files(conn: &Connection, file_ids: &[i64]) -> AppResult<()> {
+    for file_id in file_ids {
+        conn.execute(
+            "DELETE FROM files WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM message_files WHERE file_id = files.id)",
+            [file_id],
+        )?;
+    }
+    Ok(())
+}
+
 pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64> {
     let attachments = if new.attachments.is_empty() {
         None
@@ -1528,8 +1557,8 @@ pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64>
         Some(serde_json::to_string(new.attachments).map_err(crate::error::AppError::internal)?)
     };
     conn.execute(
-        "INSERT INTO messages (channel_id, parent_id, user_id, webhook_id, automation_id, bot_name, bot_icon_url, body, attachments, created_at, gif, poll, buttons)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        "INSERT INTO messages (channel_id, parent_id, user_id, webhook_id, automation_id, bot_name, bot_icon_url, body, attachments, created_at, gif, poll, buttons, client_nonce)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             new.channel_id,
             new.parent_id,
@@ -1545,7 +1574,8 @@ pub fn insert_message(conn: &Connection, new: &NewMessage<'_>) -> AppResult<i64>
             new.poll.map(crate::polls::Spec::to_json),
             (!new.buttons.is_empty())
                 .then(|| serde_json::to_string(new.buttons).ok())
-                .flatten()
+                .flatten(),
+            new.client_nonce,
         ],
     )?;
     let id = conn.last_insert_rowid();

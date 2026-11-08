@@ -43,6 +43,83 @@ pub struct Draft {
     /// A poll; the body is the question.
     pub poll: Option<crate::polls::Spec>,
     pub buttons: Vec<store::Button>,
+    /// The id the browser made for this send, from a person. A send that
+    /// arrives again with the same id is answered with the message it
+    /// stored the first time. Everything else passes `None`.
+    pub client_nonce: Option<String>,
+}
+
+/// Longest and shortest client nonces accepted, in characters.
+const CLIENT_NONCE_LENGTH: std::ops::RangeInclusive<usize> = 16..=64;
+
+/// Whether `nonce` has the shape a browser's send id has: 16 to 64 letters,
+/// digits, `-` or `_`.
+pub fn valid_client_nonce(nonce: &str) -> bool {
+    CLIENT_NONCE_LENGTH.contains(&nonce.len())
+        && nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+/// The message a person's earlier send with `nonce` stored, if one did.
+/// An id used for a message in another channel is refused: a retry always
+/// goes where the first send did.
+pub async fn earlier_send(
+    state: &AppState,
+    user_id: i64,
+    channel_id: i64,
+    nonce: String,
+) -> AppResult<Option<Message>> {
+    state
+        .db
+        .call(move |conn| {
+            let found = store::message_id_by_client_nonce(conn, user_id, &nonce)?
+                .map_or(Ok(None), |id| store::message(conn, id))?;
+            match found {
+                Some(message) if message.channel_id != channel_id => Err(reused_send_id()),
+                found => Ok(found),
+            }
+        })
+        .await
+}
+
+fn reused_send_id() -> AppError {
+    AppError::bad_request("That send's id was used for a message elsewhere. Send it again.")
+}
+
+/// What a draft turned into: a new message to deliver, or the message a
+/// retried send stored the first time.
+enum Outcome {
+    New(Box<Posted>),
+    Repeat(Box<Message>),
+}
+
+/// The author columns of a message.
+struct Columns<'a> {
+    user_id: Option<i64>,
+    webhook_id: Option<i64>,
+    automation_id: Option<i64>,
+    /// The name and picture a bot or webhook shows.
+    bot_name: Option<&'a str>,
+    bot_icon: Option<&'a str>,
+}
+
+fn sender_columns(sender: &Sender) -> Columns<'_> {
+    let (user_id, webhook_id, automation_id, bot_name, bot_icon) = match sender {
+        Sender::User(id) => (Some(*id), None, None, None, None),
+        Sender::Webhook { id, name, icon } => {
+            (None, Some(*id), None, Some(name.as_str()), icon.as_deref())
+        }
+        Sender::Automation { id, name } => (None, None, Some(*id), Some(name.as_str()), None),
+        Sender::Bot { name, icon } => (None, None, None, Some(name.as_str()), icon.as_deref()),
+    };
+    Columns {
+        user_id,
+        webhook_id,
+        automation_id,
+        bot_name,
+        bot_icon,
+    }
 }
 
 struct Posted {
@@ -77,23 +154,33 @@ pub async fn post_from(
 ) -> AppResult<Message> {
     let now = now_ms();
     let from = origin.as_ref().map(|origin| origin.instance_id);
-    let posted = state
+    let outcome = state
         .db
         .call(move |conn| {
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            // A retry of a stored send is answered with that message and
+            // delivers nothing. Checked inside the write transaction, so two
+            // copies arriving at once can't both store.
+            if let (Sender::User(author), Some(nonce)) = (&draft.sender, &draft.client_nonce)
+                && let Some(earlier) = store::message_id_by_client_nonce(&tx, *author, nonce)?
+            {
+                let message = store::message(&tx, earlier)?
+                    .ok_or_else(|| AppError::internal("earlier send not found"))?;
+                if message.channel_id != draft.channel_id {
+                    return Err(reused_send_id());
+                }
+                store::delete_unattached_files(&tx, &draft.files)?;
+                tx.commit()?;
+                return Ok(Outcome::Repeat(Box::new(message)));
+            }
             let parent_id = check_draft(&tx, &draft)?;
-            let (user_id, webhook_id, automation_id, bot_name, bot_icon) = match &draft.sender {
-                Sender::User(id) => (Some(*id), None, None, None, None),
-                Sender::Webhook { id, name, icon } => {
-                    (None, Some(*id), None, Some(name.as_str()), icon.as_deref())
-                }
-                Sender::Automation { id, name } => {
-                    (None, None, Some(*id), Some(name.as_str()), None)
-                }
-                Sender::Bot { name, icon } => {
-                    (None, None, None, Some(name.as_str()), icon.as_deref())
-                }
-            };
+            let Columns {
+                user_id,
+                webhook_id,
+                automation_id,
+                bot_name,
+                bot_icon,
+            } = sender_columns(&draft.sender);
             let id = store::insert_message(
                 &tx,
                 &NewMessage {
@@ -111,6 +198,7 @@ pub async fn post_from(
                     poll: draft.poll.as_ref(),
                     buttons: &draft.buttons,
                     created_at: now,
+                    client_nonce: draft.client_nonce.as_deref(),
                 },
             )?;
             if let Some(origin) = &origin {
@@ -130,28 +218,15 @@ pub async fn post_from(
 
             let message = store::message(conn, id)?
                 .ok_or_else(|| AppError::internal("new message not found"))?;
-            let reply_count = match message.parent_id {
-                Some(parent) => store::message(conn, parent)?.map(|parent| parent.reply_count),
-                None => None,
-            };
-            let audience = store::audience(conn, draft.channel_id)?;
-            let automation_event = match (&draft.sender, &audience) {
-                // Automations see public channels only, and never their own posts.
-                (Sender::Automation { .. }, _) | (_, Some(_)) => None,
-                _ => Some(MessageEvent::new(conn, &message)?),
-            };
-            let recipients = store::recipients(conn, &message, user_id)?;
-            store::record_activity(conn, message.id, &recipients)?;
-            Ok(Posted {
-                reply_count,
-                audience,
-                ctx: store::render_context(conn)?,
-                recipients,
-                automation_event,
-                message,
-            })
+            Ok(Outcome::New(Box::new(prepare_delivery(
+                conn, &draft, message, user_id,
+            )?)))
         })
         .await?;
+    let posted = match outcome {
+        Outcome::New(posted) => *posted,
+        Outcome::Repeat(message) => return Ok(*message),
+    };
 
     deliver(state, &posted);
     crate::federation::outbound::posted(state, &posted.message, from).await;
@@ -173,6 +248,36 @@ pub async fn post_from(
         state.automations.event(Event::Message(event));
     }
     Ok(message)
+}
+
+/// What delivering a stored message needs: who it reaches and what it
+/// triggers. Also records the activity it causes.
+fn prepare_delivery(
+    conn: &rusqlite::Connection,
+    draft: &Draft,
+    message: Message,
+    user_id: Option<i64>,
+) -> AppResult<Posted> {
+    let reply_count = match message.parent_id {
+        Some(parent) => store::message(conn, parent)?.map(|parent| parent.reply_count),
+        None => None,
+    };
+    let audience = store::audience(conn, draft.channel_id)?;
+    let automation_event = match (&draft.sender, &audience) {
+        // Automations see public channels only, and never their own posts.
+        (Sender::Automation { .. }, _) | (_, Some(_)) => None,
+        _ => Some(MessageEvent::new(conn, &message)?),
+    };
+    let recipients = store::recipients(conn, &message, user_id)?;
+    store::record_activity(conn, message.id, &recipients)?;
+    Ok(Posted {
+        reply_count,
+        audience,
+        ctx: store::render_context(conn)?,
+        recipients,
+        automation_event,
+        message,
+    })
 }
 
 /// Checks that `draft` may be posted, and returns the thread it goes in.
@@ -668,4 +773,22 @@ fn publish_reactions(
             html: views::reactions_bar(message, &views::Render::shared(ctx)).into_string(),
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_client_nonce;
+
+    #[test]
+    fn client_nonces_have_the_shape_browsers_make() {
+        assert!(valid_client_nonce("0123456789abcdef"));
+        assert!(valid_client_nonce("3f2c9a1e-7b44-4d8a-9e21-0c6f5a7b8d90"));
+        assert!(valid_client_nonce(&"a".repeat(64)));
+        assert!(!valid_client_nonce("0123456789abcde"));
+        assert!(!valid_client_nonce(&"a".repeat(65)));
+        assert!(!valid_client_nonce(""));
+        assert!(!valid_client_nonce("has spaces in this one"));
+        assert!(!valid_client_nonce("slashes/are/not/allowed"));
+        assert!(!valid_client_nonce("unicode-nonce-ünï"));
+    }
 }

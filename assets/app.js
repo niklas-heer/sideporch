@@ -200,6 +200,30 @@
     return !scroller || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
   }
 
+  // A send's id, which the server keeps so a retried send is stored once.
+  // Random hex, because crypto.randomUUID is missing on plain-http pages.
+  function newSendId() {
+    return [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  // The wait before retry number `attempt` (from 0): exponential, capped, with jitter.
+  function backoff(attempt, cap) {
+    return Math.min(cap, 1000 * 2 ** attempt) * (0.5 + Math.random() / 2);
+  }
+
+  // Posts `body`. A message may be retried only after a network failure or
+  // a 5xx answer, so this sends the same body and id again, with backoff,
+  // until there is a definitive answer or it gives up. Answers below 500
+  // are final, whatever they say. Resolves to the last response, or null.
+  const SEND_ATTEMPTS = 4;
+  async function postUntilAnswered(url, body, retried) {
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await fetch(url, { method: "POST", headers: { "x-sideporch-fetch": "1" }, body }).catch(() => null);
+      if ((response && response.status < 500) || !retried || attempt + 1 >= SEND_ATTEMPTS) return response;
+      await new Promise((resolve) => setTimeout(resolve, backoff(attempt, 8000)));
+    }
+  }
+
   // Appends a server-rendered message, grouping it under the previous one
   // when the same author wrote both within a few minutes.
   function appendMessage(list, html, scroller) {
@@ -698,14 +722,20 @@
       searchGifs();
     }
   }
+  let pendingGif = null;
   async function sendGif(id, extra = {}) {
     if (!gifForm) return;
     gifPicker.hidePopover();
     const body = new URLSearchParams({ ...extra, gif: id });
     const parent = gifForm.elements.parent_id?.value;
     if (parent) body.set("parent_id", parent);
-    const response = await fetch(gifForm.action, { method: "POST", headers: { "x-sideporch-fetch": "1" }, body });
-    if (!response.ok) {
+    // The same GIF to the same place keeps its id until it is answered.
+    const signature = `${id}:${parent ?? ""}`;
+    if (pendingGif?.signature !== signature) pendingGif = { id: newSendId(), signature };
+    body.set("client_nonce", pendingGif.id);
+    const response = await postUntilAnswered(gifForm.action, body, true);
+    if (response && response.status < 500) pendingGif = null;
+    if (!response || !response.ok) {
       const error = gifForm.querySelector("[data-composer-error]");
       error.textContent = "The GIF wasn't sent. Try again.";
       error.classList.remove("hidden");
@@ -744,6 +774,7 @@
     resize();
 
     let typingSent = 0;
+    let pendingSend = null;
     textarea.addEventListener("input", () => {
       resize();
       sessionStorage.setItem(draftKey, textarea.value);
@@ -835,12 +866,24 @@
       if ((!textarea.value.trim() && !hasFiles) || button.disabled) return;
       button.disabled = true;
       error.classList.add("hidden");
+      // A message keeps one id until it is answered, so a retry the server
+      // already stored is not stored twice. A new id starts when the text or
+      // files change. Slash commands act when run, so they are not retried.
+      const retried = !textarea.value.trim().startsWith("/");
+      const signature = JSON.stringify([textarea.value, hasFiles ? [...fileInput.files].map((file) => [file.name, file.size, file.lastModified]) : []]);
+      if (pendingSend?.signature !== signature) pendingSend = { id: newSendId(), signature };
+      const body = hasFiles ? new FormData(form) : new URLSearchParams(new FormData(form));
+      if (retried) body.set("client_nonce", pendingSend.id);
+      // Still sending after a moment: show it, subtly.
+      const slow = setTimeout(() => {
+        textarea.style.opacity = "0.6";
+        textarea.setAttribute("aria-busy", "true");
+      }, 400);
       try {
-        const response = await fetch(form.action, {
-          method: "POST",
-          headers: { "x-sideporch-fetch": "1" },
-          body: hasFiles ? new FormData(form) : new URLSearchParams(new FormData(form)),
-        });
+        const response = await postUntilAnswered(form.action, body, retried);
+        // Unanswered: the text stays, and a resend reuses the id.
+        if (!response || response.status >= 500) throw new Error("Your message wasn't sent. Check your connection and try again.");
+        pendingSend = null;
         if (!response.ok) {
           const reason = response.status === 413 ? "Those files are too large." : await response.text();
           throw new Error(reason.includes("<") ? "" : reason);
@@ -867,6 +910,9 @@
         error.textContent = failure.message || "Your message wasn't sent. Check your connection and try again.";
         error.classList.remove("hidden");
       } finally {
+        clearTimeout(slow);
+        textarea.style.opacity = "";
+        textarea.removeAttribute("aria-busy");
         button.disabled = false;
         textarea.focus();
       }

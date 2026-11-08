@@ -153,6 +153,8 @@ pub struct MessageInput {
     /// When to send the message instead of now, in words or as a local
     /// date and time.
     pub send_at: Option<String>,
+    /// The browser's id for this send, so a retry is stored once.
+    pub client_nonce: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -166,6 +168,17 @@ struct PlainMessage {
     gif_width: Option<u32>,
     gif_height: Option<u32>,
     send_at: Option<String>,
+    client_nonce: Option<String>,
+}
+
+/// A send's id, if it has one, which must have the shape a browser makes.
+fn send_id(nonce: Option<String>) -> Result<Option<String>, AppError> {
+    match nonce {
+        Some(nonce) if !crate::messages::valid_client_nonce(&nonce) => Err(AppError::bad_request(
+            "That send has an invalid id. Send it again.",
+        )),
+        nonce => Ok(nonce),
+    }
 }
 
 impl FromRequest<AppState> for MessageInput {
@@ -185,6 +198,7 @@ impl FromRequest<AppState> for MessageInput {
                 body: plain.body,
                 parent_id: plain.parent_id,
                 files: Vec::new(),
+                client_nonce: send_id(plain.client_nonce)?,
                 gif: plain
                     .gif
                     .filter(|gif| !gif.is_empty())
@@ -207,10 +221,14 @@ impl FromRequest<AppState> for MessageInput {
             files: Vec::new(),
             gif: None,
             send_at: None,
+            client_nonce: None,
         };
         while let Some(field) = form.next_field().await.map_err(bad_upload)? {
             match field.name().unwrap_or_default() {
                 "body" => input.body = field.text().await.map_err(bad_upload)?,
+                "client_nonce" => {
+                    input.client_nonce = Some(field.text().await.map_err(bad_upload)?);
+                }
                 "send_at" => {
                     let when = field.text().await.map_err(bad_upload)?;
                     input.send_at = Some(when).filter(|when| !when.trim().is_empty());
@@ -239,6 +257,7 @@ impl FromRequest<AppState> for MessageInput {
                 _ => {}
             }
         }
+        input.client_nonce = send_id(input.client_nonce)?;
         Ok(input)
     }
 }

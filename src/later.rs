@@ -272,6 +272,7 @@ pub async fn deliver_due(state: &AppState) -> AppResult<()> {
             gif: None,
             poll: None,
             buttons: Vec::new(),
+            client_nonce: None,
         };
         if let Err(error) = messages::post(state, draft).await {
             tracing::warn!(?error, "could not send a scheduled message");
@@ -325,6 +326,7 @@ async fn send_reminder(state: &AppState, reminder: &store::Reminder) -> AppResul
             gif: None,
             poll: None,
             buttons: Vec::new(),
+            client_nonce: None,
         },
     )
     .await

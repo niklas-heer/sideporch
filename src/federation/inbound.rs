@@ -453,6 +453,7 @@ async fn message(state: &AppState, from: &Instance, incoming: Incoming) -> Resul
             gif: None,
             poll: None,
             buttons: Vec::new(),
+            client_nonce: None,
         },
         Some(Origin {
             instance_id: from.id,

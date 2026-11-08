@@ -758,6 +758,14 @@ CREATE TABLE oidc_identities (
 CREATE INDEX oidc_identities_by_user ON oidc_identities (user_id);
 ",
     ),
+    Migration::Sql(
+        r"
+-- The browser's id for a send, so a retried send is stored once. Scoped to
+-- the author: two people's ids never meet, and nobody learns another's.
+ALTER TABLE messages ADD COLUMN client_nonce TEXT;
+CREATE UNIQUE INDEX messages_by_client_nonce ON messages (user_id, client_nonce) WHERE client_nonce IS NOT NULL;
+",
+    ),
 ];
 
 /// Recreates the search index with prefix indexes, which make the prefix
