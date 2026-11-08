@@ -57,12 +57,12 @@ pub fn router() -> Router<AppState> {
         .route("/people/{user_id}/reset-security", post(reset_security))
 }
 
-fn site(state: &AppState, headers: &HeaderMap) -> Site {
+pub(super) fn site(state: &AppState, headers: &HeaderMap) -> Site {
     Site::from_base_url(&base_url(state, headers))
 }
 
 /// Browsers only use passkeys for domain names, not IP addresses.
-fn passkey_site(state: &AppState, headers: &HeaderMap) -> AppResult<Site> {
+pub(super) fn passkey_site(state: &AppState, headers: &HeaderMap) -> AppResult<Site> {
     let site = site(state, headers);
     if site.rp_id.parse::<std::net::IpAddr>().is_ok() {
         return Err(AppError::bad_request(

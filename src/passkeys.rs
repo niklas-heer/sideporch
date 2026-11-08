@@ -51,6 +51,16 @@ pub enum Purpose {
     SignIn,
     /// The second step of signing in, for this account.
     Confirm(i64),
+    /// Creating a new account that signs in with a passkey instead of a
+    /// password, through the form at `form` (`/setup`, `/join/<token>` or
+    /// `/signup`), for the name and username typed there. `handle` is the
+    /// new account's opaque `WebAuthn` user id.
+    Create {
+        form: String,
+        username: String,
+        display_name: String,
+        handle: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -95,14 +105,26 @@ impl Ceremonies {
     /// Ends a ceremony, returning its challenge if it was for `purpose`
     /// and hasn't expired. Each works once.
     pub fn finish(&self, id: &str, purpose: &Purpose, now: i64) -> AppResult<Vec<u8>> {
+        self.finish_if(id, now, |started| started == purpose)
+            .map(|(challenge, _)| challenge)
+    }
+
+    /// Ends a ceremony, returning its challenge and purpose if `fits` the
+    /// purpose and it hasn't expired. Each works once.
+    pub fn finish_if(
+        &self,
+        id: &str,
+        now: i64,
+        fits: impl FnOnce(&Purpose) -> bool,
+    ) -> AppResult<(Vec<u8>, Purpose)> {
         let ceremony = self
             .0
             .lock()
             .map_err(|_| AppError::internal("ceremonies lock poisoned"))?
             .remove(id);
         match ceremony {
-            Some(ceremony) if ceremony.expires_at > now && &ceremony.purpose == purpose => {
-                Ok(ceremony.challenge)
+            Some(ceremony) if ceremony.expires_at > now && fits(&ceremony.purpose) => {
+                Ok((ceremony.challenge, ceremony.purpose))
             }
             _ => Err(AppError::bad_request(
                 "That passkey request expired. Try again.",

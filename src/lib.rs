@@ -430,6 +430,48 @@ fn start_background_work(state: &AppState) {
     demo::start(state.clone());
 }
 
+/// Makes a one-time password reset link for `username`, for 24 hours.
+///
+/// Returns its path, `/reset/<token>`. This is `sideporch reset-link`: the
+/// way back in for someone, often the only admin, who lost their passkey
+/// or password, from a shell on the server.
+///
+/// # Errors
+///
+/// Fails if the database can't be opened or no account here has that
+/// username.
+pub fn reset_link(data_dir: &std::path::Path, username: &str) -> Result<String, Error> {
+    let path = data_dir.join("sideporch.db");
+    if !path.exists() {
+        return Err(Error::internal(format!(
+            "{} holds no Sideporch database",
+            data_dir.display()
+        )));
+    }
+    let conn = db::connect(&path)?;
+    let username = username.trim().trim_start_matches('@').to_lowercase();
+    let user_id: Option<i64> = rusqlite::OptionalExtension::optional(conn.query_row(
+        "SELECT id FROM users WHERE username = ?1 AND instance_id IS NULL AND deactivated_at IS NULL",
+        [&username],
+        |row| row.get(0),
+    ))?;
+    let user_id = user_id.ok_or_else(|| {
+        Error::internal(format!(
+            "no active account here has the username {username}"
+        ))
+    })?;
+    let token = auth::random_token()?;
+    let now = now_ms();
+    let expires = now.saturating_add(24 * 60 * 60 * 1000);
+    conn.execute("DELETE FROM password_resets WHERE user_id = ?1", [user_id])?;
+    conn.execute(
+        "INSERT INTO password_resets (token_hash, user_id, created_by, created_at, expires_at)
+         VALUES (?1, ?2, NULL, ?3, ?4)",
+        rusqlite::params![auth::hash_token(&token), user_id, now, expires],
+    )?;
+    Ok(format!("/reset/{token}"))
+}
+
 /// The file that holds the first-account setup link while one is pending.
 #[must_use]
 pub fn setup_link_file(data_dir: &std::path::Path) -> PathBuf {

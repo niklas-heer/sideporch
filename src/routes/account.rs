@@ -67,7 +67,18 @@ async fn render_account(
         sidebar: &sidebar,
         current: None,
     };
-    Ok(views::account::account_page(&shell, error, saved))
+    let user_id = user.id;
+    let has_password = state
+        .db
+        .call(move |conn| store::password_hash(conn, user_id))
+        .await?
+        .is_some_and(|hash| auth::has_password(&hash));
+    Ok(views::account::account_page(
+        &shell,
+        error,
+        saved,
+        has_password,
+    ))
 }
 
 async fn account(user: CurrentUser, State(state): State<AppState>) -> AppResult<Markup> {
@@ -76,11 +87,13 @@ async fn account(user: CurrentUser, State(state): State<AppState>) -> AppResult<
 
 #[derive(Deserialize)]
 struct PasswordForm {
+    #[serde(default)]
     current: String,
     password: String,
 }
 
-/// Changes the password and signs out every other session.
+/// Changes the password and signs out every other session. An account
+/// without one, like one made with a passkey, sets one without the old.
 async fn change_password(
     user: CurrentUser,
     State(state): State<AppState>,
@@ -93,7 +106,8 @@ async fn change_password(
         .call(move |conn| store::password_hash(conn, user_id))
         .await?
         .ok_or(AppError::NotFound)?;
-    let problem = if auth::verify_password(form.current, hash).await? {
+    let problem = if !auth::has_password(&hash) || auth::verify_password(form.current, hash).await?
+    {
         password_problem(&form.password)
     } else {
         Some("Your current password isn't right.")

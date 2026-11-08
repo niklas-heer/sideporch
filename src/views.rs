@@ -206,9 +206,9 @@ pub fn login_page(
                 }
                 p data-passkey-error role="alert" class="mt-2 hidden text-sm text-red-700 dark:text-red-300" {}
                 div class="my-5 flex items-center gap-3 text-sm text-muted dark:text-haint" {
-                    span class="h-px flex-1 bg-line dark:bg-night-line" {}
+                    span class="flex-1 border-t border-line dark:border-night-line" {}
                     "or with your password"
-                    span class="h-px flex-1 bg-line dark:bg-night-line" {}
+                    span class="flex-1 border-t border-line dark:border-night-line" {}
                 }
             }
             form method="post" action="/login" {
@@ -248,9 +248,44 @@ pub struct AccountForm {
 
 pub fn account_fields(form: &AccountForm) -> Markup {
     html! {
+        (name_fields(form))
+        (text_field("Password", "password", "password", "", "new-password", Some("At least 8 characters.")))
+    }
+}
+
+fn name_fields(form: &AccountForm) -> Markup {
+    html! {
         (text_field("Your name", "display_name", "text", &form.display_name, "name", Some("Shown next to your messages.")))
         (text_field("Username", "username", "text", &form.username, "username", Some("Used to sign in. Letters, numbers, dots, dashes and underscores.")))
+    }
+}
+
+/// A new account's fields with a passkey first, where the browser can make
+/// one, and a password otherwise. app.js shows the passkey part, makes the
+/// passkey and sends the form with it; without JavaScript, or on an IP
+/// address, it's the password form. `extras` go after the names, such as
+/// rules to agree to; `submit` labels the password button.
+pub fn new_account_fields(form: &AccountForm, extras: &Markup, submit: &str) -> Markup {
+    html! {
+        (name_fields(form))
+        (extras)
+        input type="hidden" name="passkey" value="";
+        div data-passkey-create-area hidden {
+            p role="alert" data-passkey-error class="mb-4 hidden rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200" {}
+            button type="button" data-passkey-create class="btn w-full" {
+                (icon(icons::FINGERPRINT, "h-5 w-5")) "Create account with a passkey"
+            }
+            p class="mt-2 text-sm text-muted dark:text-haint" {
+                "Sign in with your fingerprint, face or screen lock instead of a password. You can add a password later."
+            }
+            div class="my-5 flex items-center gap-3 text-sm text-muted dark:text-haint" {
+                span class="flex-1 border-t border-line dark:border-night-line" {}
+                "or use a password"
+                span class="flex-1 border-t border-line dark:border-night-line" {}
+            }
+        }
         (text_field("Password", "password", "password", "", "new-password", Some("At least 8 characters.")))
+        button type="submit" data-password-submit class="btn mt-2 w-full" { (submit) }
     }
 }
 
@@ -303,8 +338,7 @@ pub fn setup_page(
                         }),
                     ))
                 }
-                (account_fields(form))
-                button type="submit" class="btn mt-2 w-full" { "Create account" }
+                (new_account_fields(form, &html! {}, "Create account"))
             }
         },
     )
@@ -315,11 +349,10 @@ pub fn join_page(token: &str, error: Option<&str>, form: &AccountForm) -> Markup
         "Join",
         &html! {
             h1 class="mb-2 text-xl font-bold" { "Join this Sideporch" }
-            p class="mb-5 text-muted dark:text-haint" { "Pick a name and a password to create your account." }
+            p class="mb-5 text-muted dark:text-haint" { "Pick a name, then sign in with a passkey or a password." }
             (form_error(error))
             form method="post" action={ "/join/" (token) } {
-                (account_fields(form))
-                button type="submit" class="btn mt-2 w-full" { "Join" }
+                (new_account_fields(form, &html! {}, "Join"))
             }
         },
     )
@@ -792,7 +825,7 @@ fn thread_panel(
                 ol { (message_item(root, false, false, render)) }
                 div class="my-2 flex items-center gap-3 px-5 text-sm text-muted dark:text-haint" {
                     span id="thread-count" { (reply_label(root.reply_count)) }
-                    span class="h-px flex-1 bg-line dark:bg-night-line" {}
+                    span class="flex-1 border-t border-line dark:border-night-line" {}
                 }
                 ol id="replies" { (message_list(replies, render)) }
             }

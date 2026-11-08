@@ -13,8 +13,14 @@ Everyone manages how they sign in under **Sign-in and security** in their accoun
 - **Authenticator apps** (1Password, Google Authenticator, Aegis…) ask for a six-digit code after the password. Setting one up gives you ten single-use **recovery codes**, for when you lose your phone.
 - **Email**: with an [SMTP server set up](#email), people confirm an address and can sign in with a link, or reset a forgotten password themselves. Sign-in and reset links work once, for 15 minutes; links that confirm an address work for 24 hours.
 
+## Start with a passkey
+
+New in 0.7.0: setting up Sideporch, joining with an invite, and open sign-up offer **Create account with a passkey** first. Fill in your name and username, confirm with your fingerprint, face or screen lock, and you're in, with no password to remember. A passkey counts as both steps, so the account meets every sign-in setting. A password stays available below it, and is the only choice where the browser can't make passkeys or when sign-ups wait for approval.
+
+An account that started with a passkey can add a password later under **Account**, without an old one. Its only passkey can't be removed until it has a password or another passkey.
+
 {% <note> %}
-Passkeys need Sideporch opened by a name (like `chat.example.com` over HTTPS, or `localhost`), not by an IP address: browsers only use them there.
+Passkeys need Sideporch opened by a name (like `chat.example.com` over HTTPS, or `localhost`), not by an IP address: browsers only use them there. A passkey belongs to that name, so choose the name people will keep using before they make passkeys; moving to another one means signing in another way and adding new passkeys.
 {% </note> %}
 
 ## Limits on guessing
@@ -36,7 +42,15 @@ Under **Admin → Sign-in**, pick one:
 
 People who don't meet the setting yet are walked through adding what's missing at their next sign-in. Every way of signing in, including email links, goes through the same second step, so it can't be skipped.
 
-After a lost phone, an admin resets someone's passkeys and authenticator app from their profile; they set them up again at their next sign-in.
+After a lost phone, an admin resets someone's passkeys and authenticator app from their profile; they set them up again at their next sign-in. Someone who only had a passkey also needs a reset link from their profile to choose a password.
+
+When the only admin loses their way in, make a reset link on the server, which works for 24 hours:
+
+```sh
+sideporch reset-link ada --data /var/lib/sideporch
+docker exec sideporch /sideporch reset-link ada                 # with Docker
+fly machine exec MACHINE_ID "/sideporch reset-link ada"         # on Fly.io
+```
 
 ## Email
 

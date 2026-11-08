@@ -56,6 +56,12 @@ pub async fn hash_password(password: String) -> AppResult<String> {
     .map_err(AppError::internal)?
 }
 
+/// Whether a stored hash is a password at all. Accounts made with a passkey,
+/// and some imported ones, have none.
+pub fn has_password(hash: &str) -> bool {
+    PasswordHash::new(hash).is_ok()
+}
+
 pub async fn verify_password(password: String, hash: String) -> AppResult<bool> {
     tokio::task::spawn_blocking(move || {
         // Accounts imported without a password have no valid hash.

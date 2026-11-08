@@ -13,31 +13,10 @@
 
 mod common;
 
-use common::{Browser, PNG, admin, between, home_channel, invite, last_message_id, start};
+use common::{
+    Browser, PNG, admin, between, home_channel, invite, last_message_id, set_registration, start,
+};
 use reqwest::StatusCode;
-
-async fn set_registration(admin: &Browser, mode: &str, rules: &str) {
-    let response = admin
-        .post(
-            "/admin/community",
-            &[
-                ("registration", mode),
-                ("rules", rules),
-                ("days_1", "1"),
-                ("visits_1", "1"),
-                ("messages_1", "3"),
-                ("days_2", "7"),
-                ("visits_2", "3"),
-                ("messages_2", "20"),
-                ("days_3", "30"),
-                ("visits_3", "15"),
-                ("messages_3", "100"),
-                ("new_member_per_minute", "6"),
-            ],
-        )
-        .await;
-    assert_eq!(response.status(), StatusCode::OK);
-}
 
 async fn sign_up(server: &common::Server, username: &str) -> (Browser, reqwest::Response) {
     let mut browser = Browser::anonymous(server);

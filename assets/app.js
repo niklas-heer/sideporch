@@ -1709,6 +1709,46 @@
     }
   }
 
+  // A new account with a passkey instead of a password: make the passkey
+  // for this form, name and username, then send the form with it.
+  async function createAccountWithPasskey(form) {
+    const password = form.elements.password;
+    // Everything but the password must be filled in first, like the rules.
+    password.required = false;
+    const valid = form.reportValidity();
+    password.required = true;
+    if (!valid) return;
+    try {
+      const started = await postJson("/webauthn/create/options", {
+        form: new URL(form.action).pathname,
+        display_name: form.elements.display_name.value,
+        username: form.elements.username.value,
+        setup_code: form.elements.setup_code?.value ?? "",
+      });
+      if (!started.ok) throw new Error(await errorText(started));
+      const options = await started.json();
+      const publicKey = options.publicKey;
+      publicKey.challenge = fromBase64(publicKey.challenge);
+      publicKey.user.id = fromBase64(publicKey.user.id);
+      const credential = await navigator.credentials.create({ publicKey });
+      const response = credential.response;
+      form.elements.passkey.value = JSON.stringify({
+        ceremony: options.ceremony,
+        id: toBase64(credential.rawId),
+        clientDataJSON: toBase64(response.clientDataJSON),
+        authenticatorData: toBase64(response.getAuthenticatorData()),
+        publicKey: toBase64(response.getPublicKey()),
+        publicKeyAlgorithm: response.getPublicKeyAlgorithm(),
+        transports: response.getTransports?.() ?? [],
+      });
+      password.value = "";
+      password.required = false;
+      form.requestSubmit();
+    } catch (error) {
+      passkeyFailed(error);
+    }
+  }
+
   let passkeyWaiting = null;
   async function signInWithPasskey(next, mediation) {
     passkeyWaiting?.abort();
@@ -1837,6 +1877,17 @@
     for (const button of document.querySelectorAll("[data-passkey-add]")) {
       button.hidden = false;
       button.addEventListener("click", addPasskey);
+    }
+    // Browsers only make passkeys for names, not IP addresses.
+    const byName = !/^[\d.]+$|:/.test(location.hostname);
+    for (const area of document.querySelectorAll("[data-passkey-create-area]")) {
+      if (!byName) continue;
+      const form = area.closest("form");
+      area.hidden = false;
+      area.querySelector("[data-passkey-create]").addEventListener("click", () => createAccountWithPasskey(form));
+      // The passkey leads; the password stays as the quieter way.
+      const submit = form.querySelector("[data-password-submit]");
+      if (submit) submit.className = "btn-quiet mt-2 w-full";
     }
     const buttons = document.querySelectorAll("[data-passkey-login]");
     for (const button of buttons) {

@@ -431,3 +431,27 @@ pub async fn sign_up_proof(browser: &Browser) -> (String, String) {
         .unwrap();
     (challenge, nonce.to_string())
 }
+
+/// Sets how people join (`invite`, `open` or `approval`) and the rules.
+pub async fn set_registration(admin: &Browser, mode: &str, rules: &str) {
+    let response = admin
+        .post(
+            "/admin/community",
+            &[
+                ("registration", mode),
+                ("rules", rules),
+                ("days_1", "1"),
+                ("visits_1", "1"),
+                ("messages_1", "3"),
+                ("days_2", "7"),
+                ("visits_2", "3"),
+                ("messages_2", "20"),
+                ("days_3", "30"),
+                ("visits_3", "15"),
+                ("messages_3", "100"),
+                ("new_member_per_minute", "6"),
+            ],
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}

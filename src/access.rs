@@ -54,6 +54,12 @@ pub const SETUP_CODE: Limit = Limit {
     max: 10,
     window: Duration::from_mins(15),
 };
+/// Passkeys started for new accounts per address. Higher than sign-ups,
+/// since cancelling the browser's prompt and trying again is common.
+pub const PASSKEY_CREATE: Limit = Limit {
+    max: 20,
+    window: Duration::from_mins(15),
+};
 /// New accounts per address.
 pub const SIGN_UP: Limit = Limit {
     max: 3,
@@ -77,6 +83,7 @@ pub enum Counted {
     FailedSignInAs(String),
     SignUp(IpAddr),
     SetupCode(IpAddr),
+    PasskeyCreate(IpAddr),
 }
 
 /// A range of addresses, such as `203.0.113.0/24` or one address.

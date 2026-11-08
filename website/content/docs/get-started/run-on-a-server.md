@@ -67,7 +67,7 @@ While no account exists, the first visitor creates the admin account. On a serve
   docker exec sideporch /sideporch setup-link    # with Docker
   ```
 
-Open the link (or enter the code), create your account, and invite everyone else from **People**. To let people join without an invite, open sign-up under **Admin → Community**; see [Sign-up and trust](@/docs/community/people/sign-up-and-trust.md).
+Open the link (or enter the code) and create your account, with a passkey where your browser offers one. Then invite everyone else from **People**. To let people join without an invite, open sign-up under **Admin → Community**; see [Sign-up and trust](@/docs/community/people/sign-up-and-trust.md).
 
 ## Options
 
@@ -85,9 +85,10 @@ Every option can also be set with an environment variable.
 | | `SIDEPORCH_SECRET_KEY` | `secret.key` in the data directory | A passphrase to encrypt [automation secrets](@/docs/integrations/automations/data-and-services.md#secrets) with, instead of the key file. |
 | | `RUST_LOG` | `info` | How much to log: `warn`, `info`, `debug`. |
 
-Three commands besides running the server:
+Four commands besides running the server:
 
 - `sideporch setup-link` prints the link for creating the first account.
+- `sideporch reset-link USERNAME` prints a one-time link for choosing a new password, for when someone, like the only admin, lost their passkey or password. New in 0.7.0.
 - `sideporch restore ARCHIVE` unpacks a [backup](@/docs/community/server/backups.md). Stop the server first.
 - `sideporch update` installs the newest release in place of the program; see [Update](@/docs/get-started/update.md#sideporch-update). New in 0.5.0.
 

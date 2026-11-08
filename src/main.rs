@@ -55,6 +55,15 @@ enum Command {
     /// its user can read. With Docker: `docker exec <container> /sideporch setup-link`.
     /// It is only secret when the server runs with `--require-setup-link`.
     SetupLink,
+    /// Print a one-time link for choosing a new password, for 24 hours.
+    ///
+    /// The way back in when someone, such as the only admin, lost their
+    /// passkey or password. Works while the server runs. With Docker:
+    /// `docker exec <container> /sideporch reset-link <username>`.
+    ResetLink {
+        /// The account's username.
+        username: String,
+    },
     /// Unpack a backup from Admin → Backups into the data directory.
     ///
     /// Also takes a `.db` copy from `upgrade-backups/`, which Sideporch keeps
@@ -97,6 +106,30 @@ async fn main() -> ExitCode {
     let args = Args::parse();
     match &args.command {
         Some(Command::SetupLink) => return print_setup_link(&args.data),
+        Some(Command::ResetLink { username }) => {
+            return match sideporch::reset_link(&args.data, username) {
+                Ok(path) => {
+                    let base = args
+                        .public_url
+                        .as_deref()
+                        .unwrap_or("")
+                        .trim_end_matches('/');
+                    if base.is_empty() {
+                        println!("{path}");
+                        eprintln!(
+                            "Open this path on your Sideporch's address. It works once, for 24 hours."
+                        );
+                    } else {
+                        println!("{base}{path}");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("Could not make a reset link: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         Some(Command::Restore { archive, force }) => {
             return match sideporch::restore(archive, &args.data, *force) {
                 Ok(count) => {

@@ -8,7 +8,13 @@ use crate::{
     store::User,
 };
 
-pub fn account_page(shell: &Shell<'_>, error: Option<&str>, saved: bool) -> Markup {
+/// `has_password`: accounts made with a passkey can add one without an old one.
+pub fn account_page(
+    shell: &Shell<'_>,
+    error: Option<&str>,
+    saved: bool,
+    has_password: bool,
+) -> Markup {
     panel_page(
         "Account",
         shell,
@@ -17,15 +23,22 @@ pub fn account_page(shell: &Shell<'_>, error: Option<&str>, saved: bool) -> Mark
             (form_error(error))
             @if saved {
                 p role="status" class="mb-4 rounded-lg border border-line bg-haint-2 px-3 py-2 text-sm text-floor dark:border-night-line dark:bg-floor-2 dark:text-haint-2" {
-                    "Password changed. Your other devices are signed out."
+                    "Password saved. Your other devices are signed out."
                 }
             }
-            h2 class="mb-1 text-lg font-bold" { "Change your password" }
-            p class="mb-4 text-muted dark:text-haint" { "Changing it signs you out on your other devices." }
+            @if has_password {
+                h2 class="mb-1 text-lg font-bold" { "Change your password" }
+                p class="mb-4 text-muted dark:text-haint" { "Changing it signs you out on your other devices." }
+            } @else {
+                h2 class="mb-1 text-lg font-bold" { "Add a password" }
+                p class="mb-4 text-muted dark:text-haint" { "You sign in with a passkey. A password is a way in on devices without it. Adding one signs you out on your other devices." }
+            }
             form method="post" action="/settings/account" class="max-w-md" {
-                (text_field("Current password", "current", "password", "", "current-password", None))
+                @if has_password {
+                    (text_field("Current password", "current", "password", "", "current-password", None))
+                }
                 (text_field("New password", "password", "password", "", "new-password", Some("At least 8 characters.")))
-                button type="submit" class="btn" { (icon(icons::KEY, "h-5 w-5")) "Change password" }
+                button type="submit" class="btn" { (icon(icons::KEY, "h-5 w-5")) (if has_password { "Change password" } else { "Add password" }) }
             }
             p class="mt-8 text-sm text-muted dark:text-haint" {
                 "Forgot it? Ask an admin for a reset link. "

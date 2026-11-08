@@ -150,6 +150,68 @@ async fn post_json(browser: &mut Browser, path: &str, body: &Value) -> reqwest::
     response
 }
 
+/// Sends a form the way a browser at localhost does, keeping any cookie.
+async fn submit_as_localhost(
+    browser: &mut Browser,
+    path: &str,
+    form: &[(&str, &str)],
+) -> reqwest::Response {
+    let host = browser
+        .base
+        .trim_start_matches("http://")
+        .replace("127.0.0.1", "localhost");
+    let response = browser
+        .client
+        .post(browser.url(path))
+        .header("cookie", &browser.cookie)
+        .header("host", host)
+        .form(form)
+        .send()
+        .await
+        .unwrap();
+    if let Some(cookie) = response.headers().get("set-cookie") {
+        cookie
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .clone_into(&mut browser.cookie);
+    }
+    response
+}
+
+/// Makes a new account with a passkey through `form`, as app.js does:
+/// asks for a ceremony, lets the device answer, and sends the form.
+async fn create_with_passkey(
+    browser: &mut Browser,
+    device: &mut Authenticator,
+    form: &str,
+    display_name: &str,
+    username: &str,
+) -> reqwest::Response {
+    let options = post_json(
+        browser,
+        "/webauthn/create/options",
+        &json!({ "form": form, "display_name": display_name, "username": username }),
+    )
+    .await;
+    assert_eq!(options.status(), StatusCode::OK);
+    let options: Value = options.json().await.unwrap();
+    assert_eq!(options["publicKey"]["user"]["name"], username);
+    let answer = device.create(&options).to_string();
+    submit_as_localhost(
+        browser,
+        form,
+        &[
+            ("display_name", display_name),
+            ("username", username),
+            ("passkey", &answer),
+        ],
+    )
+    .await
+}
+
 async fn add_passkey(browser: &mut Browser, device: &mut Authenticator) {
     let options: Value = post_json(browser, "/webauthn/register/options", &json!({}))
         .await
@@ -295,6 +357,218 @@ fn step_now() -> u64 {
         .unwrap()
         .as_secs())
         / 30
+}
+
+#[tokio::test]
+async fn new_accounts_can_start_with_a_passkey_instead_of_a_password() {
+    let server = start().await;
+    let page = Browser::anonymous(&server).page("/setup").await;
+    assert!(page.contains("Create account with a passkey"));
+
+    // The admin sets up with a passkey and is signed in right away.
+    let mut ada = Browser::anonymous(&server);
+    let mut device = Authenticator::new(&server.base);
+    let response = create_with_passkey(&mut ada, &mut device, "/setup", "Ada Admin", "ada").await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(ada.page("/home").await.contains("Ada Admin"));
+    assert!(ada.page("/settings/security").await.contains("Test laptop"));
+
+    // No password works for it, and the passkey signs in on its own.
+    let (_, response) = sign_in(&server, "ada", "").await;
+    assert_ne!(response.status(), StatusCode::SEE_OTHER);
+    let mut again = Browser::anonymous(&server);
+    assert_eq!(
+        passkey_sign_in(&mut again, &mut device).await.status(),
+        StatusCode::OK
+    );
+
+    // Its only passkey can't be removed until there's another way in.
+    let security = ada.page("/settings/security").await;
+    let delete = format!(
+        "/settings/security/passkeys/{}/delete",
+        between(&security, "/settings/security/passkeys/", "/delete")
+    );
+    assert_eq!(
+        ada.post(&delete, &[]).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    let account = ada.page("/settings/account").await;
+    assert!(account.contains("Add a password"));
+    assert!(!account.contains("Current password"));
+    let added = ada
+        .post("/settings/account", &[("password", "correct horse")])
+        .await;
+    assert_eq!(added.status(), StatusCode::OK);
+    // A password now asks for the passkey as the second step.
+    let (_, response) = sign_in(&server, "ada", "correct horse").await;
+    assert_eq!(location(&response), "/login/verify");
+    assert_eq!(ada.post(&delete, &[]).await.status(), StatusCode::SEE_OTHER);
+
+    // People joining with an invite can start with a passkey too, but only
+    // for the name and username the passkey was made for.
+    assert_eq!(
+        ada.post("/invites", &[]).await.status(),
+        StatusCode::SEE_OTHER
+    );
+    let people = ada.page("/people").await;
+    let join = format!("/join/{}", between(&people, "/join/", "<"));
+    let mut eve = Browser::anonymous(&server);
+    let mut eve_device = Authenticator::new(&server.base);
+    eve_device.credential = b"eve-credential".to_vec();
+    let options: Value = post_json(
+        &mut eve,
+        "/webauthn/create/options",
+        &json!({ "form": join, "display_name": "Eve", "username": "eve" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let answer = eve_device.create(&options).to_string();
+    let swapped = submit_as_localhost(
+        &mut eve,
+        &join,
+        &[
+            ("display_name", "Eve"),
+            ("username", "mallory"),
+            ("passkey", &answer),
+        ],
+    )
+    .await;
+    assert_eq!(swapped.status(), StatusCode::BAD_REQUEST);
+    let mut bea = Browser::anonymous(&server);
+    let mut bea_device = Authenticator::new(&server.base);
+    bea_device.credential = b"bea-credential".to_vec();
+    let joined = create_with_passkey(&mut bea, &mut bea_device, &join, "Bea", "bea").await;
+    assert_eq!(joined.status(), StatusCode::SEE_OTHER);
+    assert!(bea.page("/home").await.contains("Bea"));
+
+    // Forms that can't make accounts don't start passkeys.
+    for form in ["/setup", "/signup", "/join/not-an-invite", "/login"] {
+        let refused = post_json(
+            &mut Browser::anonymous(&server),
+            "/webauthn/create/options",
+            &json!({ "form": form, "display_name": "Zed", "username": "zed" }),
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{form}");
+    }
+}
+
+#[tokio::test]
+async fn open_sign_up_can_start_with_a_passkey_but_requests_to_join_cannot() {
+    let server = start().await;
+    let ada = admin(&server).await;
+    common::set_registration(&ada, "open", "").await;
+    let mut nia = Browser::anonymous(&server);
+    let (challenge, proof) = common::sign_up_proof(&nia).await;
+    let mut device = Authenticator::new(&server.base);
+    let options: Value = post_json(
+        &mut nia,
+        "/webauthn/create/options",
+        &json!({ "form": "/signup", "display_name": "Nia", "username": "nia" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let answer = device.create(&options).to_string();
+    let response = submit_as_localhost(
+        &mut nia,
+        "/signup",
+        &[
+            ("display_name", "Nia"),
+            ("username", "nia"),
+            ("passkey", &answer),
+            ("website", ""),
+            ("challenge", &challenge),
+            ("proof", &proof),
+        ],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(nia.page("/settings/security").await.contains("Test laptop"));
+
+    // Waiting requests keep a password until someone approves them.
+    common::set_registration(&ada, "approval", "").await;
+    assert!(
+        !Browser::anonymous(&server)
+            .page("/signup")
+            .await
+            .contains("Create account with a passkey")
+    );
+    let refused = post_json(
+        &mut Browser::anonymous(&server),
+        "/webauthn/create/options",
+        &json!({ "form": "/signup", "display_name": "Ola", "username": "ola" }),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_setup_code_is_checked_before_a_passkey_is_made() {
+    let server = common::start_with(|config| {
+        config.setup_code = Some("porch-light-0123456789".to_owned());
+    })
+    .await;
+    let mut visitor = Browser::anonymous(&server);
+    let refused = post_json(
+        &mut visitor,
+        "/webauthn/create/options",
+        &json!({ "form": "/setup", "display_name": "Ada", "username": "ada", "setup_code": "wrong" }),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        refused
+            .text()
+            .await
+            .unwrap()
+            .contains("That isn't the setup code.")
+    );
+    let options: Value = post_json(
+        &mut visitor,
+        "/webauthn/create/options",
+        &json!({ "form": "/setup", "display_name": "Ada", "username": "ada", "setup_code": "porch-light-0123456789" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let mut device = Authenticator::new(&server.base);
+    let answer = device.create(&options).to_string();
+    // The form still needs the code itself.
+    let without = submit_as_localhost(
+        &mut visitor,
+        "/setup",
+        &[
+            ("display_name", "Ada"),
+            ("username", "ada"),
+            ("passkey", &answer),
+        ],
+    )
+    .await;
+    assert_eq!(without.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn reset_links_from_the_command_line_let_admins_back_in() {
+    let server = start().await;
+    let ada = admin(&server).await;
+    drop(ada);
+    assert!(sideporch::reset_link(server.data_dir(), "nobody").is_err());
+    let path = sideporch::reset_link(server.data_dir(), "@Ada").unwrap();
+    assert!(path.starts_with("/reset/"));
+    let mut browser = Browser::anonymous(&server);
+    let page = browser.page(&path).await;
+    assert!(page.contains("Choose a new password"));
+    let response = browser
+        .submit(&path, &[("password", "a brand new one")])
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let (_, response) = sign_in(&server, "ada", "a brand new one").await;
+    assert_eq!(location(&response), "/");
 }
 
 #[tokio::test]

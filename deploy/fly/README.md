@@ -17,13 +17,13 @@ fly deploy
 ## Set it up from scratch
 
 The setup page asks for a setup code, kept in 1Password as
-"Sideporch demo (Fly) setup code". Import it as a Fly secret, so it never
+"Sideporch demo setup code". Import it as a Fly secret, so it never
 lands in shell history or process arguments:
 
 ```sh
 fly apps create sideporch-demo
 fly volumes create sideporch_data --region fra --size 1 --app sideporch-demo
-printf 'SIDEPORCH_SETUP_CODE=%s\n' "$(op read 'op://Private/Sideporch demo (Fly) setup code/password')" \
+printf 'SIDEPORCH_SETUP_CODE=%s\n' "$(op read 'op://Private/Sideporch demo setup code/password')" \
   | fly secrets import --stage --app sideporch-demo
 fly deploy
 fly ips list --app sideporch-demo   # if empty: fly ips allocate-v6, fly ips allocate-v4 --shared

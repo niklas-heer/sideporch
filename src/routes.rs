@@ -34,6 +34,7 @@ mod backups;
 mod bans;
 mod channels;
 mod community;
+mod credentials;
 pub mod federation;
 mod gifs;
 mod later;
@@ -117,6 +118,7 @@ pub fn router(state: AppState) -> Router {
         .merge(backups::router())
         .merge(community::router())
         .merge(security::router())
+        .merge(credentials::router())
         .merge(updates::router())
         .merge(federation::router())
         .merge(speech::router())
@@ -414,7 +416,12 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<
 struct AccountInput {
     display_name: String,
     username: String,
+    #[serde(default)]
     password: String,
+    /// A passkey made for this form, as app.js sends it, instead of a
+    /// password.
+    #[serde(default)]
+    passkey: String,
 }
 
 /// The setup form: the account, and the setup code when one is needed.
@@ -429,36 +436,49 @@ struct SetupInput {
 struct ValidAccount {
     display_name: String,
     username: String,
-    password: String,
+    secret: credentials::Secret,
 }
 
-fn validate_account(input: AccountInput) -> Result<ValidAccount, (&'static str, AccountForm)> {
-    let display_name = input.display_name.trim().to_owned();
-    let username = input.username.trim().to_lowercase();
-    let form = AccountForm {
-        display_name: display_name.clone(),
-        username: username.clone(),
-    };
+/// Checks a new account's name and username, returning them tidied.
+fn check_names(display_name: &str, username: &str) -> Result<(String, String), &'static str> {
+    let display_name = display_name.trim().to_owned();
+    let username = username.trim().to_lowercase();
     let username_ok = (2..=32).contains(&username.chars().count())
         && username
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-' | '_'));
     if !(1..=64).contains(&display_name.chars().count()) {
-        return Err(("Enter a name between 1 and 64 characters.", form));
+        return Err("Enter a name between 1 and 64 characters.");
     }
     if !username_ok {
-        return Err((
+        return Err(
             "Usernames are 2 to 32 characters: letters, numbers, dots, dashes and underscores.",
-            form,
-        ));
+        );
     }
-    if !(8..=256).contains(&input.password.chars().count()) {
-        return Err(("Choose a password with at least 8 characters.", form));
-    }
+    Ok((display_name, username))
+}
+
+fn validate_account(input: AccountInput) -> Result<ValidAccount, (&'static str, AccountForm)> {
+    let form = AccountForm {
+        display_name: input.display_name.trim().to_owned(),
+        username: input.username.trim().to_lowercase(),
+    };
+    let (display_name, username) = match check_names(&input.display_name, &input.username) {
+        Ok(names) => names,
+        Err(error) => return Err((error, form)),
+    };
+    let secret = if input.passkey.is_empty() {
+        if !(8..=256).contains(&input.password.chars().count()) {
+            return Err(("Choose a password with at least 8 characters.", form));
+        }
+        credentials::Secret::Password(input.password)
+    } else {
+        credentials::Secret::Passkey(input.passkey)
+    };
     Ok(ValidAccount {
         display_name,
         username,
-        password: input.password,
+        secret,
     })
 }
 
@@ -481,6 +501,7 @@ async fn open_setup_form(State(state): State<AppState>) -> AppResult<Response> {
 async fn open_setup(
     State(state): State<AppState>,
     ClientIp(address): ClientIp,
+    headers: HeaderMap,
     Form(input): Form<SetupInput>,
 ) -> AppResult<Response> {
     let setup = state.setup();
@@ -523,7 +544,7 @@ async fn open_setup(
         }
     }
     let code = input.setup_code;
-    create_first_account(&state, "/setup", mode, input.account, &code).await
+    create_first_account(&state, &headers, "/setup", mode, input.account, &code).await
 }
 
 async fn setup_form(State(state): State<AppState>, Path(token): Path<String>) -> AppResult<Markup> {
@@ -542,6 +563,7 @@ async fn setup_form(State(state): State<AppState>, Path(token): Path<String>) ->
 async fn setup(
     State(state): State<AppState>,
     Path(token): Path<String>,
+    headers: HeaderMap,
     Form(input): Form<AccountInput>,
 ) -> AppResult<Response> {
     if !state.setup_link_matches(&token) {
@@ -549,6 +571,7 @@ async fn setup(
     }
     create_first_account(
         &state,
+        &headers,
         &format!("/setup/{token}"),
         views::SetupMode::Link,
         input,
@@ -563,22 +586,41 @@ async fn setup(
 /// a mistake in the account doesn't mean typing it again.
 async fn create_first_account(
     state: &AppState,
+    headers: &HeaderMap,
     action: &str,
     mode: views::SetupMode,
     input: AccountInput,
     code: &str,
 ) -> AppResult<Response> {
+    let refuse = |error: &str, form: &AccountForm| {
+        Ok((
+            StatusCode::BAD_REQUEST,
+            views::setup_page(action, mode, Some(error), form, code),
+        )
+            .into_response())
+    };
     let account = match validate_account(input) {
         Ok(account) => account,
-        Err((error, form)) => {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                views::setup_page(action, mode, Some(error), &form, code),
-            )
-                .into_response());
-        }
+        Err((error, form)) => return refuse(error, &form),
     };
-    let hash = auth::hash_password(account.password).await?;
+    let form = AccountForm {
+        display_name: account.display_name.clone(),
+        username: account.username.clone(),
+    };
+    let credential = match credentials::prepare(
+        state,
+        headers,
+        action,
+        &account.username,
+        &account.display_name,
+        account.secret,
+    )
+    .await
+    {
+        Ok(credential) => credential,
+        Err(AppError::BadRequest(error)) => return refuse(&error, &form),
+        Err(error) => return Err(error),
+    };
     let now = now_ms();
     let created = state
         .db
@@ -591,10 +633,11 @@ async fn create_first_account(
                 &tx,
                 &account.username,
                 &account.display_name,
-                &hash,
+                credential.password_hash(),
                 true,
                 now,
             )?;
+            credential.attach(&tx, id, now)?;
             store::create_channel(&tx, "general", false, id, now)?;
             tx.commit()?;
             Ok(Some(id))
@@ -602,6 +645,23 @@ async fn create_first_account(
         .await?;
     let user_id = created.ok_or(AppError::NotFound)?;
     state.finish_setup();
+    let cookie = auth::start_session(state, user_id).await?;
+    redirect_with_cookie("/", &cookie)
+}
+
+/// Tells automations someone joined, and signs the new account in.
+async fn welcome(
+    state: &AppState,
+    user_id: i64,
+    display_name: String,
+    username: String,
+) -> AppResult<Response> {
+    state
+        .automations
+        .event(automations::Event::MemberJoined(automations::MemberEvent {
+            user: display_name,
+            username,
+        }));
     let cookie = auth::start_session(state, user_id).await?;
     redirect_with_cookie("/", &cookie)
 }
@@ -630,6 +690,7 @@ async fn join_form(State(state): State<AppState>, Path(token): Path<String>) -> 
 async fn join(
     State(state): State<AppState>,
     Path(token): Path<String>,
+    headers: HeaderMap,
     Form(input): Form<AccountInput>,
 ) -> AppResult<Response> {
     check_invite(&state, &token).await?;
@@ -643,7 +704,30 @@ async fn join(
                 .into_response());
         }
     };
-    let hash = auth::hash_password(account.password).await?;
+    let credential = match credentials::prepare(
+        &state,
+        &headers,
+        &format!("/join/{token}"),
+        &account.username,
+        &account.display_name,
+        account.secret,
+    )
+    .await
+    {
+        Ok(credential) => credential,
+        Err(AppError::BadRequest(error)) => {
+            let form = AccountForm {
+                display_name: account.display_name,
+                username: account.username,
+            };
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                views::join_page(&token, Some(&error), &form),
+            )
+                .into_response());
+        }
+        Err(error) => return Err(error),
+    };
     let now = now_ms();
     let invite = token.clone();
     let username = account.username.clone();
@@ -660,23 +744,22 @@ async fn join(
             if store::username_taken(&tx, &username)? {
                 return Ok(Err("That username is taken. Try another one."));
             }
-            let id = store::create_user(&tx, &username, &display_name, &hash, false, now)?;
+            let id = store::create_user(
+                &tx,
+                &username,
+                &display_name,
+                credential.password_hash(),
+                false,
+                now,
+            )?;
+            credential.attach(&tx, id, now)?;
             store::record_invite_use(&tx, &invite)?;
             tx.commit()?;
             Ok(Ok(id))
         })
         .await?;
     match created {
-        Ok(user_id) => {
-            state
-                .automations
-                .event(automations::Event::MemberJoined(automations::MemberEvent {
-                    user: account.display_name,
-                    username: account.username,
-                }));
-            let cookie = auth::start_session(&state, user_id).await?;
-            redirect_with_cookie("/", &cookie)
-        }
+        Ok(user_id) => welcome(&state, user_id, account.display_name, account.username).await,
         Err(error) => {
             let form = AccountForm {
                 display_name: account.display_name,

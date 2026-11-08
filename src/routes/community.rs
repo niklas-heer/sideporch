@@ -13,11 +13,10 @@ use axum::{
 use maud::Markup;
 use serde::Deserialize;
 
-use super::{AccountInput, redirect_with_cookie, shell_data, validate_account, wants_no_content};
+use super::{AccountInput, credentials, shell_data, validate_account, wants_no_content};
 use crate::{
     AppState,
     access::{self, ClientIp, Counted},
-    auth,
     auth::CurrentUser,
     automations,
     community::{self, Joining, Permission, Registration, Requirement},
@@ -79,7 +78,11 @@ const fn require_moderator(user: &CurrentUser) -> AppResult<()> {
 struct SignupInput {
     display_name: String,
     username: String,
+    #[serde(default)]
     password: String,
+    /// A passkey made for this form, instead of a password.
+    #[serde(default)]
+    passkey: String,
     #[serde(default)]
     note: String,
     /// Checked when the person agrees to the rules.
@@ -149,6 +152,7 @@ async fn signup_form(State(state): State<AppState>) -> AppResult<Response> {
 async fn signup(
     State(state): State<AppState>,
     ClientIp(address): ClientIp,
+    headers: HeaderMap,
     Form(input): Form<SignupInput>,
 ) -> AppResult<Response> {
     let joining = joining(&state).await?;
@@ -178,17 +182,38 @@ async fn signup(
     if !joining.rules.is_empty() && input.rules.is_none() {
         return Ok(refuse("Agree to the rules to join.", &form));
     }
+    let approval = joining.registration == Registration::Approval;
+    // Waiting sign-ups keep a password until someone approves them.
+    if approval && !input.passkey.is_empty() {
+        return Ok(refuse(
+            "Choose a password to ask for an account here; you can add a passkey once you're in.",
+            &form,
+        ));
+    }
     let account = match validate_account(AccountInput {
         display_name: input.display_name,
         username: input.username,
         password: input.password,
+        passkey: input.passkey,
     }) {
         Ok(account) => account,
         Err((error, form)) => return Ok(refuse(error, &form)),
     };
-    let hash = auth::hash_password(account.password).await?;
+    let credential = match credentials::prepare(
+        &state,
+        &headers,
+        "/signup",
+        &account.username,
+        &account.display_name,
+        account.secret,
+    )
+    .await
+    {
+        Ok(credential) => credential,
+        Err(AppError::BadRequest(error)) => return Ok(refuse(&error, &form)),
+        Err(error) => return Err(error),
+    };
     let now = now_ms();
-    let approval = joining.registration == Registration::Approval;
     let username = account.username.clone();
     let display_name = account.display_name.clone();
     let saved_note = note.clone();
@@ -204,11 +229,13 @@ async fn signup(
             if community::username_taken(&tx, &username)? {
                 return Ok(Err("That username is taken. Try another one."));
             }
+            let hash = credential.password_hash();
             let id = if approval {
-                community::add_signup(&tx, &username, &display_name, &hash, &saved_note, now)?;
+                community::add_signup(&tx, &username, &display_name, hash, &saved_note, now)?;
                 None
             } else {
-                let id = store::create_user(&tx, &username, &display_name, &hash, false, now)?;
+                let id = store::create_user(&tx, &username, &display_name, hash, false, now)?;
+                credential.attach(&tx, id, now)?;
                 community::set_trust(&tx, id, 0, false)?;
                 Some(id)
             };
@@ -220,14 +247,7 @@ async fn signup(
         Err(error) => Ok(refuse(error, &form)),
         Ok(None) => Ok(pages::waiting_page(&account.display_name).into_response()),
         Ok(Some(user_id)) => {
-            state
-                .automations
-                .event(automations::Event::MemberJoined(automations::MemberEvent {
-                    user: account.display_name,
-                    username: account.username,
-                }));
-            let cookie = auth::start_session(&state, user_id).await?;
-            redirect_with_cookie("/", &cookie)
+            super::welcome(&state, user_id, account.display_name, account.username).await
         }
     }
 }

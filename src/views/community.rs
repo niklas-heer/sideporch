@@ -4,7 +4,7 @@ use maud::{Markup, PreEscaped, html};
 
 use super::{
     AccountForm, Render, Shell, account_fields, admin::tabs, auth_page, form_error, message_item,
-    panel_page, section, timestamp,
+    new_account_fields, panel_page, section, timestamp,
 };
 use crate::{
     community::{Joining, LEVELS, Permission, Registration, Requirement, Role, Signup},
@@ -27,7 +27,7 @@ pub fn signup_page(
             h1 class="mb-2 text-xl font-bold" { "Join this Sideporch" }
             p class="mb-5 text-muted dark:text-haint" {
                 @if approval { "Ask to join. Someone here looks at each request and lets you in." }
-                @else { "Pick a name and a password to create your account." }
+                @else { "Pick a name, then sign in with a passkey or a password." }
             }
             (form_error(error))
             // app.js solves the challenge, a small proof of work that makes
@@ -35,30 +35,18 @@ pub fn signup_page(
             form method="post" action="/signup" data-proof=(challenge) data-proof-bits=(crate::access::PROOF_BITS) {
                 input type="hidden" name="challenge" value=(challenge);
                 input type="hidden" name="proof" value="";
-                (account_fields(form))
                 @if approval {
+                    (account_fields(form))
                     div class="mb-4" {
                         label for="note" class="field-label" { "Why would you like to join?" }
                         textarea id="note" name="note" rows="3" maxlength="500" class="field" { (note) }
                         p class="mt-1 text-sm text-muted dark:text-haint" { "Optional. Helps them know who you are." }
                     }
+                    (signup_extras(joining, ctx))
+                    button type="submit" class="btn mt-2 w-full" { "Ask to join" }
+                } @else {
+                    (new_account_fields(form, &signup_extras(joining, ctx), "Create account"))
                 }
-                // People never see this field; bots fill it in.
-                div class="hidden" aria-hidden="true" {
-                    label for="website" { "Website" }
-                    input id="website" name="website" type="text" tabindex="-1" autocomplete="off";
-                }
-                @if !joining.rules.is_empty() {
-                    div class="mb-4 rounded-lg border border-line p-3 text-sm dark:border-night-line" {
-                        p class="mb-1 font-semibold" { "The rules here" }
-                        div class="rich max-h-48 overflow-y-auto" { (PreEscaped(crate::markdown::render(&joining.rules, ctx))) }
-                        label class="mt-2 flex gap-2 font-semibold" {
-                            input type="checkbox" name="rules" value="agreed" required class="mt-1";
-                            "I agree to these rules"
-                        }
-                    }
-                }
-                button type="submit" class="btn mt-2 w-full" { @if approval { "Ask to join" } @else { "Create account" } }
                 p class="mt-2 text-center text-xs text-muted dark:text-haint" data-proof-status aria-live="polite" {}
                 noscript {
                     p class="mt-2 text-sm text-red-700 dark:text-red-300" { "Signing up needs JavaScript: your browser does a small puzzle that keeps bots out." }
@@ -69,6 +57,28 @@ pub fn signup_page(
             }
         },
     )
+}
+
+/// What a sign-up form asks besides the account: a field only bots fill
+/// in, and the rules, when there are some.
+fn signup_extras(joining: &Joining, ctx: &Context) -> Markup {
+    html! {
+        // People never see this field; bots fill it in.
+        div class="hidden" aria-hidden="true" {
+            label for="website" { "Website" }
+            input id="website" name="website" type="text" tabindex="-1" autocomplete="off";
+        }
+        @if !joining.rules.is_empty() {
+            div class="mb-4 rounded-lg border border-line p-3 text-sm dark:border-night-line" {
+                p class="mb-1 font-semibold" { "The rules here" }
+                div class="rich max-h-48 overflow-y-auto" { (PreEscaped(crate::markdown::render(&joining.rules, ctx))) }
+                label class="mt-2 flex gap-2 font-semibold" {
+                    input type="checkbox" name="rules" value="agreed" required class="mt-1";
+                    "I agree to these rules"
+                }
+            }
+        }
+    }
 }
 
 pub fn waiting_page(display_name: &str) -> Markup {

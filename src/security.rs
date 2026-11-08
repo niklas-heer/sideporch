@@ -220,7 +220,15 @@ pub fn passkey_used(conn: &Connection, id: i64, sign_count: u32, now: i64) -> Ap
     Ok(())
 }
 
+/// Removes a passkey, unless it is the only way into an account without a
+/// password.
 pub fn delete_passkey(conn: &Connection, user_id: i64, id: i64) -> AppResult<()> {
+    let hash = crate::store::password_hash(conn, user_id)?.unwrap_or_default();
+    if !crate::auth::has_password(&hash) && factors(conn, user_id)?.passkeys <= 1 {
+        return Err(AppError::bad_request(
+            "This passkey is how you sign in. Add a password or another passkey before removing it.",
+        ));
+    }
     conn.execute(
         "DELETE FROM passkeys WHERE id = ?1 AND user_id = ?2",
         params![id, user_id],
