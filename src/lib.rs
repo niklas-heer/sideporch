@@ -530,9 +530,10 @@ pub fn reset_link(
         ))
     })?;
     if reset_sign_in {
-        // Whatever was lost may be in someone else's hands: until the link
-        // is used, nothing else signs in, not a session, the old password
-        // or an email link, so nobody can add a passkey of their own.
+        // Whatever was lost may be in someone else's hands: until a new
+        // password is set through a reset link, nothing else signs in, not
+        // a session, the old password, an email link or Cloudflare Access,
+        // so nobody can add a passkey of their own.
         security::reset_factors(&tx, user_id)?;
         tx.execute("DELETE FROM pending_logins WHERE user_id = ?1", [user_id])?;
         tx.execute("DELETE FROM login_links WHERE user_id = ?1", [user_id])?;
